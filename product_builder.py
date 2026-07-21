@@ -11,7 +11,7 @@ import sys
 import time
 
 sys.path.insert(0, "/root/ops-dashboard")
-from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS
+from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS, RTE_JS
 
 OUT = "/var/www/ops/product-builder.html"
 
@@ -117,8 +117,8 @@ def build():
   .sheet .x{{border:none;background:none;font-size:22px;color:var(--muted);cursor:pointer;line-height:1;}}
   .crumbs{{font-size:12.5px;color:var(--muted);padding:9px 16px;border-bottom:1px solid var(--border);}}
   .crumbs a{{color:var(--accent);cursor:pointer;}}
-  .pick-grid{{overflow:auto;padding:12px 16px;display:grid;
-    grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:10px;}}
+  .pick-grid{{overflow:auto;padding:12px 16px;display:grid;align-items:start;
+    grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px;}}
   .pick{{position:relative;border-radius:9px;overflow:hidden;border:2px solid transparent;cursor:pointer;
     aspect-ratio:1;background:var(--card-2);}}
   .pick.sel{{border-color:var(--accent);}}
@@ -126,7 +126,7 @@ def build():
     color:var(--muted);gap:4px;padding:6px;text-align:center;}}
   .pick.folder svg{{width:26px;height:26px;stroke:var(--accent);fill:none;stroke-width:1.6;}}
   .pick.folder small{{font-size:10.5px;line-height:1.2;overflow:hidden;max-height:24px;}}
-  .pick img{{width:100%;height:100%;object-fit:cover;}}
+  .pick img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;}}
   .pick .chk{{position:absolute;top:4px;right:4px;width:19px;height:19px;border-radius:50%;
     background:var(--accent);color:#fff;font-size:12px;display:none;align-items:center;justify-content:center;}}
   .pick.sel .chk{{display:flex;}}
@@ -157,6 +157,7 @@ def build():
 </div></div>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script>{RTE_JS}</script>
 <script>
 'use strict';
 var API='/ops/agent/api', DROP='/drop/api';
@@ -173,6 +174,7 @@ async function api(path,opts){{
 }}
 
 var form={{title:'',type:'',price:'',tags:'',desc:'',status:'DRAFT',images:[]}};
+var descRTE=null;
 
 function render(){{
   $('pb-root').innerHTML=
@@ -189,7 +191,7 @@ function render(){{
       '<div class="pb-field"><label>Tags <small style="text-transform:none;font-weight:400">(comma-separated)</small></label>'+
         '<input id="f-tags" class="pin" placeholder="seiko-mod, nh35, sapphire"></div>'+
       '<div class="pb-field"><label>Description</label>'+
-        '<textarea id="f-desc" class="pin" placeholder="What it is, what it fits, materials, sizing…"></textarea></div>'+
+        '<div id="f-desc"></div></div>'+
       '<div class="pb-field"><label>Photos</label>'+
         '<div class="imgstrip" id="strip"></div>'+
         '<div class="img-actions">'+
@@ -220,7 +222,8 @@ function render(){{
       '</div></div></div>'+
   '</div>';
 
-  bind('f-title','title');bind('f-type','type');bind('f-price','price');bind('f-tags','tags');bind('f-desc','desc');
+  bind('f-title','title');bind('f-type','type');bind('f-price','price');bind('f-tags','tags');
+  descRTE=LabsRTE.mount({{mount:'f-desc',html:form.desc,placeholder:'What it is, what it fits, materials, sizing…',onChange:function(h){{form.desc=h;}}}});
   $('status-seg').querySelectorAll('button').forEach(function(b){{b.onclick=function(){{
     $('status-seg').querySelectorAll('button').forEach(function(x){{x.classList.remove('active');}});
     b.classList.add('active');form.status=b.dataset.s;sync();
@@ -243,7 +246,7 @@ async function aiDraft(){{
     if(d.title){{ form.title=d.title; $('f-title').value=d.title; }}
     if(d.type){{ form.type=d.type; $('f-type').value=d.type; }}
     if(d.tags&&d.tags.length){{ form.tags=d.tags.join(', '); $('f-tags').value=form.tags; }}
-    if(d.description){{ form.desc=d.description; $('f-desc').value=d.description; }}
+    if(d.description){{ form.desc=d.description; if(descRTE)descRTE.setHTML(d.description); }}
     if(d.price){{ form.price=String(d.price); $('f-price').value=form.price; }}
     sync();
     toast('Drafted with AI — review and tweak, then create');

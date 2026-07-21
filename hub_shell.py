@@ -955,8 +955,78 @@ ASSIST_JS = r"""
 })();
 """
 
-# Wire the assistant into every generated page (idempotent via window.__labsAssist).
-HUB_STYLE = HUB_STYLE + ASSIST_CSS
+# ---------------------------------------------------------------------------
+# LabsRTE — a lightweight, dependency-free rich-text editor (contenteditable +
+# a small toolbar). Produces clean HTML suitable for Shopify descriptionHtml.
+# Generators that need it import RTE_JS and drop <script>{RTE_JS}</script> in the
+# head so window.LabsRTE exists before their page code runs; RTE_CSS ships in
+# HUB_STYLE so the styles are available everywhere.
+# ---------------------------------------------------------------------------
+RTE_CSS = r"""
+.rte{border:1px solid var(--border);border-radius:var(--r-s);background:var(--bg);overflow:hidden;transition:border-color .12s,box-shadow .12s;}
+.rte:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
+.rte-bar{display:flex;flex-wrap:wrap;align-items:center;gap:1px;padding:5px 6px;border-bottom:1px solid var(--border);background:var(--card);}
+.rte-bar button{min-width:30px;height:28px;border:none;background:none;border-radius:6px;cursor:pointer;
+  color:var(--muted);font-size:13px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;padding:0 8px;font-family:inherit;}
+.rte-bar button:hover{background:var(--card-2);color:var(--ink);}
+.rte-bar button:active{transform:scale(.94);}
+.rte-bar .sep{width:1px;height:16px;background:var(--border);margin:0 4px;}
+.rte-ed{min-height:120px;max-height:340px;overflow-y:auto;padding:11px 13px;font-size:14px;line-height:1.55;color:var(--ink);outline:none;}
+.rte-ed.empty:before{content:attr(data-ph);color:var(--muted);pointer-events:none;}
+.rte-ed p{margin:0 0 8px;} .rte-ed p:last-child{margin:0;}
+.rte-ed h2{font-size:17px;font-weight:700;margin:12px 0 6px;} .rte-ed h3{font-size:15px;font-weight:700;margin:10px 0 5px;}
+.rte-ed ul,.rte-ed ol{margin:6px 0;padding-left:20px;} .rte-ed li{margin:2px 0;}
+.rte-ed a{color:var(--accent);text-decoration:underline;}
+.rte-ed:first-line{}
+"""
+
+RTE_JS = r"""
+window.LabsRTE=(function(){
+  function mk(tag,cls,html){var e=document.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;return e;}
+  function mount(o){
+    var host=typeof o.mount==='string'?document.getElementById(o.mount):o.mount;
+    if(!host)return null;
+    var wrap=mk('div','rte'),bar=mk('div','rte-bar'),ed=mk('div','rte-ed');
+    ed.contentEditable='true';ed.setAttribute('role','textbox');ed.setAttribute('aria-multiline','true');
+    if(o.placeholder)ed.setAttribute('data-ph',o.placeholder);
+    var defs=[{t:'<b>B</b>',c:'bold',tip:'Bold'},{t:'<i>I</i>',c:'italic',tip:'Italic'},{sep:1},
+      {t:'H2',c:'block:H2',tip:'Heading'},{t:'H3',c:'block:H3',tip:'Subheading'},{sep:1},
+      {t:'&#8226; List',c:'insertUnorderedList',tip:'Bullet list'},{t:'1. List',c:'insertOrderedList',tip:'Numbered list'},{sep:1},
+      {t:'Link',c:'link',tip:'Add link'},{t:'Clear',c:'clear',tip:'Clear formatting'}];
+    defs.forEach(function(d){
+      if(d.sep){bar.appendChild(mk('span','sep'));return;}
+      var b=mk('button',null,d.t);b.type='button';b.title=d.tip;
+      b.addEventListener('mousedown',function(e){e.preventDefault();});
+      b.addEventListener('click',function(){exec(d.c);});
+      bar.appendChild(b);
+    });
+    function exec(cmd){
+      ed.focus();
+      try{
+        if(cmd==='link'){var u=prompt('Link URL (https://...)');if(u)document.execCommand('createLink',false,u);}
+        else if(cmd.indexOf('block:')===0){var tag=cmd.slice(6);var cur=(document.queryCommandValue('formatBlock')||'').toLowerCase().replace(/[<>]/g,'');document.execCommand('formatBlock',false,(cur===tag.toLowerCase())?'P':tag);}
+        else if(cmd==='clear'){document.execCommand('removeFormat');document.execCommand('unlink');document.execCommand('formatBlock',false,'P');}
+        else document.execCommand(cmd,false,null);
+      }catch(e){}
+      sync();
+    }
+    ed.addEventListener('input',sync);
+    ed.addEventListener('blur',sync);
+    ed.addEventListener('paste',function(e){e.preventDefault();var t=((e.clipboardData||window.clipboardData).getData('text/plain'))||'';document.execCommand('insertText',false,t);});
+    function ph(){var empty=(ed.textContent||'').replace(/\s/g,'')===''&&!ed.querySelector('li,img');ed.classList.toggle('empty',empty);}
+    function getHTML(){var h=(ed.innerHTML||'').trim();if(h==='<br>'||h==='<div><br></div>'||h==='<p><br></p>')h='';return h;}
+    function setHTML(h){ed.innerHTML=h||'';ph();}
+    function sync(){ph();if(o.onChange)o.onChange(getHTML());}
+    wrap.appendChild(bar);wrap.appendChild(ed);host.appendChild(wrap);
+    setHTML(o.html||'');
+    return {getHTML:getHTML,setHTML:setHTML,focus:function(){ed.focus();},el:ed};
+  }
+  return {mount:mount};
+})();
+"""
+
+# Wire the assistant + editor styles into every generated page.
+HUB_STYLE = HUB_STYLE + ASSIST_CSS + RTE_CSS
 WHOAMI_JS = WHOAMI_JS + "\n" + ASSIST_JS
 HUB_SCRIPT = HUB_SCRIPT + "\n" + ASSIST_JS
 

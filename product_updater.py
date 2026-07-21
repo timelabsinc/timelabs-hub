@@ -10,7 +10,7 @@ import sys
 import time
 
 sys.path.insert(0, "/root/ops-dashboard")
-from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS
+from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS, RTE_JS
 
 OUT = "/var/www/ops/product-updater.html"
 
@@ -98,6 +98,7 @@ def build():
   </main>
 </div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script>{RTE_JS}</script>
 <script>
 'use strict';
 var API = '/ops/agent/api';
@@ -194,7 +195,7 @@ async function toggleDetail(wrap, p){{
       '<div class="pfield"><label>Title</label><input class="pinput f-title" value="'+esc(d.title)+'"></div>'+
       '<div class="pfield"><label>Product type</label><input class="pinput f-type" value="'+esc(d.type)+'" placeholder="Case, Dial, Movement…"></div>'+
       '<div class="pfield"><label>Tags (comma-separated)</label><input class="pinput f-tags" value="'+esc((d.tags||[]).join(', '))+'"></div>'+
-      '<div class="pfield"><label>Description</label><textarea class="pinput f-desc">'+esc(d.description)+'</textarea></div>'+
+      '<div class="pfield"><label>Description</label><div class="f-desc-rte"></div></div>'+
       '<div class="pfield"><label>Images</label><div class="pimgs"></div>'+
         '<div class="addimg"><input class="pinput f-imgurl" placeholder="Paste an image URL (or a Drop share link)…"><button class="f-addimg">Add</button></div>'+
         '<div class="hint">Tip: in Drop, share an image and paste its link + <b>/raw</b> here.</div></div>'+
@@ -202,14 +203,15 @@ async function toggleDetail(wrap, p){{
     renderImgs(box, p, d.images);
     var save=box.querySelector('.f-save');
     var dirty=function(){{ save.disabled=false; }};
-    ['.f-title','.f-type','.f-tags','.f-desc'].forEach(function(sel){{ box.querySelector(sel).addEventListener('input', dirty); }});
+    var descRTE=LabsRTE.mount({{mount:box.querySelector('.f-desc-rte'),html:d.description,placeholder:'Describe the part — what it is, what it fits, materials, sizing…',onChange:dirty}});
+    ['.f-title','.f-type','.f-tags'].forEach(function(sel){{ box.querySelector(sel).addEventListener('input', dirty); }});
     save.onclick=async function(){{
       save.disabled=true; save.textContent='Saving…';
       try{{
         await api('/shopify/product/update',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{
           product_id:p.id, title:box.querySelector('.f-title').value,
           type:box.querySelector('.f-type').value,
-          description:box.querySelector('.f-desc').value,
+          description:descRTE.getHTML(),
           tags:box.querySelector('.f-tags').value.split(',').map(function(t){{return t.trim();}}).filter(Boolean)
         }})}});
         wrap.querySelector('.nm b').textContent=box.querySelector('.f-title').value;
