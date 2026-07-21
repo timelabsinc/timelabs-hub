@@ -15,6 +15,9 @@ import time
 import urllib.request
 import urllib.error
 
+sys.path.insert(0, "/root/ops-dashboard")
+from hub_shell import page, source_chip, _refund_pct  # the Hub/Face shell
+
 ENV_PATH = "/root/ops-dashboard/.env"
 OUT_PATH = "/var/www/ops/index.html"
 LOOKBACK_DAYS = int(os.environ.get("OPS_RANGE_DAYS", "90"))
@@ -531,15 +534,19 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
             + items +
             '<p class="f-note">Logged by your AI team as facts are verified — newest first.</p></div></section>'
         )
+    win = shopify.get("window_days", LOOKBACK_DAYS)
     kpis = []
     if shopify.get("connected"):
-        kpis.append(("Orders", str(shopify["order_count"]), f"{LOOKBACK_DAYS}-day trailing"))
-        kpis.append(("Total sales", fmt_inr(shopify["total_sales"]), f"AOV {fmt_inr(shopify['aov'])}"))
-        kpis.append(("Refunds", fmt_inr(shopify["refund_total"]), ""))
+        kpis.append(("Orders", str(shopify["order_count"]), f"{win}-day trailing"))
+        kpis.append(("Gross sales", fmt_inr(shopify.get("gross_sales", shopify.get("total_sales", 0))),
+                     f"AOV {fmt_inr(shopify['aov'])}"))
+        if shopify.get("net_sales") is not None:
+            kpis.append(("Net sales", fmt_inr(shopify["net_sales"]), "after discounts & returns"))
+        kpis.append(("Refunds", fmt_inr(shopify["refund_total"]), _refund_pct(shopify)))
     if ga4.get("connected"):
-        kpis.append(("Sessions", f"{ga4['total_sessions']:,}", f"{LOOKBACK_DAYS}-day trailing"))
+        kpis.append(("Sessions", f"{ga4['total_sessions']:,}", f"GA4 · {ga4.get('as_of', '—')}"))
     if meta.get("connected"):
-        kpis.append(("Ad spend", fmt_inr(meta["total_spend"]), f"{len(meta['campaigns'])} campaigns"))
+        kpis.append(("Ad spend", fmt_inr(meta["total_spend"]), f"Meta · {meta.get('as_of', '—')}"))
 
     kpi_html = "".join(
         f'<div class="kpi"><div class="label">{html.escape(k)}</div>'
@@ -568,325 +575,46 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
                 f'<td class="n num">{c["ctr"]:.2f}%</td></tr>'
             )
 
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Timelabs Co — Operations &amp; Growth Control Panel</title>
-<style>
-  :root{{
-    --ground:#0f1512; --surface:#161f1a; --surface-2:#1d2822; --ink:#eef2ee; --muted:#9fb0a6;
-    --line:#293831; --accent:#c9a35e; --accent-soft:rgba(201,163,94,.14);
-    --good:#5cbf88; --good-soft:rgba(92,191,136,.14);
-    --crit:#e06a45; --crit-soft:rgba(224,106,69,.16);
-    --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
-    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    --mono:"SF Mono","Cascadia Code","Consolas",ui-monospace,monospace;
-  }}
-  @media (prefers-color-scheme: light){{
-    :root{{ --ground:#ecefe8; --surface:#ffffff; --surface-2:#f4f6f1; --ink:#16211b; --muted:#586b60;
-      --line:#dde3dc; --accent:#8a6a2c; --accent-soft:rgba(138,106,44,.12);
-      --good:#2f8f5b; --good-soft:rgba(47,143,91,.12);
-      --crit:#c1502e; --crit-soft:rgba(193,80,46,.12); }}
-  }}
-  *{{box-sizing:border-box}}
-  body{{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.5;padding:2rem 1.5rem 4rem;}}
-  .wrap{{max-width:920px;margin:0 auto;}}
-  .num{{font-variant-numeric:tabular-nums lining-nums}}
-  header{{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;flex-wrap:wrap;
-    padding-bottom:1.1rem;border-bottom:1px solid var(--line);margin-bottom:1.6rem;}}
-  h1{{font-family:var(--serif);font-weight:600;font-size:clamp(1.5rem,3.4vw,2.05rem);margin:.3rem 0;text-wrap:balance;}}
-  .wordmark{{font-family:var(--mono);font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--accent);}}
-  .window{{font-family:var(--mono);font-size:.76rem;color:var(--muted);}}
-  h2{{font-family:var(--serif);font-size:1.02rem;font-weight:600;margin:0 0 .8rem;}}
-  section{{margin-bottom:1.9rem;}}
-  .kpis{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.7rem;}}
-  .kpi{{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem;}}
-  .kpi .label{{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}}
-  .kpi .val{{font-family:var(--serif);font-size:1.5rem;margin:.35rem 0 .1rem;}}
-  .kpi .ctx{{font-size:.76rem;color:var(--muted);}}
-  .panel{{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:1.1rem 1.2rem;}}
-  .srcrow{{display:grid;grid-template-columns:130px 1fr 60px;align-items:center;gap:.6rem;margin:.5rem 0;}}
-  .s-name{{font-size:.82rem;}}
-  .s-track{{background:var(--surface-2);border-radius:6px;height:14px;overflow:hidden;border:1px solid var(--line);}}
-  .s-fill{{height:100%;background:var(--accent);}}
-  .s-val{{font-size:.8rem;color:var(--muted);text-align:right;}}
-  table{{width:100%;border-collapse:collapse;font-size:.83rem;}}
-  th,td{{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--line);}}
-  th{{font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);}}
-  td.n,th.n{{text-align:right;}}
-  .pill{{font-size:.66rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;padding:.2rem .5rem;
-    border-radius:999px;border:1px solid transparent;}}
-  .pill.good{{color:var(--good);background:var(--good-soft);border-color:var(--good);}}
-  .pill.crit{{color:var(--crit);background:var(--crit-soft);border-color:var(--crit);}}
-  .sources{{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.4rem;}}
-  .empty{{color:var(--muted);font-size:.88rem;}}
-  .fstep{{display:grid;grid-template-columns:130px 1fr 64px;align-items:center;gap:.7rem;margin:.55rem 0;}}
-  .fname{{font-size:.84rem;}}
-  .ftrack{{background:var(--surface-2);border-radius:7px;height:24px;overflow:hidden;border:1px solid var(--line);}}
-  .ffill{{height:100%;border-radius:6px;background:linear-gradient(90deg,#3a6b4b,var(--accent));
-    display:flex;align-items:center;justify-content:flex-end;min-width:30px;}}
-  .ffill span{{font-size:.72rem;color:#0f1512;font-weight:700;padding-right:.5rem;}}
-  .fpct{{font-size:.76rem;color:var(--muted);text-align:right;}}
-  .a-project{{font-family:var(--mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;
-    color:var(--accent);margin:1rem 0 .2rem;}}
-  .a-item{{padding:.6rem 0;border-bottom:1px solid var(--line);}}
-  .a-item:last-of-type{{border-bottom:none;}}
-  .a-head{{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:.9rem;}}
-  .a-why{{margin:.3rem 0 0;font-size:.8rem;color:var(--muted);line-height:1.5;}}
-  .a-blocked{{margin:.3rem 0 0;font-size:.78rem;color:var(--crit);line-height:1.5;}}
-  .tabbar{{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;
-    gap:1rem;flex-wrap:wrap;background:var(--ground);padding:.7rem 0 .6rem;margin-bottom:1.2rem;
-    border-bottom:1px solid var(--line);}}
-  .tabs{{display:flex;gap:.25rem;flex-wrap:wrap;}}
-  .tabbtn{{font-family:var(--mono);font-size:.76rem;border:1px solid transparent;background:transparent;
-    color:var(--muted);border-radius:8px;padding:.45rem .8rem;cursor:pointer;transition:color .12s;}}
-  .tabbtn:hover{{color:var(--ink);}}
-  .tabbtn.active{{background:var(--surface);border-color:var(--accent);color:var(--ink);font-weight:700;}}
-  .tabbadge{{margin-left:.35rem;font-size:.62rem;color:var(--accent);}}
-  #q{{font-family:var(--sans);font-size:.84rem;border:1px solid var(--line);border-radius:8px;
-    background:var(--surface);color:var(--ink);padding:.45rem .7rem;width:min(240px,100%);}}
-  #q:focus{{outline:2px solid var(--accent);border-color:var(--accent);}}
-  .tabpanel{{display:none;}}
-  .tabpanel.active{{display:block;animation:fadein .18s ease;}}
-  @keyframes fadein{{from{{opacity:.4;transform:translateY(3px)}}to{{opacity:1;transform:none}}}}
-  @media (prefers-reduced-motion: reduce){{.tabpanel.active{{animation:none;}}}}
-  .srch-hidden{{display:none!important;}}
-  .oo-row{{display:flex;align-items:center;gap:.8rem;padding:.5rem 0;border-bottom:1px solid var(--line);
-    font-size:.88rem;flex-wrap:wrap;}}
-  .oo-row:last-of-type{{border-bottom:none;}}
-  .oo-row b{{flex:1;min-width:8rem;font-weight:600;}}
-  .f-note a{{color:var(--accent);}}
-  .rangebar{{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;}}
-  .rangebar button{{font-family:var(--mono);font-size:.72rem;border:none;background:var(--surface);
-    color:var(--muted);padding:.42rem .7rem;cursor:pointer;}}
-  .rangebar button.active{{background:var(--accent-soft);color:var(--ink);font-weight:700;}}
-  .rangebar button:hover{{color:var(--ink);}}
-  .research-bar{{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;
-    margin-bottom:.5rem;}}
-  #researchBtn{{font-family:var(--mono);font-size:.72rem;border:1px solid var(--accent);color:var(--accent);
-    background:transparent;border-radius:6px;padding:.35rem .8rem;cursor:pointer;}}
-  #researchBtn:hover{{background:var(--accent-soft);}}
-  #researchBtn:disabled{{opacity:.55;cursor:wait;}}
-  .research-body summary{{cursor:pointer;font-family:var(--mono);font-size:.72rem;color:var(--muted);
-    margin-bottom:.4rem;}}
-  .md h1{{font-family:var(--serif);font-size:1.15rem;margin:.8rem 0 .3rem;}}
-  .md h2{{font-family:var(--serif);font-size:1rem;margin:.8rem 0 .3rem;}}
-  .md p,.md li{{font-size:.87rem;line-height:1.55;}}
-  .md ul,.md ol{{padding-left:1.3rem;}}
-  .md table{{border-collapse:collapse;font-size:.8rem;display:block;overflow-x:auto;margin:.5rem 0;}}
-  .md th,.md td{{border:1px solid var(--line);padding:.3rem .55rem;text-align:left;}}
-  .md th{{background:var(--surface-2);}}
-  .md a{{color:var(--accent);}}
-  .md code{{font-family:var(--mono);font-size:.82em;background:var(--surface-2);padding:.06em .3em;border-radius:3px;}}
-  .chiplet{{font-family:var(--mono);font-size:.66rem;padding:.22rem .55rem;border-radius:999px;
-    border:1px solid var(--line);color:var(--muted);}}
-  .chiplet.ok{{border-color:var(--good);color:var(--good);}}
-  .chiplet.bad{{border-color:var(--crit);color:var(--crit);font-weight:700;}}
-  .healthrow{{display:flex;gap:.45rem;flex-wrap:wrap;margin:.6rem 0 0;}}
-  .donebtn{{margin-left:auto;font-family:var(--mono);font-size:.62rem;color:var(--muted);
-    background:transparent;border:1px solid var(--line);border-radius:5px;padding:.18rem .5rem;cursor:pointer;}}
-  .donebtn:hover{{border-color:var(--good);color:var(--good);}}
-  .tscroll{{overflow-x:auto;}}
-  .finding{{padding:.7rem 0;border-bottom:1px solid var(--line);}}
-  .finding:last-of-type{{border-bottom:none;}}
-  .finding p{{margin:.25rem 0 0;font-size:.88rem;line-height:1.55;}}
-  .f-meta{{font-family:var(--mono);font-size:.68rem;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;}}
-  .f-note{{color:var(--muted);font-size:.74rem;margin:.8rem 0 0;}}
-  footer{{margin-top:2.2rem;padding-top:1rem;border-top:1px solid var(--line);color:var(--muted);
-    font-family:var(--mono);font-size:.72rem;display:flex;justify-content:space-between;flex-wrap:wrap;gap:.5rem;}}
-  #refreshBtn{{font-family:var(--mono);font-size:.74rem;cursor:pointer;border:1px solid var(--line);
-    background:var(--surface);color:var(--ink);border-radius:6px;padding:.4rem .8rem;transition:border-color .15s;}}
-  #refreshBtn:hover{{border-color:var(--accent);}}
-  #refreshBtn:disabled{{opacity:.55;cursor:wait;}}
-  #agentBtn{{font-family:var(--mono);font-size:.74rem;text-decoration:none;border:1px solid var(--accent);
-    background:var(--accent);color:#141310;font-weight:600;border-radius:6px;padding:.4rem .8rem;}}
-  #agentBtn:hover{{filter:brightness(1.08);}}
-  .hlink{{font-family:var(--mono);font-size:.74rem;color:var(--muted);text-decoration:none;
-    border:1px solid var(--line);border-radius:6px;padding:.4rem .8rem;}}
-  .hlink:hover{{border-color:var(--accent);color:var(--ink);}}
-  .verdict{{margin:0 0 1.6rem;display:flex;gap:.9rem;align-items:flex-start;background:var(--surface);
-    border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;padding:1rem 1.2rem;}}
-  .verdict b{{font-family:var(--serif);font-weight:600;display:block;margin-bottom:.3rem;}}
-  .verdict p{{margin:0;color:var(--muted);font-size:.88rem;line-height:1.55;}}
-  .verdict .stale{{font-family:var(--mono);font-size:.68rem;color:var(--muted);display:block;margin-top:.5rem;}}
-</style>
-<script>
-  async function markDone(id, btn){{
-    btn.disabled = true; btn.textContent = '…';
-    try {{
-      const res = await fetch('/ops/agent/api/plan/toggle', {{
-        method: 'POST',
-        headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{id}}),
-      }});
-      if (res.ok) {{ setTimeout(() => location.reload(), 600); return; }}
-    }} catch (e) {{}}
-    btn.disabled = false; btn.textContent = '✓ done';
-  }}
-  // ---- tabs + global search ----
-  const TABS = ['overview','orders','plan','competition','content','findings'];
-  // what counts as a searchable "item" per tab; overview/competition are
-  // badge-counted but not hidden (tiles and one long report don't filter well)
-  const SEARCHABLE = {{
-    overview: {{sel: '.kpi, .srcrow, .fstep, #tab-overview tbody tr', hide: false}},
-    orders: {{sel: '#tab-orders tbody tr', hide: true}},
-    plan: {{sel: '#tab-plan .a-item', hide: true}},
-    competition: {{sel: '#tab-competition .md h2, #tab-competition .md p, #tab-competition .md li, #tab-competition .md td', hide: false}},
-    content: {{sel: '#tab-content .finding', hide: true}},
-    findings: {{sel: '#tab-findings .finding', hide: true}},
-  }};
-  function showTab(name){{
-    if(!TABS.includes(name)) name = 'overview';
-    document.querySelectorAll('.tabpanel').forEach(p => p.classList.toggle('active', p.id === 'tab-'+name));
-    document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
-    if(history.replaceState) history.replaceState(null, '', '#'+name);
-    applySearch();
-  }}
-  function applySearch(){{
-    const q = document.getElementById('q').value.trim().toLowerCase();
-    for(const tab of TABS){{
-      const cfg = SEARCHABLE[tab];
-      const items = document.querySelectorAll(cfg.sel);
-      let hits = 0;
-      items.forEach(el => {{
-        const match = !q || el.textContent.toLowerCase().includes(q);
-        if(match) hits++;
-        if(cfg.hide) el.classList.toggle('srch-hidden', !match);
-      }});
-      const btn = document.querySelector('.tabbtn[data-tab="'+tab+'"] .tabbadge');
-      btn.textContent = q ? (hits > 0 ? hits : '·') : '';
-    }}
-  }}
-  document.addEventListener('DOMContentLoaded', () => {{
-    document.querySelectorAll('.tabbtn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
-    document.getElementById('q').addEventListener('input', applySearch);
-    document.addEventListener('keydown', e => {{
-      if(e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA'){{
-        e.preventDefault();
-        document.getElementById('q').focus();
-      }}
-    }});
-    showTab((location.hash || '#overview').slice(1));
-  }});
+    verdict_html = (
+        '<div class="verdict"><div><b>Reading</b><p>'
+        + html.escape(analysis["text"])
+        + '</p><span class="stale">via ' + html.escape(analysis["model"])
+        + '</span></div></div>'
+    ) if analysis else ""
 
-  async function runResearch(btn){{
-    btn.disabled = true;
-    const start = Date.now();
-    btn.textContent = 'Researching…';
-    const tick = setInterval(() => {{
-      btn.textContent = 'Researching — ' + Math.round((Date.now()-start)/1000) + 's';
-    }}, 1000);
-    try {{
-      const res = await fetch('/ops/agent/api/research/run', {{method:'POST'}});
-      clearInterval(tick);
-      if (res.ok) {{ location.reload(); return; }}
-      const body = await res.json().catch(() => ({{}}));
-      btn.textContent = body.error || 'Failed — retry';
-    }} catch (e) {{
-      clearInterval(tick);
-      btn.textContent = 'Failed — retry';
-    }}
-    setTimeout(() => {{ btn.disabled = false; btn.textContent = 'Run fresh analysis'; }}, 4000);
-  }}
-  async function doRefresh(days){{
-    const btn = document.getElementById('refreshBtn');
-    btn.disabled = true; btn.textContent = 'Refreshing…';
-    const url = days ? ('/ops/refresh?days=' + days) : '/ops/refresh';
-    try {{
-      const res = await fetch(url, {{method:'POST'}});
-      if (res.ok) {{ location.reload(); return; }}
-      const body = await res.json().catch(() => ({{}}));
-      btn.textContent = body.error === 'refresh already running' ? 'Already running…' : 'Failed — retry';
-    }} catch (e) {{
-      btn.textContent = 'Failed — retry';
-    }}
-    setTimeout(() => {{ btn.disabled = false; btn.textContent = 'Refresh now'; }}, 3000);
-  }}
-</script>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <div>
-      <div class="wordmark">Timelabs Co</div>
-      <h1>Operations &amp; Growth Control Panel</h1>
-    </div>
-    <div style="display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;">
-      <div class="rangebar">
-        <button class="{'active' if LOOKBACK_DAYS == 7 else ''}" onclick="doRefresh(7)">7d</button>
-        <button class="{'active' if LOOKBACK_DAYS == 30 else ''}" onclick="doRefresh(30)">30d</button>
-        <button class="{'active' if LOOKBACK_DAYS == 90 else ''}" onclick="doRefresh(90)">90d</button>
-      </div>
-      <div class="window num">refreshed {generated_at}</div>
-      <button id="refreshBtn" onclick="doRefresh()">Refresh now</button>
-      <a id="agentBtn" href="/ops/agent/">Talk to Agent &#8599;</a>
-      <a class="hlink" href="/ops/playbooks/community-playbook.pdf">Playbook PDF</a>
-    </div>
-  </header>
+    source_status_html = (
+        source_chip(shopify, "Shopify")
+        + source_chip(ga4, "GA4")
+        + source_chip(meta, "Meta Ads")
+    )
 
-  <nav class="tabbar" aria-label="Sections">
-    <div class="tabs">
-      <button class="tabbtn" data-tab="overview">Overview<span class="tabbadge"></span></button>
-      <button class="tabbtn" data-tab="orders">Orders<span class="tabbadge"></span></button>
-      <button class="tabbtn" data-tab="plan">Plan<span class="tabbadge"></span></button>
-      <button class="tabbtn" data-tab="competition">Competition<span class="tabbadge"></span></button>
-      <button class="tabbtn" data-tab="content">Content<span class="tabbadge"></span></button>
-      <button class="tabbtn" data-tab="findings">Findings<span class="tabbadge"></span></button>
-    </div>
-    <input id="q" type="search" placeholder="Search everything…" aria-label="Search all sections">
-  </nav>
+    channel_html = (
+        "<section><h2>Sessions by channel</h2><div class='panel'>" + channel_rows + "</div></section>"
+    ) if channel_rows else ""
 
-  <div class="tabpanel" id="tab-overview">
-  {"".join([
-      '<div class="verdict"><div><b>Reading</b><p>',
-      html.escape(analysis["text"]),
-      '</p><span class="stale">via ', html.escape(analysis["model"]), '</span></div></div>'
-  ]) if analysis else ""}
+    campaign_html = (
+        "<section><h2>Meta campaigns</h2><div class='panel tscroll'><table><thead><tr>"
+        "<th>Campaign</th><th class='n'>Spend</th><th class='n'>Clicks</th><th class='n'>CTR</th>"
+        "</tr></thead><tbody>" + campaign_rows + "</tbody></table></div></section>"
+    ) if campaign_rows else ""
 
-  <section>
-    <h2>Source status</h2>
-    <div class="sources">
-      <span>Shopify {status_pill(shopify)}</span>
-      <span>GA4 {status_pill(ga4)}</span>
-      <span>Meta Ads {status_pill(meta)}</span>
-    </div>
-    <div class="healthrow">{health_html}</div>
-  </section>
-
-  <section>
-    <h2>Key numbers</h2>
-    <div class="kpis">{kpi_html}</div>
-  </section>
-
-  {overview_orders_html}
-
-  {funnel_html}
-
-  {"<section><h2>Sessions by channel (GA4)</h2><div class='panel'>" + channel_rows + "</div></section>" if channel_rows else ""}
-
-  {"<section><h2>Meta campaigns</h2><div class='panel'><table><thead><tr><th>Campaign</th><th class='n'>Spend</th><th class='n'>Clicks</th><th class='n'>CTR</th></tr></thead><tbody>" + campaign_rows + "</tbody></table></div></section>" if campaign_rows else ""}
-  </div>
-
-  <div class="tabpanel" id="tab-orders">{orders_html}</div>
-
-  <div class="tabpanel" id="tab-plan">{plan_html}</div>
-
-  <div class="tabpanel" id="tab-competition">{research_html or '<section><div class="panel"><p class="empty">No research yet — run one from the agent.</p></div></section>'}</div>
-
-  <div class="tabpanel" id="tab-content">{content_html or '<section><div class="panel"><p class="empty">Approved marketing copy will collect here.</p></div></section>'}</div>
-
-  <div class="tabpanel" id="tab-findings">{findings_html}</div>
-
-  <footer>
-    <span>generated by /root/ops-dashboard/generate.py</span>
-    <span>daily refresh + on-demand</span>
-  </footer>
-</div>
-</body>
-</html>
-"""
+    return page(
+        generated_at=generated_at,
+        lookback_days=LOOKBACK_DAYS,
+        source_status_html=source_status_html,
+        kpi_html=kpi_html,
+        verdict_html=verdict_html,
+        funnel_html=funnel_html,
+        channel_html=channel_html,
+        campaign_html=campaign_html,
+        overview_orders_html=overview_orders_html,
+        orders_html=orders_html,
+        plan_html=plan_html,
+        research_html=research_html,
+        content_html=content_html,
+        findings_html=findings_html,
+        health_html=health_html,
+    )
 
 
 def main():

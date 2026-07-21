@@ -23,6 +23,12 @@ import threading
 HOST, PORT = "127.0.0.1", 8901
 DB = "/root/ops-dashboard/data/hermes.db"
 UPLOAD_DIR = "/root/ops-dashboard/data/uploads"
+# Chat-photo cap. Modern phone photos routinely exceed the old 11 MB ceiling;
+# 32 MB stays comfortably under nginx's 50m on this vhost. Large videos go
+# through Drop (copyparty), not this endpoint. Formats stay jpg/png/webp — the
+# only ones tesseract OCR and browser <img> render without a HEIC decoder.
+MAX_UPLOAD_MB = 32
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 LOCK = threading.Lock()
 # Fast requests answer synchronously within the soft wait; anything longer keeps
 # running in a background thread (up to the hard cap) and lands in the thread
@@ -507,8 +513,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ctype = self.headers.get("Content-Type", "")
         m = re.search(r'boundary="?([^";]+)"?', ctype)
         length = int(self.headers.get("Content-Length", 0))
-        if "multipart/form-data" not in ctype or not m or length > 11 * 1024 * 1024:
-            self._json(400, {"error": "expected a multipart image upload under 10 MB"})
+        if "multipart/form-data" not in ctype or not m or length > MAX_UPLOAD_BYTES:
+            self._json(400, {"error": f"expected a multipart image (jpg, png, or webp) under {MAX_UPLOAD_MB} MB"})
             return
         body = self.rfile.read(length)
         boundary = ("--" + m.group(1)).encode()
