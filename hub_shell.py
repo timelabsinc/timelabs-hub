@@ -826,6 +826,141 @@ WHOAMI_JS = """
 """
 
 
+# ---------------------------------------------------------------------------
+# "Ask Labs" — the omnipresent assistant. Defined once here and appended to both
+# WHOAMI_JS (tool pages) and HUB_SCRIPT (dashboard), so every generated page gets
+# a context-aware command bar wired to the existing agent backend (/send + poll).
+# ---------------------------------------------------------------------------
+ASSIST_CSS = r"""
+.lx-fab{position:fixed;right:20px;bottom:20px;width:54px;height:54px;border-radius:50%;border:none;
+  background:linear-gradient(135deg,var(--accent),#d8a94c);color:#fff;cursor:pointer;z-index:900;
+  box-shadow:0 8px 24px rgba(0,0,0,.22);display:flex;align-items:center;justify-content:center;
+  transition:transform .15s var(--ease),opacity .15s;}
+.lx-fab:hover{transform:translateY(-2px) scale(1.04);}
+.lx-fab.hide{opacity:0;pointer-events:none;transform:scale(.6);}
+.lx-fab svg{width:26px;height:26px;fill:#fff;}
+.lx-panel{position:fixed;right:20px;bottom:20px;width:390px;max-width:calc(100vw - 32px);height:560px;
+  max-height:calc(100vh - 40px);background:var(--card);border:1px solid var(--border);border-radius:16px;
+  box-shadow:0 18px 50px rgba(0,0,0,.30);z-index:901;display:flex;flex-direction:column;overflow:hidden;
+  opacity:0;transform:translateY(16px) scale(.98);pointer-events:none;transition:opacity .18s,transform .18s var(--ease);}
+.lx-panel.on{opacity:1;transform:none;pointer-events:auto;}
+.lx-head{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border);}
+.lx-head b{font-size:14.5px;color:var(--ink);}
+.lx-dot{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--accent),#d8a94c);
+  color:#fff;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center;}
+.lx-ctx{font-size:12px;color:var(--muted);flex:1;}
+.lx-full{color:var(--muted);text-decoration:none;font-size:15px;padding:2px 6px;}
+.lx-full:hover{color:var(--ink);}
+.lx-x{border:none;background:none;font-size:22px;line-height:1;color:var(--muted);cursor:pointer;padding:0 4px;}
+.lx-x:hover{color:var(--ink);}
+.lx-thread{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;}
+.lx-msg{font-size:13.5px;line-height:1.5;max-width:88%;border-radius:12px;padding:9px 12px;word-wrap:break-word;overflow-wrap:anywhere;}
+.lx-msg.u{align-self:flex-end;background:var(--ink);color:var(--bg);border-bottom-right-radius:4px;}
+.lx-msg.b{align-self:flex-start;background:var(--card-2);color:var(--ink);border-bottom-left-radius:4px;}
+.lx-msg.b p{margin:0 0 7px;} .lx-msg.b p:last-child{margin:0;}
+.lx-msg.b a{color:var(--accent);font-weight:600;}
+.lx-msg.b ul{margin:5px 0;padding-left:18px;}
+.lx-msg.b code{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 4px;font-size:12px;}
+.lx-msg.b pre{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px;overflow-x:auto;font-size:12px;}
+.lx-wait{display:flex;gap:4px;align-items:center;}
+.lx-wait span{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:lxb 1s infinite;}
+.lx-wait span:nth-child(2){animation-delay:.15s;} .lx-wait span:nth-child(3){animation-delay:.3s;}
+@keyframes lxb{0%,100%{opacity:.3;transform:translateY(0);}50%{opacity:1;transform:translateY(-3px);}}
+.lx-chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px 8px;}
+.lx-chip{font-size:12px;border:1px solid var(--border);background:var(--card);color:var(--ink);border-radius:16px;
+  padding:5px 11px;cursor:pointer;text-align:left;}
+.lx-chip:hover{border-color:var(--accent);background:var(--accent-bg);}
+.lx-input{display:flex;gap:8px;align-items:flex-end;padding:10px 12px;border-top:1px solid var(--border);}
+.lx-input textarea{flex:1;resize:none;border:1px solid var(--border);border-radius:10px;background:var(--bg);
+  color:var(--ink);padding:9px 11px;font-family:inherit;font-size:13.5px;line-height:1.4;max-height:110px;}
+.lx-input textarea:focus{outline:none;border-color:var(--accent);}
+.lx-input button{flex-shrink:0;width:38px;height:38px;border-radius:10px;border:none;background:var(--ink);
+  color:var(--bg);cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.lx-input button svg{width:17px;height:17px;fill:currentColor;}
+@media(max-width:560px){
+  .lx-fab{bottom:80px;right:14px;}
+  .lx-panel{right:0;left:0;bottom:0;width:100%;max-width:100%;height:84vh;border-radius:16px 16px 0 0;}
+}
+"""
+
+ASSIST_JS = r"""
+(function(){
+  if(window.__labsAssist)return; window.__labsAssist=true;
+  function boot(){
+  var API='/ops/agent/api', SID=null, busy=false;
+  function el(h){var d=document.createElement('div');d.innerHTML=h;return d.firstElementChild;}
+  function esc(s){var d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
+  function md(t){
+    t=esc(t);
+    t=t.replace(/```([\s\S]*?)```/g,function(m,c){return '<pre>'+c.trim()+'</pre>';});
+    t=t.replace(/`([^`]+)`/g,'<code>$1</code>');
+    t=t.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+    t=t.replace(/\[([^\]]+)\]\((https?:[^)\s]+|\/[^)\s]+)\)/g,'<a href="$2">$1</a>');
+    t=t.replace(/(^|\n)[-•]\s+(.+)/g,'$1<li>$2</li>');
+    t=t.replace(/(<li>[\s\S]*?<\/li>)/g,function(m){return '<ul>'+m+'</ul>';});
+    t=t.replace(/\n{2,}/g,'</p><p>').replace(/\n/g,'<br>');
+    return '<p>'+t+'</p>';
+  }
+  var path=location.pathname;
+  var PAGES={
+    '/ops/product-builder.html':{name:'Product builder',chips:['Draft a product from my latest Drop photos','What should I price a new NH35 case at?']},
+    '/ops/product-updater.html':{name:'Quick product updater',chips:['Which products are still drafts?','How many products are active?']},
+    '/ops/theme-editor.html':{name:'Theme editor',chips:['Make the buttons deep navy','Use a warmer background']},
+    '/ops/content-updater.html':{name:'Content updater',chips:['Add a shipping & warranty block to all products','Rewrite my About page in our voice']},
+    '/ops/ledger.html':{name:'Ledger',chips:["What's my margin on GMT builds?",'Total spend last month?']},
+    '/ops/blog.html':{name:'Blog builder',chips:['Draft my next blog topic','What topics are queued?']},
+    '/ops/tools.html':{name:'Tools',chips:['What can you do?','What should I work on today?']}
+  };
+  function ctx(){for(var k in PAGES){if(path.indexOf(k)===0)return PAGES[k];}
+    if(path==='/ops/'||path==='/ops'||path.indexOf('/ops/index')===0)return {name:'Home',chips:["What's new today?",'How are sales this week?','What should I do next?']};
+    return {name:'Labs OS',chips:["What's new today?",'What can you do?']};}
+  var PC=ctx();
+  var fab=el('<button class="lx-fab" title="Ask Labs (Ctrl/Cmd K)" aria-label="Ask Labs"><svg viewBox="0 0 24 24"><path d="M9 3l1.3 3.5L14 7.8l-3.7 1.3L9 12.5 7.7 9.1 4 7.8l3.7-1.3z"/><path d="M17.5 13l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg></button>');
+  var panel=el('<div class="lx-panel" role="dialog" aria-label="Ask Labs"><div class="lx-head"><span class="lx-dot">L</span><b>Ask Labs</b><span class="lx-ctx"></span><a class="lx-full" href="/ops/agent/" title="Open full chat">&#10530;</a><button class="lx-x" aria-label="Close">&times;</button></div><div class="lx-thread" id="lxThread"></div><div class="lx-chips" id="lxChips"></div><form class="lx-input" id="lxForm"><textarea id="lxIn" rows="1" placeholder="Ask anything, or tell me what to do..."></textarea><button type="submit" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z"/></svg></button></form></div>');
+  document.body.appendChild(fab); document.body.appendChild(panel);
+  panel.querySelector('.lx-ctx').textContent=PC.name!=='Labs OS'?('· '+PC.name):'';
+  var thread=panel.querySelector('#lxThread'),input=panel.querySelector('#lxIn'),chips=panel.querySelector('#lxChips'),greeted=false;
+  function open(){panel.classList.add('on');fab.classList.add('hide');if(!greeted)greet();setTimeout(function(){input.focus();},60);}
+  function close(){panel.classList.remove('on');fab.classList.remove('hide');}
+  fab.onclick=open; panel.querySelector('.lx-x').onclick=close;
+  document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&(e.key==='k'||e.key==='K')){e.preventDefault();panel.classList.contains('on')?close():open();}if(e.key==='Escape'&&panel.classList.contains('on'))close();});
+  function greet(){greeted=true;addBot("Hi — I'm your Labs assistant. Ask about the business, or tell me what to do. I work across your tools.");renderChips();}
+  function renderChips(){chips.innerHTML='';PC.chips.forEach(function(c){var b=document.createElement('button');b.className='lx-chip';b.textContent=c;b.onclick=function(){input.value=c;send();};chips.appendChild(b);});}
+  function addUser(t){var m=el('<div class="lx-msg u"></div>');m.textContent=t;thread.appendChild(m);sc();}
+  function addBot(t){var m=el('<div class="lx-msg b"></div>');m.innerHTML=md(t);thread.appendChild(m);sc();return m;}
+  function addWait(){var m=el('<div class="lx-msg b lx-wait"><span></span><span></span><span></span></div>');thread.appendChild(m);sc();return m;}
+  function sc(){thread.scrollTop=thread.scrollHeight;}
+  async function api(p,o){var r=await fetch(API+p,o);if(r.status===403){location.href='/oauth2/start?rd='+encodeURIComponent(location.pathname);throw new Error('auth');}return r.json().catch(function(){return {};});}
+  async function ensureSid(){if(SID)return SID;try{SID=localStorage.getItem('lx_sid')||null;}catch(e){}if(SID)return SID;var d=await api('/session/new',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});SID=d.id;try{localStorage.setItem('lx_sid',SID);}catch(e){}return SID;}
+  async function send(){var t=input.value.trim();if(!t||busy)return;chips.innerHTML='';input.value='';input.style.height='auto';addUser(t);busy=true;var w=addWait();
+    try{var sid=await ensureSid();var msg=(PC.name!=='Labs OS'?("(I'm on the "+PC.name+".) "):'')+t;
+      var d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sid,message:msg})});
+      if(d.reply){w.remove();addBot(d.reply);}
+      else if(d.pending){await poll(sid,w);}
+      else if(d.error){w.remove();addBot(d.error);}
+      else{w.remove();addBot('No response — try again.');}
+    }catch(e){w.remove();if(e.message!=='auth')addBot('Something went wrong: '+e.message);}
+    busy=false;
+  }
+  async function poll(sid,w){for(var i=0;i<45;i++){await new Promise(function(r){setTimeout(r,2600);});
+      var h=await api('/history?session='+encodeURIComponent(sid));var m=h.messages||[];
+      if(m.length&&m[m.length-1].role==='agent'){w.remove();addBot(m[m.length-1].text);return;}}
+    w.remove();addBot("Still working on it — open the [full chat](/ops/agent/) and it'll appear there when it lands.");
+  }
+  panel.querySelector('#lxForm').addEventListener('submit',function(e){e.preventDefault();send();});
+  input.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+  input.addEventListener('input',function(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,110)+'px';});
+  }
+  if(document.body)boot();else document.addEventListener('DOMContentLoaded',boot);
+})();
+"""
+
+# Wire the assistant into every generated page (idempotent via window.__labsAssist).
+HUB_STYLE = HUB_STYLE + ASSIST_CSS
+WHOAMI_JS = WHOAMI_JS + "\n" + ASSIST_JS
+HUB_SCRIPT = HUB_SCRIPT + "\n" + ASSIST_JS
+
+
 KEY_PANEL = """
 <div id="keyveil"></div>
 <aside id="keypanel" role="dialog" aria-label="Key — manage access">
