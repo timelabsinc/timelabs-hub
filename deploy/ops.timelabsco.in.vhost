@@ -49,12 +49,13 @@ server {
     # --- Drop (Timelabs file tunnel: custom UI + chunked API), behind Key ---
     location = /drop { return 301 /drop/; }
 
-    # the single-page UI
-    location = /drop/ {
+    # the single-page UI (directory alias + index — an alias to a file here
+    # makes nginx append the index name to it and 500)
+    location /drop/ {
         auth_request /oauth2/auth;
         error_page 401 = @oauth2_signin;
-        alias /var/www/drop/index.html;
-        default_type text/html;
+        alias /var/www/drop/;
+        index index.html;
         add_header Cache-Control "no-cache" always;
     }
 
