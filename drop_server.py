@@ -217,6 +217,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._gdrive_callback(params)
         elif path == "/gdrive/list":
             self._gdrive_list(params.get("folder", "root"))
+        elif path == "/download-zip":
+            self._download_zip(params.get("path", ""))
         else:
             self._json(404, {"error": "not found"})
 
@@ -684,6 +686,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return None, "not connected"
             return None, (msg[:180] or f"Drive API error {e.code}")
 
+    # google-native types → what they import AS (label shown on the button)
+    GDOC_EXPORT = {
+        "application/vnd.google-apps.document": ("application/pdf", ".pdf", "PDF"),
+        "application/vnd.google-apps.spreadsheet":
+            ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx", "Excel"),
+        "application/vnd.google-apps.presentation": ("application/pdf", ".pdf", "PDF"),
+        "application/vnd.google-apps.drawing": ("image/png", ".png", "PNG"),
+    }
+
     def _gdrive_list(self, folder):
         folder = re.sub(r"[^A-Za-z0-9_-]", "", folder) or "root"
         q = urllib.parse.quote(f"'{folder}' in parents and trashed=false")
@@ -696,11 +707,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         items = []
         for f in data.get("files", []):
-            is_dir = f["mimeType"] == "application/vnd.google-apps.folder"
-            is_gdoc = f["mimeType"].startswith("application/vnd.google-apps") and not is_dir
+            mime = f["mimeType"]
+            is_dir = mime == "application/vnd.google-apps.folder"
+            is_gdoc = mime.startswith("application/vnd.google-apps") and not is_dir
+            exp = self.GDOC_EXPORT.get(mime)
             items.append({"id": f["id"], "name": f["name"], "dir": is_dir,
-                          "gdoc": is_gdoc, "size": int(f.get("size", 0)),
-                          "mtime": f.get("modifiedTime", "")})
+                          "gdoc": is_gdoc, "mime": mime,
+                          "as": exp[2] if exp else "",           # "PDF"/"Excel" or "" (binary)
+                          "importable": (not is_dir) and (not is_gdoc or exp is not None),
+                          "size": int(f.get("size", 0)), "mtime": f.get("modifiedTime", "")})
         self._json(200, {"items": items})
 
     def _gdrive_import(self):
@@ -708,6 +723,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         fid = re.sub(r"[^A-Za-z0-9_-]", "", str((p or {}).get("id", "")))
         name = safe_name((p or {}).get("name", ""))
         dest = safe_rel((p or {}).get("path", ""))
+        mime = str((p or {}).get("mime", ""))
         if not fid or not name or dest is None:
             self._json(400, {"error": "bad import request"})
             return
@@ -717,9 +733,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         user = self._user()
 
+        # Google-native docs must be *exported* (to PDF/Excel); binaries download raw.
+        exp = self.GDOC_EXPORT.get(mime)
+        if exp:
+            exp_mime, ext, _ = exp
+            url = (f"https://www.googleapis.com/drive/v3/files/{fid}/export"
+                   f"?mimeType={urllib.parse.quote(exp_mime)}")
+            if not name.lower().endswith(ext):
+                name = name + ext
+        else:
+            url = f"https://www.googleapis.com/drive/v3/files/{fid}?alt=media"
+        name = safe_name(name) or "import"
+
         def worker():
             tmp = os.path.join(UPLOADS, "gdrive-" + fid + ".part")
-            url = f"https://www.googleapis.com/drive/v3/files/{fid}?alt=media"
             req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access}"})
             try:
                 with urllib.request.urlopen(req, timeout=600) as r, open(tmp, "wb") as f:
@@ -732,6 +759,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 shutil.move(tmp, final)
                 os.chmod(final, 0o644)
                 print(f"[gdrive] {user} imported {name}", flush=True)
+                hub_event("gdrive_import", name, user)
             except Exception as e:
                 print(f"[gdrive] import {name} failed: {e}", flush=True)
                 try:
@@ -904,6 +932,59 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         f'<a href="/s/{tok}/raw?f={urllib.parse.quote(e.name)}" download>Download</a></div>')
         name = os.path.basename(target)
         self._html(200, f"<h2>{name}</h2>" + ("".join(rows) or "<p>Empty folder.</p>"), name)
+
+    def _download_zip(self, rel):
+        """Package a folder as a .zip and stream it (export a whole folder)."""
+        import tempfile
+        import zipfile
+        d = safe_rel(rel)
+        if d is None or not os.path.isdir(d):
+            self._json(404, {"error": "no such folder"})
+            return
+        total, filelist = 0, []
+        for base, dirs, files in os.walk(d):
+            dirs[:] = [x for x in dirs if not x.startswith(".")]
+            for f in files:
+                if f.startswith("."):
+                    continue
+                fp = os.path.join(base, f)
+                try:
+                    total += os.path.getsize(fp)
+                except OSError:
+                    continue
+                filelist.append(fp)
+        if total > 4 * 1024 * 1024 * 1024:
+            self._json(413, {"error": "folder too large to zip (over 4 GB) — download files individually"})
+            return
+        tmp = tempfile.NamedTemporaryFile(dir=UPLOADS, suffix=".zip", delete=False)
+        try:
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
+                for fp in filelist:
+                    z.write(fp, os.path.relpath(fp, d))
+            tmp.close()
+            size = os.path.getsize(tmp.name)
+            zipname = (os.path.basename(d) or "Drop") + ".zip"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="{zipname}"')
+            self.end_headers()
+            with open(tmp.name, "rb") as f:
+                while True:
+                    chunk = f.read(256 * 1024)
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+            hub_event("download_zip", f"{os.path.basename(d)} ({len(filelist)} files)", self._user())
+        finally:
+            try:
+                os.remove(tmp.name)
+            except OSError:
+                pass
 
     def _send_file(self, path, name):
         """Stream a file with single-range support (public share downloads/video)."""

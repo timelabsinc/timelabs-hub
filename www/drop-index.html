@@ -95,9 +95,14 @@
     border-radius:10px;padding:10px 14px;box-shadow:var(--shadow);transition:all .15s var(--ease);max-width:100%;}
   .folder:hover{border-color:var(--border-2);}
   .folder:active{transform:scale(.97);}
+  .folder{cursor:pointer;}
   .folder .ic{width:18px;height:18px;color:var(--accent);flex:0 0 auto;}
   .folder b{font-size:13.5px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .folder small{font-size:11.5px;color:var(--muted);flex:0 0 auto;}
+  .fdots{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;
+    color:var(--muted);flex:0 0 auto;margin-left:2px;}
+  .fdots:hover{background:var(--card-2);color:var(--ink);}
+  .fdots .ic{width:15px;height:15px;color:inherit;}
 
   /* file grid */
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;}
@@ -372,6 +377,9 @@
       <svg class="ic" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
     </button>
     <b id="viewName"></b>
+    <button class="iconbtn" id="viewShare" aria-label="Share link">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>
+    </button>
     <button class="iconbtn" id="viewDl" aria-label="Download">
       <svg class="ic" viewBox="0 0 24 24"><path d="M12 4v12M6 10l6 6 6-6"/><path d="M4 20h16"/></svg>
     </button>
@@ -578,12 +586,16 @@ function render(){
   const dirs = !showFolders ? [] : (q ? state.dirs.filter(d => d.name.toLowerCase().includes(q)) : state.dirs);
   $('folders').style.display = dirs.length ? '' : 'none';
   $('folders').innerHTML = dirs.map(d =>
-    '<button class="folder" data-n="' + esc(d.name) + '">' + ICONS.folder +
-    '<b>' + esc(d.name) + '</b><small>' + d.count + '</small></button>'
+    '<div class="folder" data-n="' + esc(d.name) + '">' + ICONS.folder +
+    '<b>' + esc(d.name) + '</b><small>' + d.count + '</small>' +
+    '<button class="fdots" data-n="' + esc(d.name) + '" aria-label="Folder options">' + ICONS.dots + '</button></div>'
   ).join('');
   $('folders').querySelectorAll('.folder').forEach(b => {
-    b.onclick = () => nav(state.path ? state.path + '/' + b.dataset.n : b.dataset.n);
+    b.onclick = e => { if(e.target.closest('.fdots')) return; nav(state.path ? state.path + '/' + b.dataset.n : b.dataset.n); };
     b.oncontextmenu = e => { e.preventDefault(); showMenu(e, b.dataset.n, true); };
+  });
+  $('folders').querySelectorAll('.fdots').forEach(b => {
+    b.onclick = e => { e.stopPropagation(); showMenu(e, b.dataset.n, true); };
   });
 
   const files = visibleFiles();
@@ -634,14 +646,15 @@ async function copyText(t){
 async function showMenu(e, name, isDir){
   const m = $('menu');
   m.innerHTML =
-    (!isDir ? '<button id="mDl">' + ICONS.dl + 'Download</button>' : '') +
     '<button id="mSh">' + ICON_LINK + 'Share link</button>' +
+    (isDir ? '<button id="mDl">' + ICONS.dl + 'Download as ZIP</button>'
+           : '<button id="mDl">' + ICONS.dl + 'Download</button>') +
     '<button id="mRn">' + ICONS.edit + 'Rename</button>' +
     '<button id="mDe" class="danger">' + ICONS.trash + 'Delete</button>';
   m.classList.add('on');
   $('veil').classList.add('on');
-  const x = Math.min(e.clientX || 40, innerWidth - 190);
-  const y = Math.min(e.clientY || 200, innerHeight - 210);
+  const x = Math.min(e.clientX || (e.currentTarget && e.currentTarget.getBoundingClientRect().left) || 40, innerWidth - 200);
+  const y = Math.min(e.clientY || (e.currentTarget && e.currentTarget.getBoundingClientRect().bottom) || 200, innerHeight - 210);
   m.style.left = x + 'px'; m.style.top = y + 'px';
   // if already shared, swap the Share item into copy/remove
   try {
@@ -669,7 +682,16 @@ async function showMenu(e, name, isDir){
       toast('Public link copied — anyone with it can view');
     } catch(err){ toast(err.message); }
   };
-  if(!isDir) $('mDl').onclick = () => { hideMenu(); download(name); };
+  $('mDl').onclick = () => {
+    hideMenu();
+    if(isDir){
+      const rel = state.path ? state.path + '/' + name : name;
+      toast('Zipping ' + name + '…');
+      const a = document.createElement('a');
+      a.href = API + '/download-zip?path=' + encodeURIComponent(rel);
+      document.body.appendChild(a); a.click(); a.remove();
+    } else download(name);
+  };
   $('mRn').onclick = async () => {
     hideMenu();
     const nn = prompt('Rename to:', name);
@@ -739,6 +761,15 @@ function closeView(){
 $('viewClose').onclick = closeView;
 $('vPrev').onclick = () => openView(viewIdx - 1);
 $('vNext').onclick = () => openView(viewIdx + 1);
+async function shareAndCopy(name){
+  try {
+    const info = await api('/share/info?path=' + encodeURIComponent(state.path) + '&name=' + encodeURIComponent(name));
+    const r = info.token ? info : await api('/share', {method:'POST', body: JSON.stringify({path: state.path, name})});
+    await copyText(r.url);
+    toast(info.token ? 'Link copied (already shared)' : 'Public link copied — anyone with it can view');
+  } catch(err){ toast(err.message); }
+}
+$('viewShare').onclick = () => { if(viewIdx >= 0) shareAndCopy(visibleFiles()[viewIdx].name); };
 $('viewDl').onclick = () => { if(viewIdx >= 0) download(visibleFiles()[viewIdx].name); };
 $('viewDel').onclick = async () => {
   if(viewIdx < 0) return;
@@ -979,14 +1010,16 @@ async function gdList(){
   try {
     const data = await api('/gdrive/list?folder=' + (cur ? cur.id : 'root'));
     if(!data.items.length){ $('gdBody').innerHTML = '<p class="empty" style="padding:14px">Empty folder.</p>'; return; }
-    $('gdBody').innerHTML = data.items.map((f, i) =>
-      '<div class="gd-row' + (f.dir ? ' dir' : '') + '" data-i="' + i + '">' +
-      (f.dir ? ICONS.folder : ICONS[f.gdoc ? 'doc' : 'file']) +
-      '<span class="nm">' + esc(f.name) + '</span>' +
-      (f.dir ? '<small>›</small>'
-        : f.gdoc ? '<small>Google Doc</small>'
-        : '<small>' + fmtSize(f.size) + '</small><button class="gd-imp" data-i="' + i + '">Import</button>') +
-      '</div>').join('');
+    $('gdBody').innerHTML = data.items.map((f, i) => {
+      let right;
+      if(f.dir) right = '<small>›</small>';
+      else if(f.importable) right = (f.size ? '<small>' + fmtSize(f.size) + '</small>' : '') +
+             '<button class="gd-imp" data-i="' + i + '">Import' + (f.as ? ' as ' + f.as : '') + '</button>';
+      else right = '<small>can’t import</small>';
+      return '<div class="gd-row' + (f.dir ? ' dir' : '') + '" data-i="' + i + '">' +
+        (f.dir ? ICONS.folder : ICONS[f.gdoc ? 'doc' : 'file']) +
+        '<span class="nm">' + esc(f.name) + '</span>' + right + '</div>';
+    }).join('');
     $('gdBody').querySelectorAll('.gd-row.dir').forEach(r => {
       r.onclick = () => { const f = data.items[+r.dataset.i]; gdStack.push({id: f.id, name: f.name}); gdList(); };
     });
@@ -996,7 +1029,7 @@ async function gdList(){
         const f = data.items[+b.dataset.i];
         b.disabled = true; b.textContent = 'Importing…';
         try {
-          await api('/gdrive/import', {method:'POST', body: JSON.stringify({id: f.id, name: f.name, path: state.path})});
+          await api('/gdrive/import', {method:'POST', body: JSON.stringify({id: f.id, name: f.name, mime: f.mime, path: state.path})});
           toast(f.name + ' is importing — it will appear here shortly');
           b.textContent = 'Queued ✓';
           setTimeout(load, 4000);
