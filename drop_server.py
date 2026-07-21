@@ -672,7 +672,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=30) as r:
                 return json.loads(r.read()), None
         except urllib.error.HTTPError as e:
-            return None, f"drive api {e.code}"
+            try:
+                msg = json.loads(e.read()).get("error", {}).get("message", "")
+            except Exception:
+                msg = ""
+            if e.code == 403 and ("has not been used" in msg or "disabled" in msg):
+                return None, ("Google Drive API isn't switched on for your project yet. "
+                              "Open Google Cloud console, enable 'Google Drive API', "
+                              "wait ~2 minutes, then tap the cloud again.")
+            if e.code == 401:
+                return None, "not connected"
+            return None, (msg[:180] or f"Drive API error {e.code}")
 
     def _gdrive_list(self, folder):
         folder = re.sub(r"[^A-Za-z0-9_-]", "", folder) or "root"
