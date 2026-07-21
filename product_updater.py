@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Quick product updater — first Shopify tool. Renders /var/www/ops/product-updater.html.
+"""Quick product updater — Shopify tool. Renders /var/www/ops/product-updater.html.
 
-Search the catalog, change price / status inline, bulk-activate drafts. All
-data is fetched live client-side from /ops/agent/api/shopify/* (admin-gated),
-so this generator only emits the shell + JS.
+Fast inline price/status edits, an expandable deep editor (title, type, tags,
+description, images), and bulk activate. All data is fetched live client-side
+from /ops/agent/api/shopify/* (admin-gated); this generator emits shell + JS.
 """
 import os
 import sys
@@ -20,41 +20,59 @@ def build():
     doc = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="color-scheme" content="light dark"><title>Quick product updater — Timelabs Hub</title>
+<meta name="color-scheme" content="light dark"><title>Quick product updater — Timelabs OS</title>
 <style>{HUB_STYLE}
-  .pu-controls{{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}}
+  .pu-controls{{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}}
   .pu-search{{flex:1;min-width:200px;font-size:14px;border:1px solid var(--border);border-radius:var(--r-s);
     background:var(--card);color:var(--ink);padding:9px 12px;}}
   .pu-search:focus{{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}}
   .seg button{{cursor:pointer;}}
-  .prow{{display:grid;grid-template-columns:44px 1fr 120px 120px 84px;gap:12px;align-items:center;
-    padding:11px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--card);
-    margin-bottom:8px;box-shadow:var(--shadow);}}
-  .prow img{{width:44px;height:44px;object-fit:cover;border-radius:8px;background:var(--card-2);}}
-  .prow .ph{{width:44px;height:44px;border-radius:8px;background:var(--card-2);display:flex;align-items:center;
+  .pwrap{{border:1px solid var(--border);border-radius:var(--r);background:var(--card);margin-bottom:8px;
+    box-shadow:var(--shadow);overflow:hidden;}}
+  .prow{{display:grid;grid-template-columns:46px 1fr 108px 116px 40px;gap:12px;align-items:center;padding:10px 12px;}}
+  .prow img{{width:46px;height:46px;object-fit:cover;border-radius:8px;background:var(--card-2);}}
+  .prow .ph{{width:46px;height:46px;border-radius:8px;background:var(--card-2);display:flex;align-items:center;
     justify-content:center;color:var(--muted);font-size:18px;}}
   .prow .nm{{min-width:0;}}
   .prow .nm b{{font-size:13.5px;font-weight:600;color:var(--ink);display:block;overflow:hidden;
     text-overflow:ellipsis;white-space:nowrap;}}
   .prow .nm small{{font-size:11.5px;color:var(--muted);}}
   .pinput{{font-size:13.5px;border:1px solid var(--border);border-radius:7px;background:var(--bg);
-    color:var(--ink);padding:7px 9px;width:100%;}}
+    color:var(--ink);padding:7px 9px;width:100%;font-family:inherit;}}
   .pinput:focus{{outline:none;border-color:var(--accent);}}
   .pinput.dirty{{border-color:var(--accent);background:var(--accent-bg);}}
-  .psave{{font-size:12.5px;font-weight:650;border:1px solid var(--border);border-radius:7px;background:var(--card);
-    color:var(--muted);padding:7px 0;cursor:not-allowed;}}
-  .psave.on{{background:var(--ink);color:var(--bg);border-color:var(--ink);cursor:pointer;}}
-  .pu-bulk{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0;padding:11px 14px;
+  .editbtn{{width:34px;height:34px;border-radius:8px;border:1px solid var(--border);background:var(--card);
+    color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;
+    transition:transform .2s var(--ease);}}
+  .editbtn:hover{{color:var(--ink);border-color:var(--border-2);}}
+  .pwrap.open .editbtn{{transform:rotate(180deg);color:var(--accent);}}
+  .pdetail{{display:none;border-top:1px solid var(--border);padding:14px;background:var(--card-2);}}
+  .pwrap.open .pdetail{{display:block;animation:fadeup .2s var(--ease);}}
+  @keyframes fadeup{{from{{opacity:0;transform:translateY(-4px)}}to{{opacity:1;transform:none}}}}
+  .pfield{{margin-bottom:11px;}}
+  .pfield label{{display:block;font-size:11.5px;font-weight:650;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.04em;margin-bottom:5px;}}
+  .pfield textarea{{min-height:80px;resize:vertical;line-height:1.5;}}
+  .pimgs{{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}}
+  .pimg{{position:relative;width:64px;height:64px;border-radius:8px;overflow:hidden;border:1px solid var(--border);}}
+  .pimg img{{width:100%;height:100%;object-fit:cover;}}
+  .pimg .rm{{position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;border:none;
+    background:rgba(0,0,0,.6);color:#fff;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;}}
+  .addimg{{display:flex;gap:6px;margin-top:8px;}}
+  .addimg input{{flex:1;font-size:12.5px;}}
+  .addimg button, .savebtn, .pu-bulk button{{font-size:12.5px;font-weight:650;border:none;border-radius:7px;
+    background:var(--ink);color:var(--bg);padding:8px 14px;cursor:pointer;}}
+  .savebtn{{margin-top:6px;}}
+  .savebtn[disabled]{{opacity:.45;cursor:not-allowed;}}
+  .pu-bulk{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0;padding:11px 14px;
     background:var(--accent-bg);border-radius:var(--r);font-size:13.5px;color:var(--ink);}}
-  .pu-bulk button{{font-size:12.5px;font-weight:650;border:none;border-radius:7px;background:var(--ink);
-    color:var(--bg);padding:7px 13px;cursor:pointer;}}
-  .pu-setup{{background:var(--warn-bg,rgba(224,173,81,.12));border-radius:var(--r);padding:16px;text-align:center;}}
+  .pu-setup{{background:var(--accent-bg);border-radius:var(--r);padding:16px;text-align:center;color:var(--ink);}}
   .pu-more{{display:block;margin:14px auto 0;font-size:13px;font-weight:600;border:1px solid var(--border);
     background:var(--card);color:var(--ink);border-radius:var(--r-s);padding:9px 18px;cursor:pointer;}}
+  .hint{{font-size:11.5px;color:var(--muted);margin-top:4px;}}
   @media (max-width:640px){{
-    .prow{{grid-template-columns:40px 1fr;gap:8px;}}
-    .prow img,.prow .ph{{width:40px;height:40px;}}
-    .prow .pinput,.prow .psave{{grid-column:2;}}
+    .prow{{grid-template-columns:40px 1fr 40px;gap:8px;}}
+    .prow .price,.prow .status{{grid-column:2;}}
   }}
 </style></head>
 <body>
@@ -63,7 +81,7 @@ def build():
   <main>
     <div class="page-head">
       <h1 class="page-title">Quick product updater</h1>
-      <p class="page-sub">Search, re-price, and launch products fast. Changes go live on your store immediately.</p>
+      <p class="page-sub">Search, re-price, edit details &amp; images, and launch products. Changes go live on your store immediately.</p>
     </div>
     <div id="pu-body"></div>
     {hub_footer()}
@@ -73,11 +91,18 @@ def build():
 <script>
 'use strict';
 var API = '/ops/agent/api';
-var state = {{ q: '', filter: 'all', cursor: null, hasMore: false, selected: {{}} }};
+var state = {{ q:'', filter:'all', cursor:null, hasMore:false }};
 function $(id){{ return document.getElementById(id); }}
 function esc(s){{ var d=document.createElement('div'); d.textContent=s==null?'':s; return d.innerHTML; }}
 var toastT;
-function toast(m){{ var t=$('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(function(){{t.classList.remove('show');}},2600); }}
+function toast(m){{ var t=$('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(function(){{t.classList.remove('show');}},2800); }}
+async function api(path, opts){{
+  var res=await fetch(API+path, opts);
+  if(res.status===403){{ location.href='/oauth2/start?rd=/ops/product-updater.html'; throw new Error('auth'); }}
+  var d=await res.json().catch(function(){{return {{}};}});
+  if(!res.ok) throw new Error(d.error||'failed');
+  return d;
+}}
 
 function shell(){{
   $('pu-body').innerHTML =
@@ -88,95 +113,139 @@ function shell(){{
         '<button data-f="active">Active</button>' +
         '<button data-f="draft">Draft</button>' +
       '</div>' +
-    '</div>' +
-    '<div id="bulk"></div><div id="list"></div>' +
+    '</div><div id="bulk"></div><div id="list"></div>' +
     '<button id="more" class="pu-more" style="display:none">Load more</button>';
   var t=null;
-  $('q').addEventListener('input', function(){{ clearTimeout(t); t=setTimeout(function(){{ state.q=$('q').value.trim(); load(true); }}, 350); }});
+  $('q').addEventListener('input', function(){{ clearTimeout(t); t=setTimeout(function(){{ state.q=$('q').value.trim(); load(true); }},350); }});
   $('filter').querySelectorAll('button').forEach(function(b){{ b.onclick=function(){{
     $('filter').querySelectorAll('button').forEach(function(x){{x.classList.remove('active');}});
     b.classList.add('active'); state.filter=b.dataset.f; load(true);
   }}; }});
   $('more').onclick=function(){{ load(false); }};
 }}
-
-function buildQuery(){{
-  var parts=[];
-  if(state.filter!=='all') parts.push('status:'+state.filter);
-  if(state.q) parts.push(state.q);
-  return parts.join(' ');
-}}
+function buildQuery(){{ var p=[]; if(state.filter!=='all') p.push('status:'+state.filter); if(state.q) p.push(state.q); return p.join(' '); }}
 
 async function load(reset){{
-  if(reset){{ state.cursor=null; state.selected={{}}; $('list').innerHTML='<p class="empty" style="padding:20px">Loading…</p>'; }}
+  if(reset){{ state.cursor=null; $('list').innerHTML='<p class="empty" style="padding:20px">Loading…</p>'; }}
   try{{
-    var url=API+'/shopify/products?q='+encodeURIComponent(buildQuery())+(state.cursor?'&after='+encodeURIComponent(state.cursor):'');
-    var res=await fetch(url);
-    if(res.status===403){{ location.href='/oauth2/start?rd=/ops/product-updater.html'; return; }}
-    var d=await res.json();
-    if(!res.ok) throw new Error(d.error||'failed');
+    var d=await api('/shopify/products?q='+encodeURIComponent(buildQuery())+(state.cursor?'&after='+encodeURIComponent(state.cursor):''));
     state.cursor=d.cursor; state.hasMore=d.has_more;
     if(reset) $('list').innerHTML='';
-    if(reset && !d.products.length){{ $('list').innerHTML='<p class="empty" style="padding:20px">No products match.</p>'; }}
+    if(reset && !d.products.length) $('list').innerHTML='<p class="empty" style="padding:20px">No products match.</p>';
     d.products.forEach(addRow);
     $('more').style.display=state.hasMore?'block':'none';
     renderBulk();
-  }}catch(e){{ $('list').innerHTML='<div class="pu-setup">'+esc(e.message)+'</div>'; }}
+  }}catch(e){{ if(e.message!=='auth') $('list').innerHTML='<div class="pu-setup">'+esc(e.message)+'</div>'; }}
 }}
 
 function addRow(p){{
-  var row=document.createElement('div'); row.className='prow'; row.dataset.pid=p.id; row.dataset.vid=p.variant_id||'';
+  var wrap=document.createElement('div'); wrap.className='pwrap'; wrap.dataset.pid=p.id;
   var img = p.image ? '<img loading="lazy" src="'+esc(p.image)+'" alt="">' : '<div class="ph">◷</div>';
-  row.innerHTML = img +
-    '<div class="nm"><b>'+esc(p.title)+'</b><small>'+esc(p.sku||p.type||'')+(p.inventory!=null?' · '+p.inventory+' in stock':'')+'</small></div>' +
-    '<input class="pinput price" type="number" step="0.01" value="'+esc(p.price||'')+'" '+(p.variant_id?'':'disabled')+'>' +
-    '<select class="pinput status">' +
-      ['ACTIVE','DRAFT','ARCHIVED'].map(function(s){{return '<option value="'+s+'"'+(s===p.status?' selected':'')+'>'+s.charAt(0)+s.slice(1).toLowerCase()+'</option>';}}).join('') +
-    '</select>' +
-    '<button class="psave">Save</button>';
-  var priceI=row.querySelector('.price'), statusI=row.querySelector('.status'), save=row.querySelector('.psave');
+  wrap.innerHTML =
+    '<div class="prow">'+img+
+    '<div class="nm"><b>'+esc(p.title)+'</b><small>'+esc(p.sku||p.type||'')+(p.inventory!=null?' · '+p.inventory+' in stock':'')+'</small></div>'+
+    '<input class="pinput price" type="number" step="0.01" value="'+esc(p.price||'')+'" '+(p.variant_id?'':'disabled')+' title="Price">'+
+    '<select class="pinput status">'+['ACTIVE','DRAFT','ARCHIVED'].map(function(s){{return '<option value="'+s+'"'+(s===p.status?' selected':'')+'>'+s.charAt(0)+s.slice(1).toLowerCase()+'</option>';}}).join('')+'</select>'+
+    '<button class="editbtn" title="Edit details &amp; images">⌄</button>'+
+    '</div><div class="pdetail"></div>';
+  var priceI=wrap.querySelector('.price'), statusI=wrap.querySelector('.status');
   var orig={{price:p.price, status:p.status}};
-  function dirty(){{
-    var d=(priceI.value!==(orig.price||'')) || (statusI.value!==orig.status);
-    save.classList.toggle('on', d);
+  var qsT=null;
+  function quickSave(){{ clearTimeout(qsT); qsT=setTimeout(async function(){{
+    var body={{product_id:p.id, variant_id:p.variant_id, title:p.title}};
+    if(priceI.value!==(orig.price||'')) body.price=priceI.value;
+    if(statusI.value!==orig.status) body.status=statusI.value;
+    try{{ await api('/shopify/product/update',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
+      orig.price=priceI.value; orig.status=statusI.value; priceI.classList.remove('dirty'); statusI.classList.remove('dirty');
+      toast(p.title+' saved'); renderBulk();
+    }}catch(e){{ toast(e.message); }}
+  }},700); }}
+  function rowDirty(){{
     priceI.classList.toggle('dirty', priceI.value!==(orig.price||''));
     statusI.classList.toggle('dirty', statusI.value!==orig.status);
+    if(priceI.value!==(orig.price||'') || statusI.value!==orig.status) quickSave();
   }}
-  priceI.addEventListener('input', dirty); statusI.addEventListener('change', function(){{ dirty(); state.selected[p.id]=(statusI.value==='ACTIVE'&&orig.status==='DRAFT'); }});
-  save.onclick=async function(){{
-    if(!save.classList.contains('on')) return;
-    save.textContent='…'; save.classList.remove('on');
-    try{{
-      var body={{product_id:p.id, variant_id:p.variant_id, title:p.title}};
-      if(priceI.value!==(orig.price||'')) body.price=priceI.value;
-      if(statusI.value!==orig.status) body.status=statusI.value;
-      var res=await fetch(API+'/shopify/product/update',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
-      var d=await res.json();
-      if(!res.ok) throw new Error(d.error||'failed');
-      orig.price=priceI.value; orig.status=statusI.value; dirty();
-      save.textContent='Saved ✓'; toast(p.title+' updated');
-      setTimeout(function(){{save.textContent='Save';}},1500);
-    }}catch(e){{ toast(e.message); save.textContent='Retry'; save.classList.add('on'); }}
-  }};
-  $('list').appendChild(row);
+  priceI.addEventListener('change', rowDirty);
+  statusI.addEventListener('change', rowDirty);
+  wrap.querySelector('.editbtn').onclick=function(){{ toggleDetail(wrap, p); }};
+  $('list').appendChild(wrap);
+}}
+
+async function toggleDetail(wrap, p){{
+  if(wrap.classList.contains('open')){{ wrap.classList.remove('open'); return; }}
+  wrap.classList.add('open');
+  var box=wrap.querySelector('.pdetail');
+  if(box.dataset.loaded) return;
+  box.innerHTML='<p class="empty">Loading details…</p>';
+  try{{
+    var d=await api('/shopify/product/detail?id='+encodeURIComponent(p.id));
+    box.dataset.loaded='1';
+    box.innerHTML=
+      '<div class="pfield"><label>Title</label><input class="pinput f-title" value="'+esc(d.title)+'"></div>'+
+      '<div class="pfield"><label>Product type</label><input class="pinput f-type" value="'+esc(d.type)+'" placeholder="Case, Dial, Movement…"></div>'+
+      '<div class="pfield"><label>Tags (comma-separated)</label><input class="pinput f-tags" value="'+esc((d.tags||[]).join(', '))+'"></div>'+
+      '<div class="pfield"><label>Description</label><textarea class="pinput f-desc">'+esc(d.description)+'</textarea></div>'+
+      '<div class="pfield"><label>Images</label><div class="pimgs"></div>'+
+        '<div class="addimg"><input class="pinput f-imgurl" placeholder="Paste an image URL (or a Drop share link)…"><button class="f-addimg">Add</button></div>'+
+        '<div class="hint">Tip: in Drop, share an image and paste its link + <b>/raw</b> here.</div></div>'+
+      '<button class="savebtn f-save" disabled>Save details</button>';
+    renderImgs(box, p, d.images);
+    var save=box.querySelector('.f-save');
+    var dirty=function(){{ save.disabled=false; }};
+    ['.f-title','.f-type','.f-tags','.f-desc'].forEach(function(sel){{ box.querySelector(sel).addEventListener('input', dirty); }});
+    save.onclick=async function(){{
+      save.disabled=true; save.textContent='Saving…';
+      try{{
+        await api('/shopify/product/update',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{
+          product_id:p.id, title:box.querySelector('.f-title').value,
+          type:box.querySelector('.f-type').value,
+          description:box.querySelector('.f-desc').value,
+          tags:box.querySelector('.f-tags').value.split(',').map(function(t){{return t.trim();}}).filter(Boolean)
+        }})}});
+        wrap.querySelector('.nm b').textContent=box.querySelector('.f-title').value;
+        toast('Details saved'); save.textContent='Saved ✓';
+        setTimeout(function(){{save.textContent='Save details';}},1500);
+      }}catch(e){{ toast(e.message); save.disabled=false; save.textContent='Save details'; }}
+    }};
+    box.querySelector('.f-addimg').onclick=async function(){{
+      var inp=box.querySelector('.f-imgurl'); var url=inp.value.trim(); if(!url) return;
+      this.disabled=true; this.textContent='Adding…';
+      try{{ await api('/shopify/product/media/add',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{product_id:p.id,url:url,title:d.title}})}});
+        inp.value=''; toast('Image added — Shopify is processing it');
+        var fresh=await api('/shopify/product/detail?id='+encodeURIComponent(p.id)); renderImgs(box, p, fresh.images);
+      }}catch(e){{ toast(e.message); }}
+      this.disabled=false; this.textContent='Add';
+    }};
+  }}catch(e){{ box.innerHTML='<div class="pu-setup">'+esc(e.message)+'</div>'; }}
+}}
+
+function renderImgs(box, p, images){{
+  var strip=box.querySelector('.pimgs');
+  strip.innerHTML=(images||[]).map(function(im){{
+    return '<div class="pimg" data-mid="'+esc(im.id)+'"><img src="'+esc(im.url)+'" alt=""><button class="rm">✕</button></div>';
+  }}).join('') || '<span class="empty" style="font-size:12.5px">No images yet.</span>';
+  strip.querySelectorAll('.pimg .rm').forEach(function(b){{
+    b.onclick=async function(){{
+      var cell=b.closest('.pimg');
+      if(!confirm('Remove this image from the product?')) return;
+      try{{ await api('/shopify/product/media/remove',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{product_id:p.id, media_id:cell.dataset.mid, title:p.title}})}});
+        cell.remove(); toast('Image removed');
+      }}catch(e){{ toast(e.message); }}
+    }};
+  }});
 }}
 
 function renderBulk(){{
-  var drafts=[].slice.call(document.querySelectorAll('.prow')).filter(function(r){{return r.querySelector('.status').value==='DRAFT';}});
+  var drafts=[].slice.call(document.querySelectorAll('.pwrap')).filter(function(w){{return w.querySelector('.status').value==='DRAFT';}});
   var box=$('bulk');
   if(!drafts.length){{ box.innerHTML=''; return; }}
-  box.innerHTML='<div class="pu-bulk"><span>'+drafts.length+' draft'+(drafts.length>1?'s':'')+' loaded</span>'+
-    '<button id="actAll">Activate all loaded drafts</button></div>';
+  box.innerHTML='<div class="pu-bulk"><span>'+drafts.length+' draft'+(drafts.length>1?'s':'')+' loaded</span><button id="actAll">Activate all loaded drafts</button></div>';
   $('actAll').onclick=async function(){{
     if(!confirm('Set '+drafts.length+' draft product(s) to ACTIVE (live on the store)?')) return;
-    this.textContent='Activating…'; this.disabled=true;
-    var ok=0;
-    for(var i=0;i<drafts.length;i++){{
-      var r=drafts[i];
-      try{{
-        await fetch(API+'/shopify/product/update',{{method:'POST',headers:{{'Content-Type':'application/json'}},
-          body:JSON.stringify({{product_id:r.dataset.pid, status:'ACTIVE', title:r.querySelector('.nm b').textContent}})}});
-        ok++; r.querySelector('.status').value='ACTIVE';
+    this.textContent='Activating…'; this.disabled=true; var ok=0;
+    for(var i=0;i<drafts.length;i++){{ var w=drafts[i];
+      try{{ await api('/shopify/product/update',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{product_id:w.dataset.pid, status:'ACTIVE', title:w.querySelector('.nm b').textContent}})}});
+        ok++; w.querySelector('.status').value='ACTIVE';
       }}catch(e){{}}
     }}
     toast('Activated '+ok+' product'+(ok===1?'':'s')); load(true);
@@ -184,8 +253,8 @@ function renderBulk(){{
 }}
 
 shell(); load(true);
+{WHOAMI_JS}
 </script>
-<script>{WHOAMI_JS}</script>
 </body></html>"""
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:

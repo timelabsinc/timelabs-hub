@@ -1,4 +1,4 @@
-"""Timelabs Hub — "Meridian" shell: clean modern design system.
+"""Timelabs OS — "Meridian" shell: clean modern design system.
 
 Owns the chrome and chart engine of Hub: header, mobile bottom-bar / desktop
 top-nav, Face underline tabs, the Key member panel, server-side SVG charts,
@@ -795,21 +795,21 @@ def _appnav(active="face", drop_ready=False):
     return '<nav class="appnav" aria-label="Apps">' + "".join(out) + "</nav>"
 
 
-# One header + footer for every Hub page. The brand is ALWAYS "Timelabs Hub";
+# One header + footer for every Hub page. The brand is ALWAYS "Timelabs OS";
 # the section identity comes from the active nav pill and the page title — never
 # the brand. Keeps every page unmistakably one product.
 def hub_header(active):
     return (
         '<header class="topbar">'
         '<a class="brand" href="/ops/#overview"><span class="brand-dot">T</span>'
-        '<span class="brand-name">Timelabs <span>Hub</span></span></a>'
+        '<span class="brand-name">Timelabs <span>OS</span></span></a>'
         '<div class="top-actions"><span id="who" class="who"></span></div>'
         '</header>\n  ' + _appnav(active=active, drop_ready=True)
     )
 
 
 def hub_footer(note="ops.timelabsco.in"):
-    return f'<footer><span>Timelabs Hub</span><span>{html.escape(note)}</span></footer>'
+    return f'<footer><span>Timelabs OS</span><span>{html.escape(note)}</span></footer>'
 
 
 # Fills the header's who-chip and reveals admin-only bits. Include on every page.
@@ -876,7 +876,7 @@ def page(*, generated_at, lookback_days, source_status_html, kpi_html, verdict_h
 <meta name="theme-color" content="#f8f8f7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">
 <meta name="color-scheme" content="light dark">
-<title>Timelabs Hub</title>
+<title>Timelabs OS</title>
 <style>{HUB_STYLE}</style>
 <script>{HUB_SCRIPT}</script>
 </head>

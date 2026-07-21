@@ -137,6 +137,76 @@ def set_price(product_id, variant_id, price):
     return data["productVariantsBulkUpdate"]["productVariants"][0]
 
 
+def get_detail(product_id):
+    """Full editable detail for one product, including images."""
+    q = """query($id: ID!) {
+      product(id: $id) {
+        id title status handle productType vendor tags descriptionHtml
+        variants(first: 1) { nodes { id price sku } }
+        media(first: 20) { nodes { id ... on MediaImage { image { url } } } }
+      }
+    }"""
+    p = admin_graphql(q, {"id": product_id})["product"]
+    if not p:
+        raise ShopifyError("product not found")
+    v = (p.get("variants", {}).get("nodes") or [{}])[0]
+    imgs = []
+    for m in p.get("media", {}).get("nodes", []):
+        url = (m.get("image") or {}).get("url")
+        if url:
+            imgs.append({"id": m["id"], "url": url})
+    return {"id": p["id"], "title": p["title"], "status": p["status"],
+            "type": p.get("productType") or "", "vendor": p.get("vendor") or "",
+            "tags": p.get("tags") or [], "description": p.get("descriptionHtml") or "",
+            "price": v.get("price"), "sku": v.get("sku"), "variant_id": v.get("id"),
+            "images": imgs}
+
+
+def update_fields(product_id, fields):
+    """Update any of: title, descriptionHtml, productType, tags(list), status."""
+    allowed = {"title", "descriptionHtml", "productType", "tags", "status"}
+    inp = {"id": product_id}
+    inp.update({k: v for k, v in fields.items() if k in allowed})
+    if len(inp) == 1:
+        return None
+    q = """mutation($input: ProductInput!) {
+      productUpdate(input: $input) { product { id } userErrors { field message } }
+    }"""
+    data = admin_graphql(q, {"input": inp})
+    errs = data["productUpdate"]["userErrors"]
+    if errs:
+        raise ShopifyError(errs[0]["message"])
+    return data["productUpdate"]["product"]
+
+
+def add_media_url(product_id, url):
+    """Attach an image to a product from a public URL (e.g. a Drop share link)."""
+    q = """mutation($pid: ID!, $media: [CreateMediaInput!]!) {
+      productCreateMedia(productId: $pid, media: $media) {
+        media { id } mediaUserErrors { field message }
+      }
+    }"""
+    data = admin_graphql(q, {"pid": product_id, "media": [
+        {"originalSource": url, "mediaContentType": "IMAGE"}]})
+    errs = data["productCreateMedia"]["mediaUserErrors"]
+    if errs:
+        raise ShopifyError(errs[0]["message"])
+    return data["productCreateMedia"]["media"]
+
+
+def remove_media(product_id, media_id):
+    q = """mutation($pid: ID!, $ids: [ID!]!) {
+      productDeleteMedia(productId: $pid, mediaIds: $ids) {
+        deletedMediaIds mediaUserErrors { field message }
+      }
+    }"""
+    data = admin_graphql(q, {"pid": product_id, "ids": [media_id]})
+    errs = data["productDeleteMedia"]["mediaUserErrors"]
+    if errs:
+        raise ShopifyError(errs[0]["message"])
+    return data["productDeleteMedia"]["deletedMediaIds"]
+
+
 if __name__ == "__main__":
     print("configured:", configured())
     if configured():

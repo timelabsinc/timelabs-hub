@@ -465,6 +465,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/shopify/products":
             self._handle_shopify_products(query)
             return
+        if path == "/shopify/product/detail":
+            self._handle_shopify_detail(query)
+            return
         if path == "/events":
             conn = db()
             try:
@@ -672,13 +675,59 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         self._json(200, data)
 
-    def _handle_shopify_product_update(self):
+    def _handle_shopify_detail(self, query):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"})
+            return
+        from urllib.parse import parse_qsl
+        pid = dict(parse_qsl(query)).get("id")
+        import shopify_api
+        if not pid:
+            self._json(400, {"error": "missing product"})
+            return
+        try:
+            self._json(200, shopify_api.get_detail(pid))
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)})
+
+    def _handle_shopify_media(self, action):
         if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
             self._json(403, {"error": "admins only"})
             return
         length = int(self.headers.get("Content-Length", 0))
         try:
             p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        import shopify_api
+        pid = p.get("product_id")
+        if not pid:
+            self._json(400, {"error": "missing product"})
+            return
+        try:
+            if action == "add":
+                url = str(p.get("url", "")).strip()
+                if not url.startswith(("http://", "https://")):
+                    self._json(400, {"error": "give a public image URL (https://…)"})
+                    return
+                shopify_api.add_media_url(pid, url)
+            else:
+                shopify_api.remove_media(pid, p.get("media_id"))
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)})
+            return
+        actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+        hub_event("product_media", f"{action} image on {p.get('title', pid.split('/')[-1])}", actor, app="shopify")
+        self._json(200, {"ok": True})
+
+    def _handle_shopify_product_update(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 8192)).decode())
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._json(400, {"error": "bad request"})
             return
@@ -696,6 +745,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 price = f"{float(p['price']):.2f}"
                 shopify_api.set_price(pid, vid, price)
                 changed["price"] = price
+            fields = {}
+            if "title" in p and p["title"].strip():
+                fields["title"] = p["title"].strip()
+            if "type" in p:
+                fields["productType"] = str(p["type"]).strip()
+            if "description" in p:
+                fields["descriptionHtml"] = str(p["description"])
+            if "tags" in p and isinstance(p["tags"], list):
+                fields["tags"] = [str(t).strip() for t in p["tags"] if str(t).strip()]
+            if fields:
+                shopify_api.update_fields(pid, fields)
+                changed.update({k: (v if not isinstance(v, list) else ",".join(v)) for k, v in fields.items()})
         except (shopify_api.ShopifyError, ValueError) as e:
             self._json(502, {"error": str(e)})
             return
@@ -998,6 +1059,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_ledger_import()
         elif path == "/shopify/product/update":
             self._handle_shopify_product_update()
+        elif path == "/shopify/product/media/add":
+            self._handle_shopify_media("add")
+        elif path == "/shopify/product/media/remove":
+            self._handle_shopify_media("remove")
         else:
             self._json(404, {"error": "not found"})
 

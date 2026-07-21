@@ -77,7 +77,7 @@ def build():
     doc = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="color-scheme" content="light dark"><title>Tools — Timelabs Hub</title>
+<meta name="color-scheme" content="light dark"><title>Tools — Timelabs OS</title>
 <style>{HUB_STYLE}
   .tgrid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;}}
   .tcard{{display:flex;flex-direction:column;gap:7px;background:var(--card);border:1px solid var(--border);
