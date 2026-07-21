@@ -462,6 +462,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/shopify/callback":
             self._handle_shopify_callback(query)
             return
+        if path == "/shopify/products":
+            self._handle_shopify_products(query)
+            return
         if path == "/events":
             conn = db()
             try:
@@ -649,6 +652,58 @@ class Handler(http.server.BaseHTTPRequestHandler):
         print(f"[shopify] connected by {email}", flush=True)
         hub_event("shopify_connected", "Shopify store connected", email, app="shopify")
         self._redirect("/ops/tools.html?shopify=connected")
+
+    # --- Quick product updater (Shopify) -----------------------------------
+    def _handle_shopify_products(self, query):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"})
+            return
+        from urllib.parse import parse_qsl
+        params = dict(parse_qsl(query))
+        import shopify_api
+        if not shopify_api.configured():
+            self._json(400, {"error": "Shopify isn't connected — open Tools and connect it."})
+            return
+        try:
+            data = shopify_api.list_products(search=params.get("q", ""), first=25,
+                                             after=params.get("after") or None)
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)})
+            return
+        self._json(200, data)
+
+    def _handle_shopify_product_update(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        import shopify_api
+        pid, vid = p.get("product_id"), p.get("variant_id")
+        if not pid:
+            self._json(400, {"error": "missing product"})
+            return
+        changed = {}
+        try:
+            if p.get("status") in ("ACTIVE", "DRAFT", "ARCHIVED"):
+                shopify_api.set_status(pid, p["status"])
+                changed["status"] = p["status"]
+            if p.get("price") is not None and vid:
+                price = f"{float(p['price']):.2f}"
+                shopify_api.set_price(pid, vid, price)
+                changed["price"] = price
+        except (shopify_api.ShopifyError, ValueError) as e:
+            self._json(502, {"error": str(e)})
+            return
+        if changed:
+            actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+            hub_event("product_update", f"{p.get('title', pid.split('/')[-1])}: "
+                      + ", ".join(f"{k}={v}" for k, v in changed.items()), actor, app="shopify")
+        self._json(200, {"ok": True, "changed": changed})
 
     def _handle_ledger_import(self):
         """Preview (default) or commit new supplier invoices from Drop into
@@ -941,6 +996,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_allowlist_change("remove")
         elif path == "/ledger/import":
             self._handle_ledger_import()
+        elif path == "/shopify/product/update":
+            self._handle_shopify_product_update()
         else:
             self._json(404, {"error": "not found"})
 

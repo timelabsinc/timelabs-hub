@@ -43,7 +43,7 @@ TOOLS = [
     ]),
     ("Shopify", [
         ("theme", "Theme editor", "Tune the storefront look without touching Shopify's editor.", None, "soon"),
-        ("price", "Quick product updater", "Change prices, stock &amp; status fast, in bulk.", None, "soon"),
+        ("price", "Quick product updater", "Change prices &amp; status fast, in bulk.", "/ops/product-updater.html", "live"),
         ("product", "Product builder", "Spin up a new product from parts, photos &amp; a spec.", None, "soon"),
     ]),
     ("Admin", [
