@@ -48,8 +48,9 @@ EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 # --- Shopify OAuth (turn app key+secret into an Admin token via one approval) ---
 ENV_FILE = "/root/ops-dashboard/.env"
 SHOPIFY_OAUTH_CREDS = "/root/ops-dashboard/.shopify-oauth.json"
-SHOPIFY_SCOPES = ("read_products,write_products,read_inventory,write_inventory,"
-                  "read_content,write_content,read_themes,write_themes")
+# Match the app's configured scopes (Timelabs Blog Forge has products + content;
+# add inventory/themes to the app later when those tools are built).
+SHOPIFY_SCOPES = "read_products,write_products,read_content,write_content"
 SHOPIFY_REDIRECT = "https://ops.timelabsco.in/ops/agent/api/shopify/callback"
 _shopify_states = set()
 
