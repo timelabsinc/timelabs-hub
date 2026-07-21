@@ -97,7 +97,10 @@ def build():
     <div class="page-head">
       <h1 class="page-title">Ledger</h1>
       <p class="page-sub">What sourcing actually costs — suppliers, landed parts, and planned margins.</p>
-      <span class="refreshed num">refreshed {generated}</span>
+      <div class="head-controls">
+        <button class="btn" id="impBtn">Scan Drop for new invoices</button>
+        <span class="refreshed num">refreshed {generated}</span>
+      </div>
     </div>
     <section><div class="kpis">{kpis}</div></section>
     <section><h2>Planned SKU margins</h2><div class="panel tscroll"><table>
@@ -118,6 +121,23 @@ def build():
     <footer><span>Timelabs Hub · Ledger</span><span>from suppliers.db — invoices in Drop land here once parsed</span></footer>
   </main>
 </div>
+<script>
+  document.getElementById('impBtn').addEventListener('click', async function(){{
+    var b = this; b.disabled = true; b.textContent = 'Scanning…';
+    try {{
+      var res = await fetch('/ops/agent/api/ledger/import', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}});
+      var d = await res.json();
+      var ok = (d.results||[]).filter(function(r){{return !r.error;}});
+      if(!ok.length){{ alert('No new invoices in Drop — Ledger is up to date.'); b.disabled=false; b.textContent='Scan Drop for new invoices'; return; }}
+      var lines = ok.map(function(r){{return '• ' + r.file + ' — ' + r.date + ' · ' + r.items + ' items · $' + r.total_usd;}}).join('\\n');
+      if(confirm('Found ' + ok.length + ' new invoice(s):\\n\\n' + lines + '\\n\\nImport into Ledger? (Totals are best-effort — check against the invoice.)')){{
+        b.textContent = 'Importing…';
+        await fetch('/ops/agent/api/ledger/import', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{\"commit\":true}}'}});
+        setTimeout(function(){{ location.reload(); }}, 1200);
+      }} else {{ b.disabled=false; b.textContent='Scan Drop for new invoices'; }}
+    }} catch(e){{ alert('Scan failed — try again.'); b.disabled=false; b.textContent='Scan Drop for new invoices'; }}
+  }});
+</script>
 </body></html>"""
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:

@@ -425,6 +425,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             email = (self.headers.get("X-User-Email") or "").strip().lower()
             self._json(200, {"email": email, "admin": email in ADMIN_EMAILS})
             return
+        if path == "/events":
+            conn = db()
+            try:
+                rows = conn.execute(
+                    "SELECT created_at, app, kind, actor, detail FROM hub_events "
+                    "ORDER BY id DESC LIMIT 30"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []   # table not created until the first event
+            conn.close()
+            self._json(200, {"events": [dict(r) for r in rows]})
+            return
         if path == "/sessions":
             conn = db()
             rows = conn.execute(
@@ -536,6 +548,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
         print(f"[key] {admin} {action}ed {email}", flush=True)
         hub_event(f"member_{action}", email, admin)
         self._json(200, {"ok": True, "members": members})
+
+    def _handle_ledger_import(self):
+        """Preview (default) or commit new supplier invoices from Drop into
+        suppliers.db. Review-gated: the UI shows the parse before committing."""
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            payload = json.loads(self.rfile.read(min(length, 4096)).decode()) if length else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload = {}
+        commit = bool(payload.get("commit"))
+        # run via the venv python (has openpyxl; this server runs on system python)
+        cmd = ["/root/ops-dashboard/venv/bin/python", "/root/ops-dashboard/invoice_import.py", "--json"]
+        if commit:
+            cmd.append("--commit")
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            data = json.loads(out.stdout.strip() or "{}")
+            results = data.get("results", [])
+        except Exception as e:
+            self._json(500, {"error": f"invoice parse failed: {e} · {out.stderr[-160:] if 'out' in dir() else ''}"})
+            return
+        if commit:
+            imported = [r for r in results if not r.get("error")]
+            subprocess.Popen(["/root/ops-dashboard/venv/bin/python3", "/root/ops-dashboard/ledger.py"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if imported:
+                actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+                hub_event("invoice_import",
+                          f"{len(imported)} invoice(s): " + ", ".join(r["file"] for r in imported),
+                          actor, app="ledger")
+        self._json(200, {"committed": commit, "results": results})
 
     def _handle_new_session(self):
         conn = db()
@@ -795,6 +838,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_allowlist_change("add")
         elif path == "/allowlist/remove":
             self._handle_allowlist_change("remove")
+        elif path == "/ledger/import":
+            self._handle_ledger_import()
         else:
             self._json(404, {"error": "not found"})
 

@@ -455,6 +455,16 @@ HUB_STYLE = r"""
   footer{margin-top:28px;padding-top:14px;border-top:1px solid var(--border);color:var(--muted);
     font-size:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;}
 
+  /* ---- live activity feed ---- */
+  .act-row{display:flex;align-items:flex-start;gap:11px;padding:9px 0;border-bottom:1px solid var(--border);}
+  .act-row:last-child{border-bottom:none;}
+  .act-ic{width:28px;height:28px;border-radius:8px;background:var(--accent-bg);color:var(--accent);
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto;font-size:14px;line-height:1;}
+  .act-b{flex:1;min-width:0;}
+  .act-t{font-size:13.5px;color:var(--body);line-height:1.4;}
+  .act-t b{font-weight:650;color:var(--ink);}
+  .act-m{font-size:11.5px;color:var(--muted);margin-top:1px;}
+
   /* ---- desktop ---- */
   @media (min-width:760px){
     :root{--nav-h:0px;}
@@ -611,6 +621,39 @@ HUB_SCRIPT = r"""
     if(btn){ setTimeout(function(){ btn.disabled = false; }, 2500); }
   }
 
+  function esc(s){ var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+  function timeAgo(iso){
+    if(!iso) return '';
+    var t = new Date(iso.replace(' ', 'T') + 'Z').getTime();
+    var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if(s < 60) return 'just now';
+    if(s < 3600) return Math.floor(s/60) + 'm ago';
+    if(s < 86400) return Math.floor(s/3600) + 'h ago';
+    return Math.floor(s/86400) + 'd ago';
+  }
+  var ACT_ICON = {upload:'↑', share_created:'🔗', share_revoked:'✕', organize:'✦',
+    delete:'🗑', download_zip:'↓', gdrive_import:'☁', member_add:'+', member_remove:'−'};
+  var ACT_VERB = {upload:'uploaded', share_created:'shared', share_revoked:'unshared', organize:'organized',
+    delete:'deleted', download_zip:'downloaded', gdrive_import:'imported from Drive',
+    member_add:'invited', member_remove:'removed'};
+  async function loadActivity(){
+    try {
+      var res = await fetch('/ops/agent/api/events');
+      if(!res.ok) return;
+      var data = await res.json();
+      if(!data.events || !data.events.length) return;
+      var box = document.getElementById('activity');
+      box.innerHTML = data.events.slice(0, 12).map(function(e){
+        var ic = ACT_ICON[e.kind] || '•';
+        var who = (e.actor && e.actor !== '?') ? e.actor.split('@')[0] : 'someone';
+        var verb = ACT_VERB[e.kind] || e.kind.replace(/_/g, ' ');
+        return '<div class="act-row"><div class="act-ic">' + ic + '</div><div class="act-b">' +
+          '<div class="act-t"><b>' + esc(who) + '</b> ' + esc(verb) + ' ' + esc(e.detail || '') + '</div>' +
+          '<div class="act-m">' + esc(e.app) + ' · ' + timeAgo(e.created_at) + '</div></div></div>';
+      }).join('');
+      document.getElementById('activity-sec').hidden = false;
+    } catch (e) {}
+  }
   async function initAccount(){
     try {
       var res = await fetch('/ops/agent/api/whoami');
@@ -720,6 +763,7 @@ HUB_SCRIPT = r"""
     showTab((location.hash === '#key' ? '#overview' : (location.hash || '#overview')).slice(1));
     document.querySelectorAll('[data-countup]').forEach(countUp);
     initAccount();
+    loadActivity();
   });
 """
 
@@ -855,6 +899,10 @@ def page(*, generated_at, lookback_days, source_status_html, kpi_html, verdict_h
         <div class="kpis">{kpi_html}</div>
       </section>
       {f'<section><h2>Conversion</h2><div class="stats">{stats_html}</div></section>' if stats_html else ''}
+      <section id="activity-sec" hidden>
+        <h2>Live activity</h2>
+        <div class="panel"><div id="activity"></div></div>
+      </section>
       {revenue_chart_html}
       {overview_orders_html}
       {funnel_html}
