@@ -1,0 +1,20 @@
+#!/bin/bash
+# Usage: remove-bg <input-image> <output.png>
+# Removes the background from a product photo. Output is always PNG (transparency).
+set -e
+if [ $# -ne 2 ]; then
+  echo "usage: remove-bg <input-image> <output.png>" >&2
+  exit 1
+fi
+exec /root/ops-dashboard/venv-imaging/bin/python3 - "$1" "$2" << 'PYEOF'
+import sys
+from rembg import remove
+from PIL import Image
+
+inp, outp = sys.argv[1], sys.argv[2]
+img = Image.open(inp)
+result = remove(img)
+# Composite onto white for storefront-friendly output alongside transparency
+result.save(outp)
+print(f"wrote {outp}")
+PYEOF

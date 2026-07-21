@@ -1,0 +1,18 @@
+# secrets — never commit
+.env
+.auth_secret
+.ops_password_hash
+*.secret
+
+# data & databases (change constantly, some sensitive)
+data/
+*.db
+
+# virtualenvs & caches
+venv/
+venv-imaging/
+__pycache__/
+*.pyc
+
+# ad-hoc backups
+*.bak.*

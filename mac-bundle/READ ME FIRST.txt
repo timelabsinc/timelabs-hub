@@ -1,0 +1,20 @@
+⌚ TIMELABS CONTROL — SETUP (one time only)
+
+1. Double-click "Install Timelabs Control.command"
+   (If Mac blocks it: right-click the file → Open → Open.)
+
+2. That's it. Two new icons appear on your Desktop:
+
+   • Timelabs Control    — double-click to connect. Your browser opens:
+                            - Hermes (your AI agent)      http://localhost:9119
+                            - Ops Dashboard (business #s) http://localhost:8123/ops/
+   • Disconnect Timelabs — closes the connection.
+
+3. Delete this folder after installing — it contains your
+   access key and shouldn't sit in Downloads.
+
+Notes
+- The dashboard asks for a login: user "timelabs", your ops password.
+- Your access key (~/.ssh/timelabs_hermes) IS your login to the server.
+  Don't share it. If your Mac is ever lost/stolen, tell your admin (or
+  Claude) to revoke the key — one line on the server locks it out.
