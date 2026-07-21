@@ -20,7 +20,7 @@ def build():
     doc = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="color-scheme" content="light dark"><title>Quick product updater — Timelabs OS</title>
+<meta name="color-scheme" content="light dark"><title>Quick product updater — Labs OS</title>
 <style>{HUB_STYLE}
   .pu-controls{{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}}
   .pu-search{{flex:1;min-width:200px;font-size:14px;border:1px solid var(--border);border-radius:var(--r-s);

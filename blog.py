@@ -65,7 +65,7 @@ def build():
     doc = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="color-scheme" content="light dark"><title>Blog builder — Timelabs OS</title>
+<meta name="color-scheme" content="light dark"><title>Blog builder — Labs OS</title>
 <style>{HUB_STYLE}
   .setup{{background:var(--accent-bg);border:1px solid transparent;border-radius:var(--r);padding:12px 15px;
     font-size:13.5px;color:var(--ink);margin-bottom:20px;}}

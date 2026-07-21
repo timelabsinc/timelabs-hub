@@ -1,158 +1,13 @@
-"""Timelabs OS — "Meridian" shell: clean modern design system.
-
-Owns the chrome and chart engine of Hub: header, mobile bottom-bar / desktop
-top-nav, Face underline tabs, the Key member panel, server-side SVG charts,
-and all CSS/JS. generate.py builds data fragments and calls page(...).
-
-Design language (v3): Linear/Notion-class. Light-first with a first-class dark
-mode, system sans stack, generous whitespace, hairline borders, one restrained
-gold accent, subtle 150ms motion. No gauges, no serif numerals, no retro.
-
-Never hand-edit /var/www/ops/index.html — it is generated from here.
-"""
-import datetime
-import html
-
-# Mirrors agent_chat_server.ADMIN_EMAILS — keep in sync.
-ADMIN_EMAILS = ("timelabs.inc@gmail.com", "schezan.m@gmail.com")
-
-
-# --------------------------------------------------------------------- helpers
-def _refund_pct(s):
-    gross = s.get("gross_sales") or s.get("total_sales") or 0
-    refunds = s.get("refund_total") or 0
-    if gross <= 0:
-        return ""
-    return f"{100 * refunds / gross:.0f}% of gross"
-
-
-def fmt_compact_inr(n):
-    n = float(n)
-    a = abs(n)
-    if a >= 100000:
-        return f"₹{n/100000:.1f}L"
-    if a >= 1000:
-        return f"₹{n/1000:.0f}k"
-    return f"₹{n:.0f}"
-
-
-def source_chip(src, name):
-    """Honest per-source freshness chip driven by each source's own as_of."""
-    if not (isinstance(src, dict) and src.get("connected")):
-        return (f'<div class="src"><span class="src-dot off"></span>'
-                f'<span class="src-name">{html.escape(name)}</span>'
-                f'<span class="src-when">not connected</span></div>')
-    date = src.get("as_of") or src.get("via_bridge") or ""
-    cls, when = "fresh", "live"
-    try:
-        age = (datetime.date.today() - datetime.date.fromisoformat(date)).days
-        if age <= 0:
-            when = "today"
-        elif age == 1:
-            when = "yesterday"
-        else:
-            when = date
-        if age > 3:
-            cls = "stale"
-    except (ValueError, TypeError):
-        pass
-    return (f'<div class="src"><span class="src-dot {cls}"></span>'
-            f'<span class="src-name">{html.escape(name)}</span>'
-            f'<span class="src-when {cls}">{html.escape(when)}</span></div>')
-
-
-def stat_pill(label, value, tone=""):
-    """Compact inline stat for the conversion strip (replaces the old gauges)."""
-    return (f'<div class="stat {tone}"><span class="stat-val num">{html.escape(value)}</span>'
-            f'<span class="stat-label">{html.escape(label)}</span></div>')
-
-
-# ----------------------------------------------------------------- SVG charts
-def svg_spark(values, w=104, h=30, cls="spark"):
-    """Tiny inline sparkline. Returns '' when there's nothing to plot."""
-    vals = [float(v) for v in values if v is not None]
-    if len(vals) < 2:
-        return ""
-    lo, hi = min(vals), max(vals)
-    rng = (hi - lo) or 1.0
-    pts = []
-    for i, v in enumerate(vals):
-        x = 2 + i * (w - 4) / (len(vals) - 1)
-        y = h - 3 - (v - lo) / rng * (h - 6)
-        pts.append(f"{x:.1f},{y:.1f}")
-    last = pts[-1].split(",")
-    return (f'<svg class="{cls}" viewBox="0 0 {w} {h}" preserveAspectRatio="none" aria-hidden="true">'
-            f'<polyline points="{" ".join(pts)}" fill="none" stroke="currentColor" '
-            f'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
-            f'<circle cx="{last[0]}" cy="{last[1]}" r="2.2" fill="currentColor"/></svg>')
-
-
-def _zero_fill(sparse, span):
-    by_day = {d: float(v) for d, v, *_ in sparse}
-    start = datetime.date.fromisoformat(span[0])
-    end = datetime.date.fromisoformat(span[1])
-    out = []
-    d = start
-    while d <= end:
-        iso = d.isoformat()
-        out.append((iso, by_day.get(iso, 0.0)))
-        d += datetime.timedelta(days=1)
-    return out
-
-
-def svg_revenue_chart(sales_daily, span, w=680, h=180):
-    """Daily revenue bars; refund days plotted below the baseline in red."""
-    if not sales_daily or not span:
-        return ""
-    series = _zero_fill(sales_daily, span)
-    vals = [v for _, v in series]
-    hi = max(max(vals), 1.0)
-    lo = min(min(vals), 0.0)
-    rng = hi - lo or 1.0
-    pad_t, pad_b, pad_x = 14, 18, 4
-    plot_h = h - pad_t - pad_b
-    n = len(series)
-    step = (w - 2 * pad_x) / n
-    bw = max(2.5, step * 0.6)
-    base_y = pad_t + (hi / rng) * plot_h
-    bars, labels = [], []
-    for i, (day, v) in enumerate(series):
-        if v == 0:
-            continue
-        x = pad_x + i * step + (step - bw) / 2
-        bh = abs(v) / rng * plot_h
-        y = base_y - bh if v > 0 else base_y
-        cls = "rev-bar" if v > 0 else "rev-bar neg"
-        bars.append(
-            f'<rect class="{cls}" x="{x:.1f}" y="{y:.1f}" width="{bw:.1f}" height="{max(bh,1.5):.1f}" rx="1.5">'
-            f'<title>{day} · {fmt_compact_inr(v)}</title></rect>'
-        )
-    seen = set()
-    for i, (day, _) in enumerate(series):
-        m = day[:7]
-        if m in seen:
-            continue
-        seen.add(m)
-        mon = datetime.date.fromisoformat(day).strftime("%b")
-        labels.append(f'<text class="ax" x="{pad_x + i * step:.1f}" y="{h-4}">{mon}</text>')
-    peak = f'<text class="ax hi" x="{w-pad_x}" y="{pad_t-3}" text-anchor="end">{fmt_compact_inr(hi)}</text>'
-    return (f'<svg class="revchart" viewBox="0 0 {w} {h}" preserveAspectRatio="none" role="img" '
-            f'aria-label="Daily sales, last 90 days">'
-            f'<line class="baseline" x1="{pad_x}" y1="{base_y:.1f}" x2="{w-pad_x}" y2="{base_y:.1f}"/>'
-            f'{"".join(bars)}{"".join(labels)}{peak}</svg>')
-
-
-def kpi_card(label, value, ctx, spark_vals=None, raw=None, prefix="", spark_tone=""):
-    countup = f' data-countup="{raw}" data-prefix="{html.escape(prefix)}"' if raw is not None else ""
-    spark = svg_spark(spark_vals) if spark_vals else ""
-    return (f'<div class="kpi"><div class="kpi-top"><span class="label">{html.escape(label)}</span>'
-            f'<span class="sparkwrap {spark_tone}">{spark}</span></div>'
-            f'<div class="val num"{countup}>{html.escape(value)}</div>'
-            f'<div class="ctx">{html.escape(ctx)}</div></div>')
-
-
-# ------------------------------------------------------------------ CSS
-HUB_STYLE = r"""
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f8f8f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
+<title>Labs Home — Labs OS</title>
+<style>
   :root{
     --bg:#f8f8f7; --card:#ffffff; --card-2:#f4f4f2; --border:#e8e7e3; --border-2:#dedcd6;
     --ink:#191918; --body:#3f3f3c; --muted:#84837d;
@@ -487,10 +342,8 @@ HUB_STYLE = r"""
     #keypanel.open{transform:translate(-50%,50%) scale(1);opacity:1;pointer-events:auto;}
     .key-grip{display:none;}
   }
-"""
-
-# ------------------------------------------------------------------ JS
-HUB_SCRIPT = r"""
+</style>
+<script>
   var TABS = ['overview','orders','plan','competition','content','findings'];
   var SEARCHABLE = {
     overview: {sel: '.kpi, .srcrow, .fstep, #tab-overview tbody tr', hide: false},
@@ -765,138 +618,24 @@ HUB_SCRIPT = r"""
     initAccount();
     loadActivity();
   });
-"""
-
-# Feather-style inline icons (stroke, inherit currentColor)
-_ICONS = {
-    "face": '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg>',
-    "drop": '<svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>',
-    "ledger": '<svg viewBox="0 0 24 24"><path d="M5 3h14v18H5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>',
-    "chat": '<svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg>',
-    "key": '<svg viewBox="0 0 24 24"><circle cx="8" cy="14" r="4"/><path d="M11 11l8-8M17 4l3 3M14 7l2 2"/></svg>',
-    "tools": '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg>',
-}
-
-
-def _appnav(active="face", drop_ready=False):
-    """Quick-nav: the handful of daily tools. Everything else lives in Tools."""
-    drop_attr = 'href="/drop/"' if drop_ready else 'href="#" data-soon="Drop"'
-    items = [
-        ("face", 'href="/ops/#overview"', "Home", ""),
-        ("drop", drop_attr, "Drop", ""),
-        ("ledger", 'href="/ops/ledger.html"', "Ledger", ""),
-        ("chat", 'href="/ops/agent/"', "Chat", ""),
-        ("tools", 'href="/ops/tools.html"', "Tools", ""),
-    ]
-    out = []
-    for key, attr, label, extra in items:
-        cls = "appitem" + (" active" if key == active else "") + extra
-        out.append(f'<a class="{cls}" {attr}><span class="ic">{_ICONS[key]}</span><span>{label}</span></a>')
-    return '<nav class="appnav" aria-label="Apps">' + "".join(out) + "</nav>"
-
-
-# The Labs family: brand is "Labs", each page suffixes its section — Labs Home,
-# Labs Drop, Labs Ledger, Labs Chat, Labs Tools — like Google Drive/Docs. The
-# collective name is "Labs OS" (shown in the footer). One header for every page.
-SECTION_LABEL = {"face": "Home", "drop": "Drop", "ledger": "Ledger",
-                 "chat": "Chat", "tools": "Tools"}
-
-
-def hub_header(active):
-    label = SECTION_LABEL.get(active, "OS")
-    return (
-        '<header class="topbar">'
-        '<a class="brand" href="/ops/#overview"><span class="brand-dot">L</span>'
-        f'<span class="brand-name">Labs <span>{label}</span></span></a>'
-        '<div class="top-actions"><span id="who" class="who"></span></div>'
-        '</header>\n  ' + _appnav(active=active, drop_ready=True)
-    )
-
-
-def hub_footer(note="ops.timelabsco.in"):
-    return f'<footer><span>Labs OS</span><span>{html.escape(note)}</span></footer>'
-
-
-# Fills the header's who-chip and reveals admin-only bits. Include on every page.
-WHOAMI_JS = """
-  fetch('/ops/agent/api/whoami').then(function(r){return r.ok?r.json():null;}).then(function(i){
-    if(i && i.email){ var w=document.getElementById('who'); if(w) w.textContent=i.email; }
-    if(i && i.admin) document.body.classList.add('is-admin');
-  }).catch(function(){});
-"""
-
-
-KEY_PANEL = """
-<div id="keyveil"></div>
-<aside id="keypanel" role="dialog" aria-label="Key — manage access">
-  <div class="key-grip"></div>
-  <h3 class="key-title">Access</h3>
-  <p class="key-sub">Who can sign in to Hub with their Google account. Changes apply instantly.</p>
-  <div class="key-add">
-    <input id="keyEmail" type="email" inputmode="email" autocomplete="off"
-           placeholder="teammate@gmail.com">
-    <button id="keyAddBtn">Invite</button>
-  </div>
-  <div id="keyMembers"><p class="empty">Loading…</p></div>
-</aside>
-"""
-
-PTR = """
-<div id="ptr" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
-  stroke-linecap="round"><path d="M20 11A8 8 0 1 0 18.6 15.5"/><path d="M20 4v7h-7"/></svg></div>
-"""
-
-
-def verdict_banner(analysis):
-    """Collapsible insight banner: one-line teaser, expands to the full reading."""
-    if not analysis:
-        return ""
-    text = analysis["text"]
-    teaser = text[:180]
-    return (
-        '<details class="verdict"><summary>'
-        '<span class="v-icon">✦</span>'
-        f'<span class="v-teaser">{html.escape(teaser)}…</span>'
-        '<span class="v-chev">▾</span></summary>'
-        f'<div class="v-body">{html.escape(text)}'
-        f'<span class="v-model">via {html.escape(analysis["model"])}</span></div>'
-        '</details>'
-    )
-
-
-def page(*, generated_at, lookback_days, source_status_html, kpi_html, verdict_html,
-         funnel_html, channel_html, campaign_html, overview_orders_html, orders_html,
-         plan_html, research_html, content_html, findings_html, health_html,
-         stats_html="", revenue_chart_html="", drop_ready=False):
-    """Assemble the full Hub/Face HTML from data fragments built by generate.py."""
-    def rb(days, label):
-        active = ' class="active"' if lookback_days == days else ""
-        return f'<button{active} onclick="doRefresh({days})">{label}</button>'
-
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#f8f8f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">
-<meta name="color-scheme" content="light dark">
-<title>Labs Home — Labs OS</title>
-<style>{HUB_STYLE}</style>
-<script>{HUB_SCRIPT}</script>
+</script>
 </head>
 <body>
-{PTR}
+
+<div id="ptr" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+  stroke-linecap="round"><path d="M20 11A8 8 0 1 0 18.6 15.5"/><path d="M20 4v7h-7"/></svg></div>
+
 <div class="wrap">
-  {hub_header("face")}
+  <header class="topbar"><a class="brand" href="/ops/#overview"><span class="brand-dot">L</span><span class="brand-name">Labs <span>Home</span></span></a><div class="top-actions"><span id="who" class="who"></span></div></header>
+  <nav class="appnav" aria-label="Apps"><a class="appitem active" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg></span><span>Home</span></a><a class="appitem" href="/drop/"><span class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span><span>Drop</span></a><a class="appitem" href="/ops/ledger.html"><span class="ic"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span><span>Ledger</span></a><a class="appitem" href="/ops/agent/"><span class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg></span><span>Chat</span></a><a class="appitem" href="/ops/tools.html"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg></span><span>Tools</span></a></nav>
 
   <main>
     <div class="page-head">
       <h1 class="page-title">Home</h1>
       <p class="page-sub">The state of the business, at a glance.</p>
       <div class="head-controls">
-        <div class="seg">{rb(7, "7d")}{rb(30, "30d")}{rb(90, "90d")}</div>
-        <span class="refreshed num">refreshed {generated_at}</span>
+        <div class="seg"><button onclick="doRefresh(7)">7d</button><button onclick="doRefresh(30)">30d</button><button class="active" onclick="doRefresh(90)">90d</button></div>
+        <span class="refreshed num">refreshed 2026-07-21 13:01 UTC</span>
         <a class="btn primary" href="/ops/agent/">Ask the team</a>
       </div>
     </div>
@@ -914,38 +653,50 @@ def page(*, generated_at, lookback_days, source_status_html, kpi_html, verdict_h
     </nav>
 
     <div class="tabpanel" id="tab-overview">
-      {verdict_html}
+      <details class="verdict"><summary><span class="v-icon">✦</span><span class="v-teaser">The single most important constraint is the catastrophic gap between traffic and revenue capture: 10,299 sessions produced only 18 orders — a 0.17% conversion rate — while ₹71,281 …</span><span class="v-chev">▾</span></summary><div class="v-body">The single most important constraint is the catastrophic gap between traffic and revenue capture: 10,299 sessions produced only 18 orders — a 0.17% conversion rate — while ₹71,281 in refunds erased 28% of gross sales, leaving net revenue closer to ₹187,000 on ₹12,626 in ad spend. Meta delivered 4,723 paid-social sessions on just ₹12,626, meaning cost-per-session is roughly ₹2.67 and the traffic quality isn&#x27;t the problem — the funnel after click is. The immediate action is to audit the checkout-to-payment flow for the 18 orders that did convert, identify exactly where the other ~10,000 sessions dropped (product page, cart, payment, or WhatsApp handoff), and fix that single biggest drop-off point before increasing ad spend by a single rupee; scaling ₹12,626 into ₹50,000 at a 0.17% conversion rate will only produce proportionally more waste and refunds.<span class="v-model">via anthropic/claude-sonnet-4-6</span></div></details>
       <section>
-        <div class="kpis">{kpi_html}</div>
+        <div class="kpis"><div class="kpi"><div class="kpi-top"><span class="label">Orders</span><span class="sparkwrap "></span></div><div class="val num" data-countup="18" data-prefix="">18</div><div class="ctx">90-day trailing</div></div><div class="kpi"><div class="kpi-top"><span class="label">Gross sales</span><span class="sparkwrap "><svg class="spark" viewBox="0 0 104 30" preserveAspectRatio="none" aria-hidden="true"><polyline points="2.0,10.3 8.7,9.0 15.3,10.4 22.0,4.6 28.7,27.0 35.3,11.9 42.0,11.9 48.7,11.7 55.3,8.0 62.0,18.1 68.7,9.5 75.3,10.9 82.0,10.7 88.7,12.2 95.3,12.7 102.0,3.0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="102.0" cy="3.0" r="2.2" fill="currentColor"/></svg></span></div><div class="val num" data-countup="336535" data-prefix="₹">₹336,535</div><div class="ctx">AOV ₹16,510</div></div><div class="kpi"><div class="kpi-top"><span class="label">Net sales</span><span class="sparkwrap lume"></span></div><div class="val num" data-countup="225905" data-prefix="₹">₹225,905</div><div class="ctx">after discounts &amp; returns</div></div><div class="kpi"><div class="kpi-top"><span class="label">Refunds</span><span class="sparkwrap crit"></span></div><div class="val num" data-countup="71281" data-prefix="₹">₹71,281</div><div class="ctx">21% of gross</div></div><div class="kpi"><div class="kpi-top"><span class="label">Sessions</span><span class="sparkwrap "><svg class="spark" viewBox="0 0 104 30" preserveAspectRatio="none" aria-hidden="true"><polyline points="2.0,15.3 5.3,21.8 8.7,18.6 12.0,21.0 15.3,19.8 18.7,3.0 22.0,5.5 25.3,8.5 28.7,6.3 32.0,12.4 35.3,19.7 38.7,20.6 42.0,20.9 45.3,20.3 48.7,22.8 52.0,23.8 55.3,21.0 58.7,21.9 62.0,21.7 65.3,21.8 68.7,19.5 72.0,20.6 75.3,22.2 78.7,22.3 82.0,22.6 85.3,22.3 88.7,19.0 92.0,21.7 95.3,20.2 98.7,20.4 102.0,27.0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="102.0" cy="27.0" r="2.2" fill="currentColor"/></svg></span></div><div class="val num" data-countup="10299" data-prefix="">10,299</div><div class="ctx">GA4 · 2026-07-12</div></div><div class="kpi"><div class="kpi-top"><span class="label">Ad spend</span><span class="sparkwrap "></span></div><div class="val num" data-countup="12626" data-prefix="₹">₹12,626</div><div class="ctx">Meta · 2026-07-12</div></div></div>
       </section>
-      {f'<section><h2>Conversion</h2><div class="stats">{stats_html}</div></section>' if stats_html else ''}
+      <section><h2>Conversion</h2><div class="stats"><div class="stat crit"><span class="stat-val num">21%</span><span class="stat-label">refund rate</span></div><div class="stat "><span class="stat-val num">2.8%</span><span class="stat-label">session → cart</span></div><div class="stat "><span class="stat-val num">22%</span><span class="stat-label">cart → checkout</span></div></div></section>
       <section id="activity-sec" hidden>
         <h2>Live activity</h2>
         <div class="panel"><div id="activity"></div></div>
       </section>
-      {revenue_chart_html}
-      {overview_orders_html}
-      {funnel_html}
-      {channel_html}
-      {campaign_html}
+      <section><h2>Daily sales — last 90 days</h2><div class="panel"><svg class="revchart" viewBox="0 0 680 180" preserveAspectRatio="none" role="img" aria-label="Daily sales, last 90 days"><line class="baseline" x1="4" y1="92.8" x2="676" y2="92.8"/><rect class="rev-bar" x="5.5" y="59.1" width="4.4" height="33.8" rx="1.5"><title>2026-04-22 · ₹20k</title></rect><rect class="rev-bar" x="27.6" y="50.8" width="4.4" height="42.0" rx="1.5"><title>2026-04-25 · ₹25k</title></rect><rect class="rev-bar" x="64.6" y="59.6" width="4.4" height="33.2" rx="1.5"><title>2026-04-30 · ₹20k</title></rect><rect class="rev-bar" x="160.6" y="23.6" width="4.4" height="69.2" rx="1.5"><title>2026-05-13 · ₹41k</title></rect><rect class="rev-bar neg" x="249.2" y="92.8" width="4.4" height="69.2" rx="1.5"><title>2026-05-25 · ₹-41k</title></rect><rect class="rev-bar" x="308.2" y="68.9" width="4.4" height="23.9" rx="1.5"><title>2026-06-02 · ₹14k</title></rect><rect class="rev-bar" x="337.8" y="69.2" width="4.4" height="23.6" rx="1.5"><title>2026-06-06 · ₹14k</title></rect><rect class="rev-bar" x="345.2" y="67.5" width="4.4" height="25.3" rx="1.5"><title>2026-06-07 · ₹15k</title></rect><rect class="rev-bar" x="374.7" y="44.7" width="4.4" height="48.1" rx="1.5"><title>2026-06-11 · ₹28k</title></rect><rect class="rev-bar neg" x="382.1" y="92.8" width="4.4" height="14.3" rx="1.5"><title>2026-06-12 · ₹-8k</title></rect><rect class="rev-bar" x="433.8" y="54.0" width="4.4" height="38.8" rx="1.5"><title>2026-06-19 · ₹23k</title></rect><rect class="rev-bar" x="485.5" y="62.4" width="4.4" height="30.4" rx="1.5"><title>2026-06-26 · ₹18k</title></rect><rect class="rev-bar" x="492.9" y="61.6" width="4.4" height="31.2" rx="1.5"><title>2026-06-27 · ₹18k</title></rect><rect class="rev-bar" x="544.6" y="70.5" width="4.4" height="22.3" rx="1.5"><title>2026-07-04 · ₹13k</title></rect><rect class="rev-bar" x="625.8" y="74.1" width="4.4" height="18.7" rx="1.5"><title>2026-07-15 · ₹11k</title></rect><rect class="rev-bar" x="640.6" y="14.0" width="4.4" height="78.8" rx="1.5"><title>2026-07-17 · ₹47k</title></rect><text class="ax" x="4.0" y="176">Apr</text><text class="ax" x="70.5" y="176">May</text><text class="ax" x="299.4" y="176">Jun</text><text class="ax" x="520.9" y="176">Jul</text><text class="ax hi" x="676" y="11" text-anchor="end">₹47k</text></svg><div class="chart-legend"><span class="lg-sale"><i></i>sale day</span><span class="lg-refund"><i></i>refund day</span></div></div></section><section><h2>Recent in Drop</h2><div class="panel"><div class="oo-row"><b>d6a99124-edae-4235-abdb-3ef287a4a4bf.jpeg</b><span class="num">0.2 MB</span><span class="f-meta">Camera Uploads</span></div><div class="oo-row"><b>ebcccd4f-c8b3-45d5-a642-40187c8c6ad9.jpeg</b><span class="num">0.2 MB</span><span class="f-meta">Camera Uploads</span></div><div class="oo-row"><b>ea78539f-a214-41d1-941e-32b1c16038eb.jpeg</b><span class="num">0.2 MB</span><span class="f-meta">Camera Uploads</span></div><div class="oo-row"><b>d6899971-65b6-4af2-86b9-eedc36850eaf.jpeg</b><span class="num">0.3 MB</span><span class="f-meta">Camera Uploads</span></div><div class="oo-row"><b>05a887fe-1034-4b77-a1fd-a26cc3a1edfb.jpeg</b><span class="num">0.2 MB</span><span class="f-meta">Camera Uploads</span></div><p class="f-note"><a href="/drop/">Open Drop →</a></p></div></section>
+      
+      <section><h2>Where the funnel leaks</h2><div class="panel"><div class="fstep"><span class="fname">Sessions</span><div class="ftrack"><div class="ffill" style="width:100%"><span class="num">11,633</span></div></div><span class="fpct num">100.00%</span></div><div class="fstep"><span class="fname">Added to cart</span><div class="ftrack"><div class="ffill" style="width:17%"><span class="num">325</span></div></div><span class="fpct num">2.79%</span></div><div class="fstep"><span class="fname">Reached checkout</span><div class="ftrack"><div class="ffill" style="width:8%"><span class="num">70</span></div></div><span class="fpct num">0.60%</span></div><div class="fstep"><span class="fname">Completed online</span><div class="ftrack"><div class="ffill" style="width:3%"><span class="num">1</span></div></div><span class="fpct num">0.01%</span></div><p class="f-note">Bar widths use a &#8730; scale for legibility. Most real orders close via WhatsApp — the online completion step understates true sales, but the cart&rarr;checkout drop is the verified leak.</p></div></section>
+      <section><h2>Sessions by channel</h2><div class='panel'><div class="srcrow"><span class="s-name">Paid Social</span><div class="s-track"><div class="s-fill" style="width:100%"></div></div><span class="s-val num">4,723</span></div><div class="srcrow"><span class="s-name">Direct</span><div class="s-track"><div class="s-fill" style="width:51%"></div></div><span class="s-val num">2,396</span></div><div class="srcrow"><span class="s-name">Organic Search</span><div class="s-track"><div class="s-fill" style="width:35%"></div></div><span class="s-val num">1,676</span></div><div class="srcrow"><span class="s-name">Unassigned</span><div class="s-track"><div class="s-fill" style="width:10%"></div></div><span class="s-val num">464</span></div><div class="srcrow"><span class="s-name">Organic Social</span><div class="s-track"><div class="s-fill" style="width:9%"></div></div><span class="s-val num">448</span></div><div class="srcrow"><span class="s-name">Referral</span><div class="s-track"><div class="s-fill" style="width:6%"></div></div><span class="s-val num">282</span></div><div class="srcrow"><span class="s-name">Organic Shopping</span><div class="s-track"><div class="s-fill" style="width:4%"></div></div><span class="s-val num">175</span></div><div class="srcrow"><span class="s-name">AI Assistant</span><div class="s-track"><div class="s-fill" style="width:3%"></div></div><span class="s-val num">121</span></div><div class="srcrow"><span class="s-name">Organic Video</span><div class="s-track"><div class="s-fill" style="width:0%"></div></div><span class="s-val num">11</span></div><div class="srcrow"><span class="s-name">Paid Other</span><div class="s-track"><div class="s-fill" style="width:0%"></div></div><span class="s-val num">2</span></div><div class="srcrow"><span class="s-name">Cross-network</span><div class="s-track"><div class="s-fill" style="width:0%"></div></div><span class="s-val num">1</span></div></div></section>
+      <section><h2>Meta campaigns</h2><div class='panel tscroll'><table><thead><tr><th>Campaign</th><th class='n'>Spend</th><th class='n'>Clicks</th><th class='n'>CTR</th></tr></thead><tbody><tr><td>Website - Whatsapp | Galaxy Burst Dial watch ad</td><td class="n num">₹6,102</td><td class="n num">5,106</td><td class="n num">5.69%</td></tr><tr><td>Royal Oak | Website Purchase</td><td class="n num">₹4,088</td><td class="n num">730</td><td class="n num">2.89%</td></tr><tr><td>Seiko Mods | Grid Style | Message con</td><td class="n num">₹2,079</td><td class="n num">1,283</td><td class="n num">2.34%</td></tr><tr><td>Galaxy Burst Dial Test</td><td class="n num">₹358</td><td class="n num">301</td><td class="n num">3.36%</td></tr></tbody></table></div></section>
       <section>
         <h2>Sources</h2>
-        <div class="sources">{source_status_html}</div>
-        <div class="healthrow">{health_html}</div>
+        <div class="sources"><div class="src"><span class="src-dot fresh"></span><span class="src-name">Shopify</span><span class="src-when fresh">today</span></div><div class="src"><span class="src-dot stale"></span><span class="src-name">GA4</span><span class="src-when stale">2026-07-12</span></div><div class="src"><span class="src-dot stale"></span><span class="src-name">Meta Ads</span><span class="src-when stale">2026-07-12</span></div></div>
+        <div class="healthrow"><span class="chiplet ok">Web server</span><span class="chiplet ok">Login service</span><span class="chiplet ok">Agent chat</span><span class="chiplet ok">Daily refresh</span><span class="chiplet ok">Hermes gateway</span><span class="chiplet ok">Hermes console</span></div>
       </section>
     </div>
 
-    <div class="tabpanel" id="tab-orders">{orders_html}</div>
-    <div class="tabpanel" id="tab-plan">{plan_html}</div>
-    <div class="tabpanel" id="tab-competition">{research_html or '<section><div class="panel"><p class="empty">No research yet — run one from the agent.</p></div></section>'}</div>
-    <div class="tabpanel" id="tab-content">{content_html or '<section><div class="panel"><p class="empty">Approved marketing copy will collect here.</p></div></section>'}</div>
-    <div class="tabpanel" id="tab-findings">{findings_html}</div>
+    <div class="tabpanel" id="tab-orders"><section><h2>Orders captured from WhatsApp</h2><div class="panel"><p class="empty">None logged yet. Post "order received" + the details in the TimeLabsHomeBot group and the row appears here with what the agent extracted.</p></div></section></div>
+    <div class="tabpanel" id="tab-plan"><section><h2>Marketing manager — action plan</h2><div class="panel"><h3 class="a-project">brand</h3><div class="a-item"><div class="a-head"><span class="pill neutral">todo</span><span class="pill neutral">hermes</span><b>Rewrite brand description to position watches as premium</b><button class="donebtn" onclick="markDone(17, this)">&#10003; done</button></div><p class="a-why">Owner explicitly said watches are premium — existing content_library row #5 contradicts this</p></div><h3 class="a-project">community</h3><div class="a-item"><div class="a-head"><span class="pill neutral">todo</span><span class="pill neutral">owner</span><b>Iterate on Snippet C welcome message</b><button class="donebtn" onclick="markDone(14, this)">&#10003; done</button></div><p class="a-why">Owner rejected original wall-of-text format; 4 shorter options drafted awaiting selection.</p></div><h3 class="a-project">connect-data</h3><div class="a-item"><div class="a-head"><span class="pill crit">blocked</span><span class="pill neutral">claude</span><b>Shopify Admin API token into dashboard</b><button class="donebtn" onclick="markDone(8, this)">&#10003; done</button></div><p class="a-why">Live orders/sales on the command center + product push goes live (bridge active meanwhile — dashboard already shows this data as of 2026-07-12)</p><p class="a-blocked">Waiting on — You: Shopify admin -&gt; Settings -&gt; Apps -&gt; Develop apps -&gt; create app, scope read_orders+write_products -&gt; send me the shpat_ token</p></div><div class="a-item"><div class="a-head"><span class="pill crit">blocked</span><span class="pill neutral">claude</span><b>GA4 service account into dashboard</b><button class="donebtn" onclick="markDone(9, this)">&#10003; done</button></div><p class="a-why">Live sessions/channels on the command center (bridge active meanwhile — dashboard already shows this data as of 2026-07-12)</p><p class="a-blocked">Waiting on — You: console.cloud.google.com -&gt; service account -&gt; JSON key -&gt; add as Viewer on GA4 property 532259097 -&gt; send me the JSON</p></div><div class="a-item"><div class="a-head"><span class="pill crit">blocked</span><span class="pill neutral">claude</span><b>Meta Ads token into dashboard</b><button class="donebtn" onclick="markDone(10, this)">&#10003; done</button></div><p class="a-why">Live spend/campaigns on the command center (bridge active meanwhile — dashboard already shows this data as of 2026-07-12)</p><p class="a-blocked">Waiting on — You: developers.facebook.com -&gt; create app (Marketing API) -&gt; token with ads_read -&gt; send me token + app id + secret</p></div><h3 class="a-project">system</h3><div class="a-item"><div class="a-head"><span class="pill neutral">todo</span><span class="pill neutral">claude</span><b>Re-apply the bridge.js owner-messages patch after any Hermes update</b><button class="donebtn" onclick="markDone(12, this)">&#10003; done</button></div><p class="a-why">hermes update will overwrite /usr/local/lib/hermes-agent; without the patch the owner&#x27;s own group messages go invisible again</p></div><h3 class="a-project">wa-community</h3><div class="a-item"><div class="a-head"><span class="pill neutral">todo</span><span class="pill neutral">you</span><b>Add community invite to Shopify order-confirmation page + email</b><button class="donebtn" onclick="markDone(3, this)">&#10003; done</button></div><p class="a-why">Buyers are the warmest audience; post-purchase is the highest-intent moment to join</p></div><div class="a-item"><div class="a-head"><span class="pill neutral">todo</span><span class="pill neutral">you</span><b>Run the 25-minute setup checklist in the community playbook (IG instant reply, FAQs, saved replies, order email)</b><button class="donebtn" onclick="markDone(4, this)">&#10003; done</button></div><p class="a-why">Playbook section 8 has the exact clicks and copy-paste snippets — PDF on the command center</p></div><div class="a-item"><div class="a-head"><span class="pill neutral">todo</span><span class="pill neutral">you</span><b>Add cart-page nudge: &quot;Questions? Talk to us on WhatsApp&quot; near checkout button</b><button class="donebtn" onclick="markDone(5, this)">&#10003; done</button></div><p class="a-why">The verified funnel leak is at the cart moment; a WhatsApp hand-rail converts hesitators instead of losing them</p></div><div class="a-item"><div class="a-head"><span class="pill neutral">todo</span><span class="pill neutral">hermes</span><b>Weekly: report community joins + which entry point drove them</b><button class="donebtn" onclick="markDone(7, this)">&#10003; done</button></div><p class="a-why">Measure or it did not happen</p></div><div class="a-item"><div class="a-head"><span class="pill neutral">todo</span><span class="pill neutral">you</span><b>TEST: send &quot;ask: ping&quot; yourself in the TimeLabsHomeBot group</b><button class="donebtn" onclick="markDone(13, this)">&#10003; done</button></div><p class="a-why">Verifies the bridge patch — your own messages should now trigger the bot for the first time</p></div><div class="a-item"><div class="a-head"><span class="pill neutral">pending</span><span class="pill neutral">owner</span><b>Pick welcome message — owner rejected all drafts as robotic</b><button class="donebtn" onclick="markDone(15, this)">&#10003; done</button></div><p class="a-why">Current Snippet C drafts not approved; needs fresh voice pass via Claude Sonnet</p></div><p class="f-note">6 item(s) completed · plan lives in hermes.db, updated by your AI team and this page</p></div></section></div>
+    <div class="tabpanel" id="tab-competition"><section><h2>Competition research</h2><div class="panel"><div class="research-bar"><span class="f-meta">run 2 · 2026-07-13 05:53 · by hermes</span><button id="researchBtn" onclick="runResearch(this)">Run fresh analysis</button></div><details open class="research-body"><summary>Latest report</summary><div class="md"><h1>Competition Research — 14 July 2025</h1><h2>Verdict</h2><p>India Mod Watches has active scam allegations posted publicly, making caution for buyers and a real branding opportunity for Timelabs to occupy trust. No direct Indian competitor simultaneously offers credible quality, a branded line, live social proof, WhatsApp sales, 5–10 day delivery, and a 2-year warranty in the ₹17,000–27,000 bracket. Moddy&#x27;s is the most operationally polished benchmark globally but ships in EUR at a price ($~$350 = ~₹30,000+) and plays a different geo; it sets the bar Timelabs should benchmark against locally.</p><h2>Direct competitors</h2><table><thead><tr><th>Competitor</th><th>Price (INR approx.)</th><th>Delivery</th><th>Warranty</th><th>COD</th><th>Configurator</th><th>IG scale</th><th>Weaknesses</th></tr></thead><tbody><tr><td><strong>Timelabs</strong></td><td>₹17,500–27,000</td><td>5–10 days</td><td>2 yr</td><td>WAPU-first</td><td>Yes (DM/WhatsApp)</td><td>Growing, named lines</td><td>Early brand; no dedicated web store yet</td></tr><tr><td><strong>India Mod Watches</strong></td><td>~₹8,000–22,000 estimate</td><td>Pan-India claimed</td><td>Unclear</td><td>Yes</td><td>No</td><td>Large, high-engagement posts</td><td>Multiple public scam complaints; ₹5,240 loss documented on YouTube and r/watchesindia</td></tr><tr><td><strong>AG Watch Studio</strong></td><td>Quoted via DM</td><td>~7–14 days implied</td><td>1 yr (implied)</td><td>Likely</td><td>DM-only</td><td>8.2K followers</td><td>No web store; reliance on DM thread for every sale; founder-run, no formal warranty page</td></tr><tr><td><strong>Vintage Watcholic</strong></td><td>₹4,250–5,450</td><td>Pan-India</td><td>3 months</td><td>Yes</td><td>No website configurator</td><td>~small following</td><td>Sells vintage/vintage-modified parts—lower ceiling, different quality category entirely</td></tr><tr><td><strong>The Mod Labs</strong> (international)</td><td>~$399 USD (~₹33,000)</td><td>18-day build</td><td>Not public</td><td>No</td><td>Yes</td><td>Moderate</td><td>Ships only internationally; import cost and customs risk for India buyers</td></tr></tbody></table><p><strong>Sources:</strong> Instagram @india_mod_watches (<a href="https://www.reddit.com/r/watchesindia/comments/1hmod0z/never_ever_buy_watches_from_india_mod_watches/">Reddit complaint thread</a>, <a href="https://www.youtube.com/watch?v=4Jhh_OErH50">YouTube review</a>), Instagram @ag_watchstudio (<a href="https://www.instagram.com/ag_watchstudio/?hl=en">profile</a>), Vintage Watcholic (<a href="https://vintagewatcholic.in/collections/seiko-mod">collection</a>), The Mod Labs (<a href="https://themodlabs.com/">themodlabs.com</a>).</p><h2>What standards internationals set</h2><p><strong>Moddy&#x27;s</strong> (<a href="https://moddys-watches.com/">moddys-watches.com</a>) shows what a credible global mod brand looks like: dedicated web configurator, 2-year warranty explicitly stated on cart, 30-day guarantee, 4.9/5 Trustpilot on 6,678+ reviews, spring-sale discount mechanics, multilingual payments page (10+ options), and branded story-led copy on every product page. Their price of €349.99 (~₹31,500 after conversion) sits marginally above Timelabs&#x27; ceiling, showing there is room at the ₹20,000 level if quality holds up. (<a href="https://www.trustpilot.com/review/moddys-watches.com">Trustpilot reviews</a>)</p><p><strong>Circa Watch Labs</strong> (<a href="https://circawatchlabs.com/">circawatchlabs.com</a>) demonstrates a working watch-lab brand page (configurator, customization story, Instagram content pipeline), but their Trustpilot is 3.5/5—a reminder that operational credibility (shipping consistency, returns) matters as much as the page design. (<a href="https://www.trustpilot.com/review/circawatchlabs.com">Trustpilot</a>, <a href="https://circawatchlabs.com/pages/warranty">warranty page</a>)</p><p><strong>namokiMODS</strong> (<a href="https://www.namokimods.com/">namokimods.com</a>) set the quality bar for parts and educate buyers via long-form how-to guides—their India INR pricing (<a href="https://www.namokimods.com/">namokimods.com</a>) signals local demand is large enough to warrant region-specific storefronts. Timelabs should be the brand name on INR shopfronts where namoki supplies these buyers.</p><h2>Adjacent alternatives buyers weigh</h2><p>A buyer at ₹20,000–25,000 has real alternatives: <strong>Seiko 5 Sports</strong> official (SNXS series from ~₹24,000 on <a href="https://seikowatches.co.in/">seikowatches.co.in</a>) offers genuine brand trust but no customisation and a homogeneous look; <strong>Timex, Fossil, or Titan</strong> entries land ₹8,000–18,000 with quartz or cheap auto movements—comfortable but not enthusiast-grade; and a <strong>Casio Edifice</strong> or <strong>Citizen</strong> eco-drive sits ₹18,000–28,000, trading mechanical soul for tech ease. None of these brands offer the hand-built, personalised story that is Timelabs&#x27; core. The risk: if Timelabs&#x27; not-yet-established brand trust makes a buyer hesitate, these defaults win on safety—not quality.</p><h2>Market signals</h2><ul><li>Reddit <a href="https://www.reddit.com/r/watchesindia/">r/watchesIndia</a> is the most trusted validation space for Indian watch buyers; people before-buy research here thoroughly.</li><li>India Mod Watches has not capitalised on its lead—scam allegations (public Reddit threads, YouTube exposé) create a vacuum Timelabs can fill with a stated spec card and refund policy on first interaction.</li><li>No Indian Seiko-mod competitor has:built-to-order process documented with build photos, a WhatsApp-close sales motion, or a branded collection name.</li><li>International brands pricing in EUR or USD above Timelabs&#x27; ceiling mean that INR-priced, hand-built products in the ₹17k–27k band are under-served.</li><li>Instagram is the primary commercial channel for every competitor—content quality determines conversion as much as product.</li></ul><h2>Recommended moves</h2><ol><li><strong>Publish a spec card on every DM conversation</strong> (movement model, lead time, refund policy, variance caveat)—this single document neutralises India Mod Watches&#x27; trust gap and pre-empts the top refund driver.</li><li><strong>Launch a dedicated Shopify/website config page</strong> at the INR price—Moddy&#x27;s shows the ROI; it converts lurkers who won&#x27;t DM cold.</li><li><strong>Run brand comparison copy</strong> on IG (e.g. &quot;Genuine Seiko NH35, not parts-bin mystery engines, 2 years warranty, 5–10 days&quot;) aimed at lurkers scrolling past India Mod Watches content.</li><li><strong>Act on r/watchesindia</strong>—answer one build thread, post one real build-photo album with movement shot; the subreddit is a verified trust signal for the full buyer funnel.</li><li><strong>Set up COD with a ₹2,000–3,000 token</strong> for buyers requesting it; this closes the only realistic pricing objection before WhatsApp confirmation.</li></ol></div></details><p class="f-note">Fresh runs take 2–4 minutes — the agent researches the live web, then this section updates. Older runs stay in the database for comparison (ask the agent: "compare the last two competition reports").</p></div></section></div>
+    <div class="tabpanel" id="tab-content"><section><h2>Content library</h2><div class="panel"><div class="finding"><span class="f-meta">2026-07-18 · other</span><p>Blog content plan v1 (30 articles, content_queue)</p></div><div class="finding"><span class="f-meta">2026-07-17 · other</span><p>Dial logo freelancer brief v1.0 (standing)</p></div><div class="finding"><span class="f-meta">2026-07-15 · other</span><p>Taglines &amp; Slogans</p></div><div class="finding"><span class="f-meta">2026-07-15 · other</span><p>Timelabs Co — Brand Description</p></div><div class="finding"><span class="f-meta">2026-07-12 · community-post</span><p>Snippet C — WhatsApp welcome (approved)</p></div><div class="finding"><span class="f-meta">2026-07-12 · community-post</span><p>Snippet C v2 - Option 1 (taste-first)</p></div><p class="f-note">Approved marketing copy, saved by the agent — ask it to reuse or adapt any piece.</p></div></section></div>
+    <div class="tabpanel" id="tab-findings"><section><h2>Verified findings</h2><div class="panel"><div class="finding"><span class="f-meta">2026-07-20 · operational</span><p>Known SSH key fingerprints authorized for this host: ssh-ed25519 ...timelabs-mac-launcher and ...claude-timelabs-host (from /root/.ssh/authorized_keys). Drop-in /etc/ssh/sshd_config.d/05-penalty-exempt.conf exempts IP 103.176.156.3 from PerSource penalty — owner IP.</p></div><div class="finding"><span class="f-meta">2026-07-20 · operational</span><p>UFW was previously active with default-allow. On 2026-07-21 hermes reset defaults to deny-incoming + allow-outgoing, then opened 22/tcp, 80/tcp, 443/tcp, and the OpenSSH profile (both v4 and v6). Status active.</p></div><div class="finding"><span class="f-meta">2026-07-20 · operational</span><p>SSH hardening for ops.timelabsco.in in place since 2026-07-21: PermitRootLogin prohibit-password, Password/Kbd/EmptyAuth no, X11 no, MaxAuthTries 3, LoginGraceTime 30, ClientAlive 300/2, UseDNS no. Effective config visible via `sshd -T`. Idempotent re-apply script: /root/harden-ssh.sh.</p></div><div class="finding"><span class="f-meta">2026-07-20 · operational</span><p>ops.timelabsco.in now serves TLS via Let&#x27;s Encrypt (cert path /etc/letsencrypt/live/ops.timelabsco.in-0001/, expires 2026-10-18, R10 chain). nginx vhost at /etc/nginx/sites-available/ops.timelabsco.in is the only sites-enabled site; catch-all default disabled. certbot.timer auto-renews twice daily.</p></div><div class="finding"><span class="f-meta">2026-07-20 · operational</span><p>ops.timelabsco.in: nginx on :80 reverse-proxies /ops/* to local 8899/8901/8877; default vhost uses server_name _; no Host pinning. SSH key-auth working (timelabs_hermes), but PermitRootLogin yes + PasswordAuthentication yes still on.</p></div><div class="finding"><span class="f-meta">2026-07-20 · operational</span><p>Hermes CAN now change the Shopify store via /root/ops-dashboard/bin/shopify_admin.py (search / set-price / set-status), confirm-first, safe-by-default (dry run unless --execute). Needs SHOPIFY_ADMIN_TOKEN + SHOPIFY_SHOP in /root/ops-dashboard/.env — until then it prints NOT CONFIGURED with the exact fix. Default behaviour: find a path + escalate the one blocker, never a bare cannot-do.</p></div><p class="f-note">Logged by your AI team as facts are verified — newest first.</p></div></section></div>
 
-    {hub_footer()}
+    <footer><span>Labs OS</span><span>ops.timelabsco.in</span></footer>
   </main>
 </div>
-{KEY_PANEL}
+
+<div id="keyveil"></div>
+<aside id="keypanel" role="dialog" aria-label="Key — manage access">
+  <div class="key-grip"></div>
+  <h3 class="key-title">Access</h3>
+  <p class="key-sub">Who can sign in to Hub with their Google account. Changes apply instantly.</p>
+  <div class="key-add">
+    <input id="keyEmail" type="email" inputmode="email" autocomplete="off"
+           placeholder="teammate@gmail.com">
+    <button id="keyAddBtn">Invite</button>
+  </div>
+  <div id="keyMembers"><p class="empty">Loading…</p></div>
+</aside>
+
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
-"""
