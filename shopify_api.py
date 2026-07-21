@@ -207,6 +207,51 @@ def remove_media(product_id, media_id):
     return data["productDeleteMedia"]["deletedMediaIds"]
 
 
+def create_product(title, description="", product_type="", tags=None,
+                   status="DRAFT", vendor="", price=None, image_urls=None):
+    """Create a new product. Optionally attach images from public URLs (Drop
+    share /raw links work) and set the default variant's price. Returns
+    {id, handle, status, variant_id, admin_url}."""
+    title = (title or "").strip()
+    if not title:
+        raise ShopifyError("a product needs a title")
+    status = status if status in ("ACTIVE", "DRAFT", "ARCHIVED") else "DRAFT"
+    inp = {"title": title, "status": status}
+    if description:
+        inp["descriptionHtml"] = str(description)
+    if product_type:
+        inp["productType"] = str(product_type).strip()
+    if vendor:
+        inp["vendor"] = str(vendor).strip()
+    if tags:
+        inp["tags"] = [str(t).strip() for t in tags if str(t).strip()]
+    media = [{"originalSource": str(u).strip(), "mediaContentType": "IMAGE"}
+             for u in (image_urls or [])
+             if str(u).strip().startswith(("http://", "https://"))]
+    q = """mutation($input: ProductInput!, $media: [CreateMediaInput!]) {
+      productCreate(input: $input, media: $media) {
+        product { id handle status variants(first: 1) { nodes { id } } }
+        userErrors { field message }
+      }
+    }"""
+    data = admin_graphql(q, {"input": inp, "media": media})
+    res = data["productCreate"]
+    if res["userErrors"]:
+        raise ShopifyError(res["userErrors"][0]["message"])
+    p = res["product"]
+    variant_id = (p.get("variants", {}).get("nodes") or [{}])[0].get("id")
+    if price not in (None, "") and variant_id:
+        try:
+            set_price(p["id"], variant_id, f"{float(price):.2f}")
+        except (ValueError, ShopifyError):
+            pass  # product exists; price can be corrected in the updater
+    shop, _ = credentials()
+    numeric = p["id"].split("/")[-1]
+    return {"id": p["id"], "handle": p.get("handle"),
+            "status": p.get("status"), "variant_id": variant_id,
+            "admin_url": f"https://{shop}/admin/products/{numeric}"}
+
+
 if __name__ == "__main__":
     print("configured:", configured())
     if configured():

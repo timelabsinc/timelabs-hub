@@ -865,7 +865,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # reuse the cached-thumb machinery for public preview images
         self._thumb(rel, big=True)
 
-    def _html(self, status, body_html, title="Timelabs Drop"):
+    def _html(self, status, body_html, title="Labs Drop"):
         page = ('<!doctype html><html><head><meta charset="utf-8">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
                 '<meta name="robots" content="noindex">'
@@ -888,7 +888,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 'img.hero,video.hero{max-width:100%;max-height:70vh;border-radius:12px;display:block;margin:14px 0}'
                 'footer{padding:14px;text-align:center;font-size:12px;opacity:.55}'
                 '</style></head><body><main>' + body_html + '</main>'
-                '<footer>Shared via Timelabs Drop</footer></body></html>').encode()
+                '<footer>Shared via Labs Drop</footer></body></html>').encode()
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(page)))

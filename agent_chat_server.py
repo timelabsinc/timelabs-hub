@@ -96,16 +96,23 @@ def hub_event(kind, detail, actor="?", app="key"):
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 PREAMBLE = (
-    "You are Timelabs Co's agent, chatting via the private web command center "
-    "with the owner (Schezan) or his partner. Be helpful and direct. Your replies "
+    "You are Timelabs Co's agent, chatting via Labs Chat inside Labs OS — the "
+    "company's self-hosted command center at ops.timelabsco.in — with the owner "
+    "(Schezan) or his partner. Be helpful and direct. Your replies "
     "render as rich Markdown — use headers, **bold**, bullet lists, and tables where "
     "they make the answer clearer, and the reader can export your reply as a PDF, "
     "so structure longer answers like a clean document. You have your usual tools "
     "(terminal, files, web, vision) and the business database at "
     "/root/ops-dashboard/data/hermes.db (orders, products, action_items, "
     "memory_facts, content_library, and hub_events — a live feed of everything "
-    "happening in Hub: file uploads, public share links, photo organizing, and "
-    "access changes; check it when asked what's new). Team files live in Drop at "
+    "happening in Labs OS: file uploads, public share links, photo organizing, "
+    "product creates/updates, and access changes; check it when asked what's new). "
+    "Labs OS is a family of tools (Home dashboard, Drop files, Ledger costs, this "
+    "Chat, plus a Tools launcher with a Blog builder, a Quick product updater, and "
+    "a Product builder that pushes new products live to Shopify). You have a "
+    "knowledge base about the OS itself in memory_facts (category 'labs_os') — "
+    "consult it when asked how the system works or how to do a store task, and "
+    "point the owner at the right tool URL. Team files live in Drop at "
     "/srv/timelabs-drop (browse it directly). Sourcing costs and margins are in "
     "/root/ops-dashboard/data/suppliers.db, surfaced at /ops/ledger.html. "
     "When a conversation surfaces something durable, save it to memory_facts. "
@@ -766,6 +773,48 @@ class Handler(http.server.BaseHTTPRequestHandler):
                       + ", ".join(f"{k}={v}" for k, v in changed.items()), actor, app="shopify")
         self._json(200, {"ok": True, "changed": changed})
 
+    def _handle_shopify_product_create(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 16384)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        import shopify_api
+        if not shopify_api.configured():
+            self._json(400, {"error": "Shopify isn't connected — open Tools and connect it."})
+            return
+        title = str(p.get("title", "")).strip()
+        if not title:
+            self._json(400, {"error": "give the product a title"})
+            return
+        tags = p.get("tags")
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+        images = [u for u in (p.get("images") or []) if str(u).strip()]
+        try:
+            out = shopify_api.create_product(
+                title=title,
+                description=p.get("description", ""),
+                product_type=p.get("type", ""),
+                tags=tags or [],
+                status=p.get("status", "DRAFT"),
+                vendor=p.get("vendor", ""),
+                price=p.get("price"),
+                image_urls=images,
+            )
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)})
+            return
+        actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+        hub_event("product_create",
+                  f"{title} ({out['status'].lower()}, {len(images)} image"
+                  + ("s" if len(images) != 1 else "") + ")", actor, app="shopify")
+        self._json(200, {"ok": True, **out})
+
     def _handle_ledger_import(self):
         """Preview (default) or commit new supplier invoices from Drop into
         suppliers.db. Review-gated: the UI shows the parse before committing."""
@@ -1057,6 +1106,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_allowlist_change("remove")
         elif path == "/ledger/import":
             self._handle_ledger_import()
+        elif path == "/shopify/product/create":
+            self._handle_shopify_product_create()
         elif path == "/shopify/product/update":
             self._handle_shopify_product_update()
         elif path == "/shopify/product/media/add":

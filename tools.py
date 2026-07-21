@@ -32,7 +32,7 @@ IC = {
 # (key, name, description, href-or-None, status)  status: "live" | "soon" | "admin"
 TOOLS = [
     ("Daily", [
-        ("face", "Face", "The live dashboard — sales, funnel, plan, findings.", "/ops/#overview", "live"),
+        ("face", "Home", "The live dashboard — sales, funnel, plan, findings.", "/ops/#overview", "live"),
         ("drop", "Drop", "Files &amp; product video — upload, share, organize.", "/drop/", "live"),
         ("ledger", "Ledger", "Costs &amp; margins from your supplier invoices.", "/ops/ledger.html", "live"),
         ("chat", "Chat", "Ask the team (Hermes / Claude) with photos.", "/ops/agent/", "live"),
@@ -44,7 +44,7 @@ TOOLS = [
     ("Shopify", [
         ("theme", "Theme editor", "Tune the storefront look without touching Shopify's editor.", None, "soon"),
         ("price", "Quick product updater", "Change prices &amp; status fast, in bulk.", "/ops/product-updater.html", "live"),
-        ("product", "Product builder", "Spin up a new product from parts, photos &amp; a spec.", None, "soon"),
+        ("product", "Product builder", "Spin up a new product from parts, photos &amp; a spec.", "/ops/product-builder.html", "live"),
     ]),
     ("Admin", [
         ("key", "Key", "Who can sign in to Hub — invite &amp; remove people.", "/ops/#key", "admin"),

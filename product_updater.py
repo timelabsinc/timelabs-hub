@@ -22,6 +22,12 @@ def build():
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark"><title>Quick product updater — Labs OS</title>
 <style>{HUB_STYLE}
+  .pu-head{{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;}}
+  .pu-new{{flex-shrink:0;display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:650;
+    background:var(--ink);color:var(--bg);border-radius:var(--r-s);padding:10px 16px;text-decoration:none;
+    transition:transform .1s var(--ease);white-space:nowrap;}}
+  .pu-new:hover{{transform:translateY(-1px);text-decoration:none;}}
+  .pu-new svg{{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;}}
   .pu-controls{{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}}
   .pu-search{{flex:1;min-width:200px;font-size:14px;border:1px solid var(--border);border-radius:var(--r-s);
     background:var(--card);color:var(--ink);padding:9px 12px;}}
@@ -79,9 +85,13 @@ def build():
 <div class="wrap">
   {hub_header("tools")}
   <main>
-    <div class="page-head">
-      <h1 class="page-title">Quick product updater</h1>
-      <p class="page-sub">Search, re-price, edit details &amp; images, and launch products. Changes go live on your store immediately.</p>
+    <div class="page-head pu-head">
+      <div>
+        <h1 class="page-title">Quick product updater</h1>
+        <p class="page-sub">Search, re-price, edit details &amp; images, and launch products. Changes go live on your store immediately.</p>
+      </div>
+      <a class="pu-new" href="/ops/product-builder.html">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New product</a>
     </div>
     <div id="pu-body"></div>
     {hub_footer()}
