@@ -95,6 +95,25 @@ def hub_event(kind, detail, actor="?", app="key"):
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+def apply_content_op(desc, op, block="", name="", find="", replace=""):
+    """Pure HTML transform for the Content updater. Blocks are wrapped in
+    <!--labs:slug--> … <!--/labs:slug--> so re-running a block op updates it in
+    place instead of stacking duplicates. Returns the new HTML."""
+    desc = desc or ""
+    if op in ("append_block", "prepend_block"):
+        slug = re.sub(r"[^a-z0-9_-]", "", (name or "block").lower().replace(" ", "-")) or "block"
+        wrapped = f"<!--labs:{slug}-->\n{block}\n<!--/labs:{slug}-->"
+        pat = re.compile(r"<!--labs:%s-->.*?<!--/labs:%s-->" % (slug, slug), re.S)
+        if pat.search(desc):
+            return pat.sub(lambda m: wrapped, desc)   # update existing block
+        if not desc.strip():
+            return wrapped
+        return (desc.rstrip() + "\n" + wrapped) if op == "append_block" else (wrapped + "\n" + desc)
+    if op == "replace":
+        return desc.replace(find, replace) if find else desc
+    return desc
+
+
 PREAMBLE = (
     "You are Timelabs Co's agent, chatting via Labs Chat inside Labs OS — the "
     "company's self-hosted command center at ops.timelabsco.in — with the owner "
@@ -475,6 +494,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/shopify/product/detail":
             self._handle_shopify_detail(query)
             return
+        if path == "/shopify/theme/status":
+            if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+                self._json(403, {"error": "admins only"})
+            else:
+                import shopify_api
+                self._json(200, shopify_api.theme_status() if shopify_api.configured()
+                           else {"available": False, "reason": "Shopify isn't connected."})
+            return
+        if path == "/shopify/pages":
+            self._handle_shopify_pages()
+            return
+        if path == "/shopify/page/detail":
+            self._handle_shopify_page_detail(query)
+            return
         if path == "/events":
             conn = db()
             try:
@@ -753,8 +786,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 shopify_api.set_price(pid, vid, price)
                 changed["price"] = price
             fields = {}
-            if "title" in p and p["title"].strip():
-                fields["title"] = p["title"].strip()
+            if "title" in p and str(p["title"] or "").strip():
+                fields["title"] = str(p["title"]).strip()
             if "type" in p:
                 fields["productType"] = str(p["type"]).strip()
             if "description" in p:
@@ -772,6 +805,97 @@ class Handler(http.server.BaseHTTPRequestHandler):
             hub_event("product_update", f"{p.get('title', pid.split('/')[-1])}: "
                       + ", ".join(f"{k}={v}" for k, v in changed.items()), actor, app="shopify")
         self._json(200, {"ok": True, "changed": changed})
+
+    def _handle_shopify_pages(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        import shopify_api
+        if not shopify_api.configured():
+            self._json(400, {"error": "Shopify isn't connected — open Tools and connect it."}); return
+        try:
+            self._json(200, {"pages": shopify_api.list_pages()})
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)})
+
+    def _handle_shopify_page_detail(self, query):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        from urllib.parse import parse_qsl
+        pid = dict(parse_qsl(query)).get("id")
+        import shopify_api
+        if not pid:
+            self._json(400, {"error": "missing page"}); return
+        try:
+            self._json(200, shopify_api.get_page(pid))
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)})
+
+    def _handle_shopify_page_update(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 262144)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"}); return
+        import shopify_api
+        pid = p.get("id")
+        if not pid:
+            self._json(400, {"error": "missing page"}); return
+        try:
+            shopify_api.update_page(pid, title=p.get("title"), body=p.get("body"))
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)}); return
+        actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+        hub_event("page_update", f"edited page {p.get('title', pid.split('/')[-1])}", actor, app="shopify")
+        self._json(200, {"ok": True})
+
+    def _handle_shopify_bulk_content(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 262144)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"}); return
+        import shopify_api
+        if not shopify_api.configured():
+            self._json(400, {"error": "Shopify isn't connected — open Tools and connect it."}); return
+        ids = [i for i in (p.get("ids") or []) if i][:100]
+        op = p.get("op")
+        if op not in ("append_block", "prepend_block", "replace"):
+            self._json(400, {"error": "unknown operation"}); return
+        if op == "replace" and not str(p.get("find", "")).strip():
+            self._json(400, {"error": "give the text to find"}); return
+        if op in ("append_block", "prepend_block") and not str(p.get("block", "")).strip():
+            self._json(400, {"error": "the block is empty"}); return
+        dry = bool(p.get("dry_run"))
+        results, sample = [], None
+        for pid in ids:
+            try:
+                d = shopify_api.get_detail(pid)
+                before = d["description"]
+                after = apply_content_op(before, op, block=p.get("block", ""),
+                                         name=p.get("name", ""), find=p.get("find", ""),
+                                         replace=p.get("replace", ""))
+                changed = after != before
+                if changed and not dry:
+                    shopify_api.update_fields(pid, {"descriptionHtml": after})
+                results.append({"id": pid, "title": d["title"], "changed": changed,
+                                "delta": len(after) - len(before)})
+                if changed and sample is None:
+                    sample = {"title": d["title"], "before": before[:1400], "after": after[:1400]}
+            except shopify_api.ShopifyError as e:
+                results.append({"id": pid, "title": pid.split("/")[-1], "error": str(e)})
+        n_changed = sum(1 for r in results if r.get("changed"))
+        if not dry and n_changed:
+            actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+            label = {"append_block": "appended a block to", "prepend_block": "prepended a block to",
+                     "replace": "find/replaced in"}[op]
+            hub_event("bulk_content", f"{label} {n_changed} product"
+                      + ("s" if n_changed != 1 else ""), actor, app="shopify")
+        self._json(200, {"results": results, "changed": n_changed,
+                         "total": len(results), "dry_run": dry, "sample": sample})
 
     def _handle_shopify_product_create(self):
         if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
@@ -1108,6 +1232,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_ledger_import()
         elif path == "/shopify/product/create":
             self._handle_shopify_product_create()
+        elif path == "/shopify/page/update":
+            self._handle_shopify_page_update()
+        elif path == "/shopify/products/bulk-content":
+            self._handle_shopify_bulk_content()
         elif path == "/shopify/product/update":
             self._handle_shopify_product_update()
         elif path == "/shopify/product/media/add":

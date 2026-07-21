@@ -39,10 +39,10 @@ TOOLS = [
     ]),
     ("Content &amp; growth", [
         ("blog", "Blog builder", "Your 27 queued topics → SEO drafts for the store.", "/ops/blog.html", "live"),
-        ("content", "Content updater", "Bulk-refresh product copy &amp; store pages in your voice.", None, "soon"),
+        ("content", "Content updater", "Bulk-refresh product copy &amp; edit store pages in your voice.", "/ops/content-updater.html", "live"),
     ]),
     ("Shopify", [
-        ("theme", "Theme editor", "Tune the storefront look without touching Shopify's editor.", None, "soon"),
+        ("theme", "Theme editor", "Tune the storefront look — colours, type, sections.", "/ops/theme-editor.html", "locked"),
         ("price", "Quick product updater", "Change prices &amp; status fast, in bulk.", "/ops/product-updater.html", "live"),
         ("product", "Product builder", "Spin up a new product from parts, photos &amp; a spec.", "/ops/product-builder.html", "live"),
     ]),
@@ -62,6 +62,7 @@ def build():
                 "live": '<span class="t-badge live">Ready</span>',
                 "soon": '<span class="t-badge soon">In progress</span>',
                 "admin": '<span class="t-badge admin">Admin</span>',
+                "locked": '<span class="t-badge locked">Needs access</span>',
             }[status]
             icon = f'<svg viewBox="0 0 24 24" class="t-ic">{IC[key]}</svg>'
             inner = (f'<div class="t-top">{icon}{badge}</div>'
@@ -94,6 +95,7 @@ def build():
   .t-badge.live{{color:var(--good);background:var(--good-bg);}}
   .t-badge.soon{{color:var(--accent);background:var(--accent-bg);}}
   .t-badge.admin{{color:var(--muted);background:var(--card-2);}}
+  .t-badge.locked{{color:var(--accent);background:var(--accent-bg);}}
 </style></head>
 <body>
 <div class="wrap">

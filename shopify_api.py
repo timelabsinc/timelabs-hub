@@ -207,6 +207,65 @@ def remove_media(product_id, media_id):
     return data["productDeleteMedia"]["deletedMediaIds"]
 
 
+# --------------------------------------------------------------- theme access
+def theme_status():
+    """Best-effort probe of online-store theme access. Returns
+    {available, theme?} on success, or {available:False, reason} when the token
+    lacks read_themes (the current managed-app case)."""
+    try:
+        nodes = admin_graphql("{ themes(first: 10) { nodes { id name role } } }")["themes"]["nodes"]
+    except ShopifyError as e:
+        return {"available": False, "reason": str(e)}
+    main = next((n for n in nodes if n.get("role") == "MAIN"), (nodes or [{}])[0])
+    return {"available": True, "theme": main, "count": len(nodes)}
+
+
+# --------------------------------------------------------------- store pages
+def list_pages(first=100):
+    """Online-store pages (About, Contact, policies…). Needs read_online_store_pages."""
+    q = """query($first: Int!) {
+      pages(first: $first, sortKey: UPDATED_AT, reverse: true) {
+        nodes { id title handle updatedAt isPublished }
+      }
+    }"""
+    nodes = admin_graphql(q, {"first": first})["pages"]["nodes"]
+    return [{"id": n["id"], "title": n["title"], "handle": n["handle"],
+             "updated_at": n.get("updatedAt"), "published": n.get("isPublished")}
+            for n in nodes]
+
+
+def get_page(page_id):
+    q = """query($id: ID!) {
+      page(id: $id) { id title handle body isPublished }
+    }"""
+    p = admin_graphql(q, {"id": page_id})["page"]
+    if not p:
+        raise ShopifyError("page not found")
+    return {"id": p["id"], "title": p["title"], "handle": p["handle"],
+            "body": p.get("body") or "", "published": p.get("isPublished")}
+
+
+def update_page(page_id, title=None, body=None):
+    """Update a page's title and/or body (HTML). Needs write_online_store_pages."""
+    page = {}
+    if title is not None:
+        page["title"] = str(title)
+    if body is not None:
+        page["body"] = str(body)
+    if not page:
+        return None
+    q = """mutation($id: ID!, $page: PageUpdateInput!) {
+      pageUpdate(id: $id, page: $page) {
+        page { id } userErrors { field message }
+      }
+    }"""
+    data = admin_graphql(q, {"id": page_id, "page": page})
+    errs = data["pageUpdate"]["userErrors"]
+    if errs:
+        raise ShopifyError(errs[0]["message"])
+    return data["pageUpdate"]["page"]
+
+
 def create_product(title, description="", product_type="", tags=None,
                    status="DRAFT", vendor="", price=None, image_urls=None):
     """Create a new product. Optionally attach images from public URLs (Drop
