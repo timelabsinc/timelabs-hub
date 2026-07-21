@@ -750,6 +750,11 @@ def main():
         ledger.build()
     except Exception as e:
         print(f"[ledger] {e}", file=sys.stderr)
+    for mod in ("tools", "blog"):
+        try:
+            __import__(mod).build()
+        except Exception as e:
+            print(f"[{mod}] {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

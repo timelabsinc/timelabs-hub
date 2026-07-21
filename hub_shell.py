@@ -716,7 +716,8 @@ HUB_SCRIPT = r"""
         e.preventDefault(); if(q) q.focus();
       }
     });
-    showTab((location.hash || '#overview').slice(1));
+    if(location.hash === '#key'){ if(document.body.classList.contains('is-admin')) keyOpen(); else initAccount().then(function(){ if(document.body.classList.contains('is-admin')) keyOpen(); }); }
+    showTab((location.hash === '#key' ? '#overview' : (location.hash || '#overview')).slice(1));
     document.querySelectorAll('[data-countup]').forEach(countUp);
     initAccount();
   });
@@ -729,17 +730,19 @@ _ICONS = {
     "ledger": '<svg viewBox="0 0 24 24"><path d="M5 3h14v18H5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>',
     "chat": '<svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg>',
     "key": '<svg viewBox="0 0 24 24"><circle cx="8" cy="14" r="4"/><path d="M11 11l8-8M17 4l3 3M14 7l2 2"/></svg>',
+    "tools": '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg>',
 }
 
 
 def _appnav(active="face", drop_ready=False):
+    """Quick-nav: the handful of daily tools. Everything else lives in Tools."""
     drop_attr = 'href="/drop/"' if drop_ready else 'href="#" data-soon="Drop"'
     items = [
         ("face", 'href="/ops/#overview"', "Face", ""),
         ("drop", drop_attr, "Drop", ""),
         ("ledger", 'href="/ops/ledger.html"', "Ledger", ""),
         ("chat", 'href="/ops/agent/"', "Chat", ""),
-        ("key", 'href="#" id="keyNav"', "Key", " admin-only"),
+        ("tools", 'href="/ops/tools.html"', "Tools", ""),
     ]
     out = []
     for key, attr, label, extra in items:
