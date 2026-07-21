@@ -42,7 +42,7 @@ TOOLS = [
         ("content", "Content updater", "Bulk-refresh product copy &amp; edit store pages in your voice.", "/ops/content-updater.html", "live"),
     ]),
     ("Shopify", [
-        ("theme", "Theme editor", "Tune the storefront look — colours, type, sections.", "/ops/theme-editor.html", "locked"),
+        ("theme", "Theme editor", "Describe a look — Claude restyles your storefront, you approve it.", "/ops/theme-editor.html", "live"),
         ("price", "Quick product updater", "Change prices &amp; status fast, in bulk.", "/ops/product-updater.html", "live"),
         ("product", "Product builder", "Spin up a new product from parts, photos &amp; a spec.", "/ops/product-builder.html", "live"),
     ]),

@@ -23,6 +23,7 @@ import threading
 HOST, PORT = "127.0.0.1", 8901
 DB = "/root/ops-dashboard/data/hermes.db"
 UPLOAD_DIR = "/root/ops-dashboard/data/uploads"
+THEME_BACKUPS = "/root/ops-dashboard/theme-backups"
 # Chat-photo cap. Modern phone photos routinely exceed the old 11 MB ceiling;
 # 32 MB stays comfortably under nginx's 50m on this vhost. Large videos go
 # through Drop (copyparty), not this endpoint. Formats stay jpg/png/webp — the
@@ -105,6 +106,62 @@ def hub_event(kind, detail, actor="?", app="key"):
         print(f"[events] {e}", flush=True)
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(THEME_BACKUPS, exist_ok=True)
+
+def _extract_json_obj(text):
+    """Pull the first JSON object out of a model reply (handles fences/prose)."""
+    text = (text or "").strip()
+    for cand in (text,):
+        try:
+            v = json.loads(cand)
+            if isinstance(v, dict):
+                return v
+        except (json.JSONDecodeError, TypeError):
+            pass
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+    if m:
+        try:
+            v = json.loads(m.group(1))
+            if isinstance(v, dict):
+                return v
+        except json.JSONDecodeError:
+            pass
+    start = text.find("{")
+    if start >= 0:
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        v = json.loads(text[start:i + 1])
+                        if isinstance(v, dict):
+                            return v
+                    except json.JSONDecodeError:
+                        break
+    return None
+
+
+def theme_prompt(request, flat_settings):
+    """Prompt the model to translate a plain-language request into a settings patch."""
+    return (
+        "You are configuring a Shopify storefront theme. Here are its current editable "
+        "settings as JSON (key: value):\n\n" + json.dumps(flat_settings, ensure_ascii=False)
+        + "\n\nThe store owner wants this change: \"" + request + "\"\n\n"
+        "Reply with ONLY a JSON object mapping the setting keys that should change to their "
+        "new values. Rules:\n"
+        "- Use ONLY keys that appear above, spelled exactly.\n"
+        "- Keep each value's type: numbers stay numbers, booleans stay true/false, colours "
+        "are hex strings like \"#1a2a6c\".\n"
+        "- Colours live under color_schemes.<scheme>.settings.<name>; for a consistent look "
+        "change the same colour across all schemes unless the owner names one.\n"
+        "- Fonts use Shopify font handles shaped like the current values "
+        "(e.g. \"playfair_display_n4\", \"open_sans_n4\").\n"
+        "- Change as few keys as needed. No prose, no markdown fences — only the JSON object."
+    )
+
 
 def apply_content_op(desc, op, block="", name="", find="", replace=""):
     """Pure HTML transform for the Content updater. Blocks are wrapped in
@@ -505,6 +562,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/shopify/product/detail":
             self._handle_shopify_detail(query)
             return
+        if path == "/shopify/theme/settings":
+            self._handle_shopify_theme_settings()
+            return
         if path == "/shopify/theme/status":
             if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
                 self._json(403, {"error": "admins only"})
@@ -816,6 +876,112 @@ class Handler(http.server.BaseHTTPRequestHandler):
             hub_event("product_update", f"{p.get('title', pid.split('/')[-1])}: "
                       + ", ".join(f"{k}={v}" for k, v in changed.items()), actor, app="shopify")
         self._json(200, {"ok": True, "changed": changed})
+
+    def _handle_shopify_theme_settings(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        import shopify_api
+        if not shopify_api.configured():
+            self._json(400, {"error": "Shopify isn't connected."}); return
+        try:
+            theme, _, data = shopify_api.get_settings_data()
+            flat = shopify_api.flatten_theme_settings(data["current"])
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)}); return
+        n_backups = len([f for f in os.listdir(THEME_BACKUPS) if f.startswith(theme["id"] + "-")])
+        self._json(200, {"theme": theme["name"], "count": len(flat),
+                         "settings": flat, "can_revert": n_backups > 0})
+
+    def _handle_shopify_theme_suggest(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 8192)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"}); return
+        request = str(p.get("request", "")).strip()
+        if not request:
+            self._json(400, {"error": "describe the change you want"}); return
+        import shopify_api
+        try:
+            _, _, data = shopify_api.get_settings_data()
+            flat = shopify_api.flatten_theme_settings(data["current"])
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)}); return
+        if not LOCK.acquire(blocking=False):
+            self._json(409, {"error": "The agent is busy with another task — try again in a moment."}); return
+        patch = None
+        try:
+            prompt = theme_prompt(request, flat)
+            for model, provider in (("claude-sonnet-4-6", "anthropic"), (None, None)):
+                try:
+                    reply = run_hermes(prompt, model, provider)
+                except Exception:
+                    continue
+                patch = _extract_json_obj(reply)
+                if isinstance(patch, dict):
+                    break
+        finally:
+            LOCK.release()
+        if not isinstance(patch, dict):
+            self._json(502, {"error": "Couldn't turn that into settings — try being more specific, "
+                                      "or the model may be busy. Give it another go."}); return
+        _, applied, skipped = shopify_api.apply_theme_patch(data["current"], patch)
+        changes = [{"key": k, "old": v["old"], "new": v["new"]} for k, v in applied.items()]
+        self._json(200, {"changes": changes, "unmatched": len(skipped)})
+
+    def _handle_shopify_theme_apply(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 65536)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"}); return
+        patch = p.get("patch")
+        if not isinstance(patch, dict) or not patch:
+            self._json(400, {"error": "no changes to apply"}); return
+        import shopify_api
+        try:
+            theme, raw, data = shopify_api.get_settings_data()
+            new_current, applied, skipped = shopify_api.apply_theme_patch(data["current"], patch)
+            if not applied:
+                self._json(200, {"ok": True, "applied": 0, "skipped": len(skipped)}); return
+            ts = int(time.time())
+            with open(os.path.join(THEME_BACKUPS, f"{theme['id']}-{ts}.json"), "w") as f:
+                f.write(raw)  # full snapshot for one-click revert
+            data["current"] = new_current
+            shopify_api.put_settings_data(theme["id"], json.dumps(data, ensure_ascii=False))
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)}); return
+        actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+        hub_event("theme_update", f"{len(applied)} setting"
+                  + ("s" if len(applied) != 1 else "") + f" on {theme['name']}", actor, app="shopify")
+        self._json(200, {"ok": True, "applied": len(applied), "skipped": len(skipped)})
+
+    def _handle_shopify_theme_revert(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        import shopify_api
+        try:
+            theme = shopify_api.theme_main()
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)}); return
+        backups = sorted(f for f in os.listdir(THEME_BACKUPS) if f.startswith(theme["id"] + "-"))
+        if not backups:
+            self._json(404, {"error": "nothing to revert"}); return
+        newest = os.path.join(THEME_BACKUPS, backups[-1])
+        try:
+            with open(newest) as f:
+                raw = f.read()
+            shopify_api.put_settings_data(theme["id"], raw)
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)}); return
+        os.remove(newest)   # consume the undo step
+        actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+        hub_event("theme_revert", f"reverted last change on {theme['name']}", actor, app="shopify")
+        self._json(200, {"ok": True, "remaining": len(backups) - 1})
 
     def _handle_shopify_pages(self):
         if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
@@ -1243,6 +1409,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_ledger_import()
         elif path == "/shopify/product/create":
             self._handle_shopify_product_create()
+        elif path == "/shopify/theme/suggest":
+            self._handle_shopify_theme_suggest()
+        elif path == "/shopify/theme/apply":
+            self._handle_shopify_theme_apply()
+        elif path == "/shopify/theme/revert":
+            self._handle_shopify_theme_revert()
         elif path == "/shopify/page/update":
             self._handle_shopify_page_update()
         elif path == "/shopify/products/bulk-content":

@@ -13,10 +13,12 @@ reveal the Admin API access token (starts shpat_). Put in .env as:
   SHOPIFY_SHOP=xd2fwj-1h.myshopify.com
   SHOPIFY_ADMIN_TOKEN=shpat_xxxxx
 """
+import copy
 import json
 import os
 import urllib.request
 import urllib.error
+import urllib.parse
 
 ENV_PATH = "/root/ops-dashboard/.env"
 API_VERSION = "2024-10"
@@ -208,16 +210,132 @@ def remove_media(product_id, media_id):
 
 
 # --------------------------------------------------------------- theme access
-def theme_status():
-    """Best-effort probe of online-store theme access. Returns
-    {available, theme?} on success, or {available:False, reason} when the token
-    lacks read_themes (the current managed-app case)."""
+def _admin_rest(method, path, body=None):
+    """Minimal Admin REST call (used for the Asset API, which has no GraphQL
+    equivalent for reading/writing settings_data.json)."""
+    shop, token = credentials()
+    if not configured():
+        raise ShopifyError("Shopify isn't connected yet.")
+    url = f"https://{shop}/admin/api/{API_VERSION}/{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        "X-Shopify-Access-Token": token, "Content-Type": "application/json"})
     try:
-        nodes = admin_graphql("{ themes(first: 10) { nodes { id name role } } }")["themes"]["nodes"]
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            raw = resp.read().decode()
+            return json.loads(raw) if raw.strip() else {}
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:200]
+        if e.code == 401:
+            raise ShopifyError("Shopify rejected the token (401).")
+        if e.code == 403:
+            raise ShopifyError("Access denied — token may lack theme access (read_themes/write_themes).")
+        raise ShopifyError(f"Shopify API error {e.code}: {detail}")
+    except urllib.error.URLError as e:
+        raise ShopifyError(f"Couldn't reach Shopify: {e.reason}")
+
+
+def theme_main():
+    """The live (published) theme. Reliably filters by role=MAIN."""
+    nodes = admin_graphql("{ themes(first:1, roles:[MAIN]){ nodes { id name role } } }")["themes"]["nodes"]
+    if not nodes:
+        raise ShopifyError("no live theme found")
+    n = nodes[0]
+    return {"gid": n["id"], "id": n["id"].split("/")[-1], "name": n["name"], "role": n["role"]}
+
+
+def theme_status():
+    """Probe theme access. {available, theme, count} on success, or
+    {available:False, reason} when the token lacks read_themes."""
+    try:
+        nodes = admin_graphql("{ themes(first:20){ nodes { role } } }")["themes"]["nodes"]
+        main = theme_main()
     except ShopifyError as e:
         return {"available": False, "reason": str(e)}
-    main = next((n for n in nodes if n.get("role") == "MAIN"), (nodes or [{}])[0])
-    return {"available": True, "theme": main, "count": len(nodes)}
+    return {"available": True, "theme": {"name": main["name"], "role": main["role"].lower()},
+            "count": len(nodes)}
+
+
+SETTINGS_KEY = "config/settings_data.json"
+
+
+def get_settings_data(theme_id=None):
+    """Returns (theme, raw_json_string, data_dict) for the theme's settings."""
+    theme = theme_main() if theme_id is None else {"id": theme_id, "name": "", "gid": ""}
+    raw = _admin_rest("GET", f"themes/{theme['id']}/assets.json?asset%5Bkey%5D="
+                      + urllib.parse.quote(SETTINGS_KEY)).get("asset", {}).get("value", "")
+    if not raw:
+        raise ShopifyError("couldn't read the theme's settings")
+    return theme, raw, json.loads(raw)
+
+
+def put_settings_data(theme_id, value_string):
+    return _admin_rest("PUT", f"themes/{theme_id}/assets.json",
+                       {"asset": {"key": SETTINGS_KEY, "value": value_string}})
+
+
+_SKIP_KEYS = ("sections", "blocks", "content_for_index")
+
+
+def flatten_theme_settings(current):
+    """Editable leaf settings as a flat dict: scalar settings by name, and each
+    colour-scheme colour as color_schemes.<scheme>.settings.<key>."""
+    out = {}
+    for k, v in current.items():
+        if k in _SKIP_KEYS:
+            continue
+        if k == "color_schemes" and isinstance(v, dict):
+            for scheme, sd in v.items():
+                for ck, cv in (sd.get("settings", {}) or {}).items():
+                    if not isinstance(cv, (dict, list)):
+                        out[f"color_schemes.{scheme}.settings.{ck}"] = cv
+        elif not isinstance(v, (dict, list)):
+            out[k] = v
+    return out
+
+
+def _coerce(old, val):
+    """Coerce a new value to match the existing value's type."""
+    if isinstance(old, bool):
+        return val if isinstance(val, bool) else str(val).strip().lower() in ("true", "1", "yes", "on")
+    if isinstance(old, int) and not isinstance(old, bool):
+        try:
+            return int(float(val))
+        except (TypeError, ValueError):
+            return old
+    if isinstance(old, float):
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return old
+    return str(val)
+
+
+def apply_theme_patch(current, patch):
+    """Return (new_current, applied, skipped). Only pre-existing leaf keys are
+    honoured, type-coerced to match. applied = {key:{old,new}}."""
+    cur = copy.deepcopy(current)
+    applied, skipped = {}, []
+    for key, val in (patch or {}).items():
+        parts = key.split(".")
+        if len(parts) == 4 and parts[0] == "color_schemes" and parts[2] == "settings":
+            node = cur.get("color_schemes", {}).get(parts[1], {}).get("settings", {})
+            leaf = parts[3]
+            if leaf in node and not isinstance(node[leaf], (dict, list)):
+                new = _coerce(node[leaf], val)
+                if new != node[leaf]:
+                    applied[key] = {"old": node[leaf], "new": new}
+                    node[leaf] = new
+            else:
+                skipped.append(key)
+        elif key in cur and not isinstance(cur[key], (dict, list)):
+            new = _coerce(cur[key], val)
+            if new != cur[key]:
+                applied[key] = {"old": cur[key], "new": new}
+                cur[key] = new
+        else:
+            skipped.append(key)
+    return cur, applied, skipped
 
 
 # --------------------------------------------------------------- store pages
