@@ -421,6 +421,8 @@
     <b>Google Drive</b>
     <button class="iconbtn" id="gdBack" aria-label="Back" style="display:none">
       <svg class="ic" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <button id="gdReconnect" title="Reconnect Google Drive (grants save/sync access)"
+      style="margin-left:auto;font-size:12px;font-weight:600;color:var(--accent);background:none;border:none;cursor:pointer;padding:4px 8px">Reconnect</button>
     <button class="iconbtn" id="gdClose" aria-label="Close">
       <svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
   </div>
@@ -1058,11 +1060,16 @@ function gdOpenSheet(){ $('gdsheet').classList.add('open'); $('veil').classList.
 function gdCloseSheet(){ $('gdsheet').classList.remove('open'); $('veil').classList.remove('on'); }
 $('gdClose').onclick = gdCloseSheet;
 $('gdBack').onclick = () => { gdStack.pop(); gdList(); };
+$('gdReconnect').onclick = () => {
+  if(confirm('Reconnect Google Drive?\n\nYou will be sent to Google to re-approve. This grants Drop permission to SAVE files to your Drive (needed for "Save to Drive" and "Sync to Drive"), on top of importing.')){
+    location.href = API + '/gdrive/connect';
+  }
+};
 $('gdBtn').onclick = async () => {
   try {
     const st = await api('/gdrive/status');
     if(!st.connected){
-      if(confirm('Connect the Timelabs Google Drive? You will be sent to Google to approve read-only access.')){
+      if(confirm('Connect the Timelabs Google Drive?\n\nYou will be sent to Google to approve reading your Drive (to import) and saving files to it (to export).')){
         location.href = API + '/gdrive/connect';
       }
       return;

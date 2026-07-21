@@ -1045,6 +1045,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 '@media(prefers-color-scheme:dark){.dl{background:#f2f2f0;color:#111113}}'
                 '.dl.ghost{background:transparent;color:inherit;border:1px solid rgba(128,128,128,.4)}'
                 'img.hero,video.hero{max-width:100%;max-height:70vh;border-radius:12px;display:block;margin:14px auto}'
+                # view-only protection: kill long-press/right-click save + drag
+                '.shield{position:relative;display:block;max-width:100%;margin:14px auto;width:max-content}'
+                '.shield img,.shield video,.gcell img,#lb img{-webkit-touch-callout:none;'
+                '-webkit-user-select:none;user-select:none;-webkit-user-drag:none;pointer-events:none}'
+                '.shield::after,.gcell::after{content:"";position:absolute;inset:0;z-index:2}'
+                '.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:14px;margin-top:16px}'
+                '.gcell{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;'
+                'background:rgba(128,128,128,.15);cursor:zoom-in}'
+                '.gcell img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}'
+                '.gcap{font-size:12px;opacity:.65;margin-top:5px;overflow:hidden;'
+                'text-overflow:ellipsis;white-space:nowrap}'
+                '#lb{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;'
+                'justify-content:center;z-index:50;padding:16px}'
+                '#lb.on{display:flex}'
+                '#lb img{max-width:100%;max-height:90vh;border-radius:10px}'
+                '#lbx{position:absolute;top:12px;right:18px;color:#fff;font-size:32px;background:none;'
+                'border:none;cursor:pointer;z-index:3;line-height:1}'
                 'footer{padding:14px;text-align:center;font-size:12px;opacity:.55}'
                 '</style></head><body><main>' + body_html + '</main>'
                 '<footer>Shared via Labs Drop</footer></body></html>').encode()
@@ -1061,6 +1078,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "function(){var t=b.textContent;b.textContent='Copied!';"
                 "setTimeout(function(){b.textContent=t;},1500);});}</script>")
 
+    @staticmethod
+    def _protect_script():
+        """View-only pages: block right-click 'save image as', the iOS/Android
+        long-press save sheet, and drag-to-save. Deterrent, not DRM — a
+        screenshot always works — but it stops casual saving."""
+        return ("<script>(function(){"
+                "document.addEventListener('contextmenu',function(e){e.preventDefault();});"
+                "document.addEventListener('dragstart',function(e){e.preventDefault();});"
+                "var t;document.addEventListener('touchstart',function(){"
+                "t=setTimeout(function(){},0);},{passive:true});"
+                "document.addEventListener('touchend',function(){clearTimeout(t);},{passive:true});"
+                "})();</script>")
+
+    @staticmethod
+    def _lightbox_html_script():
+        return ('<div id="lb"><button id="lbx" aria-label="Close">&times;</button>'
+                '<span class="shield"><img alt=""></span></div>'
+                "<script>(function(){var lb=document.getElementById('lb');if(!lb)return;"
+                "var im=lb.querySelector('img');function close(){lb.classList.remove('on');im.src='';}"
+                "document.querySelectorAll('.gcell').forEach(function(c){"
+                "c.addEventListener('click',function(){im.src=c.dataset.src;lb.classList.add('on');});});"
+                "document.getElementById('lbx').addEventListener('click',close);"
+                "lb.addEventListener('click',function(e){if(e.target===lb)close();});"
+                "document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});"
+                "})();</script>")
+
     def _share_file_page(self, tok, meta, target):
         name = os.path.basename(target)
         kind = kind_of(name)
@@ -1069,13 +1112,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         view_only = meta.get("mode") == "view"
         if kind == "image":
             if view_only:
-                hero = f'<img class="hero" src="{thumb}" alt="">'
+                hero = f'<span class="shield"><img class="hero" src="{thumb}" alt=""></span>'
             else:
                 ext = os.path.splitext(name)[1].lower()
                 src = thumb if ext in (".heic", ".heif", ".avif") else raw
                 hero = f'<img class="hero" src="{src}" alt="">'
         elif kind == "video":
-            hero = (f'<img class="hero" src="{thumb}" alt="" onerror="this.style.display=\'none\'">'
+            hero = (f'<span class="shield"><img class="hero" src="{thumb}" alt="" '
+                    'onerror="this.style.display=\'none\'"></span>'
                     if view_only else f'<video class="hero" src="{raw}" controls playsinline></video>')
         elif kind == "audio" and not view_only:
             hero = f'<video class="hero" src="{raw}" controls style="max-height:70px"></video>'
@@ -1086,8 +1130,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not view_only:
             acts = f'<a class="dl" href="{raw}" download>Download</a>' + acts
         badge = '<p class="muted">Shared for viewing only</p>' if view_only else f'<p class="muted">{mb}</p>'
+        extra = self._protect_script() if view_only else ""
         self._html(200, f"<h2>{name}</h2>{badge}{hero}<div class=\"acts\">{acts}</div>"
-                   + self._copy_script(), name)
+                   + self._copy_script() + extra, name)
 
     def _share_folder_page(self, tok, meta, target):
         view_only = meta.get("mode") == "view"
@@ -1104,16 +1149,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
             img = (f'<img loading="lazy" src="{thumb}" onerror="this.style.visibility=\'hidden\'">'
                    if k in ("image", "video") else '<span style="width:52px"></span>')
             if view_only:
-                rows.append(f'<a class="f" href="{thumb}" target="_blank" rel="noopener">{img}'
-                            f'<span class="nm">{e.name}</span><small>{mb}</small></a>')
+                # shielded tile that opens an in-page lightbox — never a bare image URL
+                cell = (f'<div class="gcell" data-src="{thumb}">'
+                        f'<img loading="lazy" src="{thumb}" alt="" '
+                        'onerror="this.style.visibility=\'hidden\'"></div>'
+                        if k in ("image", "video")
+                        else '<div class="gcell" style="cursor:default"></div>')
+                rows.append(f'<div>{cell}<div class="gcap">{e.name}</div></div>')
             else:
                 rows.append(f'<div class="f">{img}<span class="nm">{e.name}</span><small>{mb}</small>'
                             f'<a href="/s/{tok}/raw?f={q}" download>Download</a></div>')
         name = os.path.basename(target)
         badge = '<p class="muted">Shared for viewing only</p>' if view_only else ''
         acts = '<div class="acts"><button class="dl ghost" onclick="cpy(this)">Copy link</button></div>'
-        self._html(200, f"<h2>{name}</h2>{badge}{acts}" + ("".join(rows) or "<p>Empty folder.</p>")
-                   + self._copy_script(), name)
+        if view_only:
+            body = (f"<h2>{name}</h2>{badge}{acts}"
+                    + (f'<div class="grid">{"".join(rows)}</div>' if rows else "<p>Empty folder.</p>")
+                    + self._copy_script() + self._lightbox_html_script() + self._protect_script())
+        else:
+            body = (f"<h2>{name}</h2>{acts}" + ("".join(rows) or "<p>Empty folder.</p>")
+                    + self._copy_script())
+        self._html(200, body, name)
 
     def _download_zip(self, rel):
         """Package a folder as a .zip and stream it (export a whole folder)."""
