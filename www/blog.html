@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="color-scheme" content="light dark"><title>Quick product updater — Timelabs Hub</title>
+<meta name="color-scheme" content="light dark"><title>Blog builder — Timelabs Hub</title>
 <style>
   :root{
     --bg:#f8f8f7; --card:#ffffff; --card-2:#f4f4f2; --border:#e8e7e3; --border-2:#dedcd6;
@@ -338,40 +338,20 @@
     .key-grip{display:none;}
   }
 
-  .pu-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
-  .pu-search{flex:1;min-width:200px;font-size:14px;border:1px solid var(--border);border-radius:var(--r-s);
-    background:var(--card);color:var(--ink);padding:9px 12px;}
-  .pu-search:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
-  .seg button{cursor:pointer;}
-  .prow{display:grid;grid-template-columns:44px 1fr 120px 120px 84px;gap:12px;align-items:center;
-    padding:11px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--card);
-    margin-bottom:8px;box-shadow:var(--shadow);}
-  .prow img{width:44px;height:44px;object-fit:cover;border-radius:8px;background:var(--card-2);}
-  .prow .ph{width:44px;height:44px;border-radius:8px;background:var(--card-2);display:flex;align-items:center;
-    justify-content:center;color:var(--muted);font-size:18px;}
-  .prow .nm{min-width:0;}
-  .prow .nm b{font-size:13.5px;font-weight:600;color:var(--ink);display:block;overflow:hidden;
-    text-overflow:ellipsis;white-space:nowrap;}
-  .prow .nm small{font-size:11.5px;color:var(--muted);}
-  .pinput{font-size:13.5px;border:1px solid var(--border);border-radius:7px;background:var(--bg);
-    color:var(--ink);padding:7px 9px;width:100%;}
-  .pinput:focus{outline:none;border-color:var(--accent);}
-  .pinput.dirty{border-color:var(--accent);background:var(--accent-bg);}
-  .psave{font-size:12.5px;font-weight:650;border:1px solid var(--border);border-radius:7px;background:var(--card);
-    color:var(--muted);padding:7px 0;cursor:not-allowed;}
-  .psave.on{background:var(--ink);color:var(--bg);border-color:var(--ink);cursor:pointer;}
-  .pu-bulk{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0;padding:11px 14px;
-    background:var(--accent-bg);border-radius:var(--r);font-size:13.5px;color:var(--ink);}
-  .pu-bulk button{font-size:12.5px;font-weight:650;border:none;border-radius:7px;background:var(--ink);
-    color:var(--bg);padding:7px 13px;cursor:pointer;}
-  .pu-setup{background:var(--warn-bg,rgba(224,173,81,.12));border-radius:var(--r);padding:16px;text-align:center;}
-  .pu-more{display:block;margin:14px auto 0;font-size:13px;font-weight:600;border:1px solid var(--border);
-    background:var(--card);color:var(--ink);border-radius:var(--r-s);padding:9px 18px;cursor:pointer;}
-  @media (max-width:640px){
-    .prow{grid-template-columns:40px 1fr;gap:8px;}
-    .prow img,.prow .ph{width:40px;height:40px;}
-    .prow .pinput,.prow .psave{grid-column:2;}
-  }
+  .setup{background:var(--accent-bg);border:1px solid transparent;border-radius:var(--r);padding:12px 15px;
+    font-size:13.5px;color:var(--ink);margin-bottom:20px;}
+  .setup.ok{background:var(--good-bg);}
+  .bgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;}
+  .bcard{display:flex;flex-direction:column;gap:6px;background:var(--card);border:1px solid var(--border);
+    border-radius:var(--r);padding:15px;box-shadow:var(--shadow);}
+  .b-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .b-pillar{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);}
+  .b-title{font-size:14.5px;font-weight:650;color:var(--ink);line-height:1.35;}
+  .b-kw{font-size:12px;color:var(--muted);}
+  .b-open{font-size:12.5px;font-weight:600;color:var(--accent);margin-top:4px;}
+  .b-chip{font-size:10.5px;font-weight:650;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:6px;}
+  .b-chip.draft{color:var(--good);background:var(--good-bg);}
+  .b-chip.prop{color:var(--muted);background:var(--card-2);}
 </style></head>
 <body>
 <div class="wrap">
@@ -379,129 +359,17 @@
   <nav class="appnav" aria-label="Apps"><a class="appitem" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg></span><span>Face</span></a><a class="appitem" href="/drop/"><span class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span><span>Drop</span></a><a class="appitem" href="/ops/ledger.html"><span class="ic"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span><span>Ledger</span></a><a class="appitem" href="/ops/agent/"><span class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg></span><span>Chat</span></a><a class="appitem active" href="/ops/tools.html"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg></span><span>Tools</span></a></nav>
   <main>
     <div class="page-head">
-      <h1 class="page-title">Quick product updater</h1>
-      <p class="page-sub">Search, re-price, and launch products fast. Changes go live on your store immediately.</p>
+      <h1 class="page-title">Blog builder</h1>
+      <p class="page-sub">Your content plan, made to win AI-search citations for Seiko-modding in India — 3 drafted, 27 queued.</p>
     </div>
-    <div id="pu-body"></div>
+    <div class="setup">One step to go: the Blog Studio needs a real Shopify Admin token to publish (it has a placeholder now). Drafts are still written and reviewed here until then.</div>
+    <section><h2>Drafted — ready to review</h2>
+      <div class="bgrid"><div class="bcard"><div class="b-top"><span class="b-pillar">Buy in India</span><span class="b-chip draft">drafted</span></div><div class="b-title">Where to Buy Seiko Mod Parts in India (2026 Guide)</div><div class="b-kw">seiko mod parts india · BOFU</div><a class="b-open" href="https://admin.shopify.com/store/xd2fwj-1h/content/articles" target="_blank" rel="noopener">Open in Shopify ↗</a></div><div class="bcard"><div class="b-top"><span class="b-pillar">Buy in India</span><span class="b-chip draft">drafted</span></div><div class="b-title">NH35 Movement Price in India: What You Should Actually Pay</div><div class="b-kw">nh35 movement price india · BOFU</div><a class="b-open" href="https://admin.shopify.com/store/xd2fwj-1h/content/articles" target="_blank" rel="noopener">Open in Shopify ↗</a></div><div class="bcard"><div class="b-top"><span class="b-pillar">Build &amp; Compatibility</span><span class="b-chip draft">drafted</span></div><div class="b-title">How to Mod a Seiko: A Beginner&#x27;s Guide (India Edition)</div><div class="b-kw">how to mod a seiko · MOFU</div><a class="b-open" href="https://admin.shopify.com/store/xd2fwj-1h/content/articles" target="_blank" rel="noopener">Open in Shopify ↗</a></div></div></section>
+    <section><h2>Queued — 27 topics</h2>
+      <div class="bgrid"><div class="bcard"><div class="b-top"><span class="b-pillar">Buy in India</span><span class="b-chip prop">queued</span></div><div class="b-title">Buying an NH35 in India Without the Customs Nightmare</div><div class="b-kw">buy nh35 india · BOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Buy in India</span><span class="b-chip prop">queued</span></div><div class="b-title">Seiko Mod Dials in India: Sizes, Prices, Where to Get Them</div><div class="b-kw">seiko mod dial india · BOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Buy in India</span><span class="b-chip prop">queued</span></div><div class="b-title">Best Seiko Mods Under ₹20,000</div><div class="b-kw">seiko mod under 20000 · BOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Build &amp; Compatibility</span><span class="b-chip prop">queued</span></div><div class="b-title">Seiko Mod Compatibility: What Fits What (NH35 Cheat-Sheet)</div><div class="b-kw">seiko mod compatibility · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Build &amp; Compatibility</span><span class="b-chip prop">queued</span></div><div class="b-title">NH35 Dial and Hand Sizes Explained</div><div class="b-kw">nh35 dial size · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Movements &amp; Parts</span><span class="b-chip prop">queued</span></div><div class="b-title">NH35 vs NH36: Which Movement Should You Buy?</div><div class="b-kw">nh35 vs nh36 · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">India &amp; Trust</span><span class="b-chip prop">queued</span></div><div class="b-title">Importing Watch Parts to India: Customs, Duty &amp; GST Explained</div><div class="b-kw">import watch parts india customs · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">India &amp; Trust</span><span class="b-chip prop">queued</span></div><div class="b-title">Is AliExpress Banned in India for Watch Parts? What to Do Instead</div><div class="b-kw">aliexpress banned india watch parts · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Style &amp; Gifting</span><span class="b-chip prop">queued</span></div><div class="b-title">Why We Started Timelabs: Building Watches in India</div><div class="b-kw">indian watch brand · TOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Buy in India</span><span class="b-chip prop">queued</span></div><div class="b-title">Seiko Mod Cases: The India Buyer&#x27;s Guide</div><div class="b-kw">seiko mod case india · BOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Build &amp; Compatibility</span><span class="b-chip prop">queued</span></div><div class="b-title">The Tools You Actually Need for Your First Mod</div><div class="b-kw">watch modding tools · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Build &amp; Compatibility</span><span class="b-chip prop">queued</span></div><div class="b-title">Bezel Inserts 101: Aluminium vs Ceramic</div><div class="b-kw">bezel insert aluminium vs ceramic · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Movements &amp; Parts</span><span class="b-chip prop">queued</span></div><div class="b-title">What Is a VK63 Mecaquartz? (And Why SEITONA Uses It)</div><div class="b-kw">vk63 movement · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Movements &amp; Parts</span><span class="b-chip prop">queued</span></div><div class="b-title">NH35 Accuracy and How to Regulate It</div><div class="b-kw">nh35 accuracy · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Movements &amp; Parts</span><span class="b-chip prop">queued</span></div><div class="b-title">Understanding Watch Dial Types: Sunburst, Sandwich, Mother-of-Pearl</div><div class="b-kw">watch dial types · TOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">India &amp; Trust</span><span class="b-chip prop">queued</span></div><div class="b-title">How to Spot a Fake NH35 Movement</div><div class="b-kw">fake nh35 movement · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">India &amp; Trust</span><span class="b-chip prop">queued</span></div><div class="b-title">Seiko Mod Warranty in India: What You Should Expect</div><div class="b-kw">seiko mod warranty india · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">India &amp; Trust</span><span class="b-chip prop">queued</span></div><div class="b-title">Is Watch Modding Legal? Homage vs Counterfeit</div><div class="b-kw">homage vs counterfeit watch · TOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Style &amp; Gifting</span><span class="b-chip prop">queued</span></div><div class="b-title">Get the Royal Oak Look for Under ₹20,000: The SEIOAK Build</div><div class="b-kw">royal oak homage india · TOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Style &amp; Gifting</span><span class="b-chip prop">queued</span></div><div class="b-title">Build a Daytona-Style Chronograph: The SEITONA Guide</div><div class="b-kw">daytona homage india · TOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Style &amp; Gifting</span><span class="b-chip prop">queued</span></div><div class="b-title">A Custom Watch Is the Gift That Lasts: Diwali Gifting Guide</div><div class="b-kw">watch gift diwali india · TOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Style &amp; Gifting</span><span class="b-chip prop">queued</span></div><div class="b-title">Wedding-Season Watch Gifts: Custom Builds for the Big Day</div><div class="b-kw">wedding gift watch india · TOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Build &amp; Compatibility</span><span class="b-chip prop">queued</span></div><div class="b-title">Don&#x27;t Want to Build It Yourself? Our Assembly Service Explained</div><div class="b-kw">seiko mod assembly service india · BOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Build &amp; Compatibility</span><span class="b-chip prop">queued</span></div><div class="b-title">How to Install a Sapphire Crystal on an SKX Mod</div><div class="b-kw">skx sapphire crystal install · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Movements &amp; Parts</span><span class="b-chip prop">queued</span></div><div class="b-title">Automatic vs Mecaquartz: Which for Your Build?</div><div class="b-kw">automatic vs mecaquartz · MOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Style &amp; Gifting</span><span class="b-chip prop">queued</span></div><div class="b-title">Nautilus-Style Watches in India: The NAUTIKO Build</div><div class="b-kw">nautilus homage india · TOFU</div></div><div class="bcard"><div class="b-top"><span class="b-pillar">Style &amp; Gifting</span><span class="b-chip prop">queued</span></div><div class="b-title">Rakhi Gifting: A Watch for Your Brother</div><div class="b-kw">rakhi gift watch · TOFU</div></div></div></section>
     <footer><span>Timelabs Hub</span><span>ops.timelabsco.in</span></footer>
   </main>
 </div>
-<div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script>
-'use strict';
-var API = '/ops/agent/api';
-var state = { q: '', filter: 'all', cursor: null, hasMore: false, selected: {} };
-function $(id){ return document.getElementById(id); }
-function esc(s){ var d=document.createElement('div'); d.textContent=s==null?'':s; return d.innerHTML; }
-var toastT;
-function toast(m){ var t=$('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(function(){t.classList.remove('show');},2600); }
-
-function shell(){
-  $('pu-body').innerHTML =
-    '<div class="pu-controls">' +
-      '<input id="q" class="pu-search" type="search" placeholder="Search products, SKU…">' +
-      '<div class="seg" id="filter">' +
-        '<button data-f="all" class="active">All</button>' +
-        '<button data-f="active">Active</button>' +
-        '<button data-f="draft">Draft</button>' +
-      '</div>' +
-    '</div>' +
-    '<div id="bulk"></div><div id="list"></div>' +
-    '<button id="more" class="pu-more" style="display:none">Load more</button>';
-  var t=null;
-  $('q').addEventListener('input', function(){ clearTimeout(t); t=setTimeout(function(){ state.q=$('q').value.trim(); load(true); }, 350); });
-  $('filter').querySelectorAll('button').forEach(function(b){ b.onclick=function(){
-    $('filter').querySelectorAll('button').forEach(function(x){x.classList.remove('active');});
-    b.classList.add('active'); state.filter=b.dataset.f; load(true);
-  }; });
-  $('more').onclick=function(){ load(false); };
-}
-
-function buildQuery(){
-  var parts=[];
-  if(state.filter!=='all') parts.push('status:'+state.filter);
-  if(state.q) parts.push(state.q);
-  return parts.join(' ');
-}
-
-async function load(reset){
-  if(reset){ state.cursor=null; state.selected={}; $('list').innerHTML='<p class="empty" style="padding:20px">Loading…</p>'; }
-  try{
-    var url=API+'/shopify/products?q='+encodeURIComponent(buildQuery())+(state.cursor?'&after='+encodeURIComponent(state.cursor):'');
-    var res=await fetch(url);
-    if(res.status===403){ location.href='/oauth2/start?rd=/ops/product-updater.html'; return; }
-    var d=await res.json();
-    if(!res.ok) throw new Error(d.error||'failed');
-    state.cursor=d.cursor; state.hasMore=d.has_more;
-    if(reset) $('list').innerHTML='';
-    if(reset && !d.products.length){ $('list').innerHTML='<p class="empty" style="padding:20px">No products match.</p>'; }
-    d.products.forEach(addRow);
-    $('more').style.display=state.hasMore?'block':'none';
-    renderBulk();
-  }catch(e){ $('list').innerHTML='<div class="pu-setup">'+esc(e.message)+'</div>'; }
-}
-
-function addRow(p){
-  var row=document.createElement('div'); row.className='prow'; row.dataset.pid=p.id; row.dataset.vid=p.variant_id||'';
-  var img = p.image ? '<img loading="lazy" src="'+esc(p.image)+'" alt="">' : '<div class="ph">◷</div>';
-  row.innerHTML = img +
-    '<div class="nm"><b>'+esc(p.title)+'</b><small>'+esc(p.sku||p.type||'')+(p.inventory!=null?' · '+p.inventory+' in stock':'')+'</small></div>' +
-    '<input class="pinput price" type="number" step="0.01" value="'+esc(p.price||'')+'" '+(p.variant_id?'':'disabled')+'>' +
-    '<select class="pinput status">' +
-      ['ACTIVE','DRAFT','ARCHIVED'].map(function(s){return '<option value="'+s+'"'+(s===p.status?' selected':'')+'>'+s.charAt(0)+s.slice(1).toLowerCase()+'</option>';}).join('') +
-    '</select>' +
-    '<button class="psave">Save</button>';
-  var priceI=row.querySelector('.price'), statusI=row.querySelector('.status'), save=row.querySelector('.psave');
-  var orig={price:p.price, status:p.status};
-  function dirty(){
-    var d=(priceI.value!==(orig.price||'')) || (statusI.value!==orig.status);
-    save.classList.toggle('on', d);
-    priceI.classList.toggle('dirty', priceI.value!==(orig.price||''));
-    statusI.classList.toggle('dirty', statusI.value!==orig.status);
-  }
-  priceI.addEventListener('input', dirty); statusI.addEventListener('change', function(){ dirty(); state.selected[p.id]=(statusI.value==='ACTIVE'&&orig.status==='DRAFT'); });
-  save.onclick=async function(){
-    if(!save.classList.contains('on')) return;
-    save.textContent='…'; save.classList.remove('on');
-    try{
-      var body={product_id:p.id, variant_id:p.variant_id, title:p.title};
-      if(priceI.value!==(orig.price||'')) body.price=priceI.value;
-      if(statusI.value!==orig.status) body.status=statusI.value;
-      var res=await fetch(API+'/shopify/product/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      var d=await res.json();
-      if(!res.ok) throw new Error(d.error||'failed');
-      orig.price=priceI.value; orig.status=statusI.value; dirty();
-      save.textContent='Saved ✓'; toast(p.title+' updated');
-      setTimeout(function(){save.textContent='Save';},1500);
-    }catch(e){ toast(e.message); save.textContent='Retry'; save.classList.add('on'); }
-  };
-  $('list').appendChild(row);
-}
-
-function renderBulk(){
-  var drafts=[].slice.call(document.querySelectorAll('.prow')).filter(function(r){return r.querySelector('.status').value==='DRAFT';});
-  var box=$('bulk');
-  if(!drafts.length){ box.innerHTML=''; return; }
-  box.innerHTML='<div class="pu-bulk"><span>'+drafts.length+' draft'+(drafts.length>1?'s':'')+' loaded</span>'+
-    '<button id="actAll">Activate all loaded drafts</button></div>';
-  $('actAll').onclick=async function(){
-    if(!confirm('Set '+drafts.length+' draft product(s) to ACTIVE (live on the store)?')) return;
-    this.textContent='Activating…'; this.disabled=true;
-    var ok=0;
-    for(var i=0;i<drafts.length;i++){
-      var r=drafts[i];
-      try{
-        await fetch(API+'/shopify/product/update',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({product_id:r.dataset.pid, status:'ACTIVE', title:r.querySelector('.nm b').textContent})});
-        ok++; r.querySelector('.status').value='ACTIVE';
-      }catch(e){}
-    }
-    toast('Activated '+ok+' product'+(ok===1?'':'s')); load(true);
-  };
-}
-
-shell(); load(true);
-</script>
 <script>
   fetch('/ops/agent/api/whoami').then(function(r){return r.ok?r.json():null;}).then(function(i){
     if(i && i.email){ var w=document.getElementById('who'); if(w) w.textContent=i.email; }

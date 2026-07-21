@@ -13,7 +13,7 @@ import sys
 import time
 
 sys.path.insert(0, "/root/ops-dashboard")
-from hub_shell import HUB_STYLE, _appnav
+from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS
 
 DB = "/root/ops-dashboard/data/suppliers.db"
 OUT = "/var/www/ops/ledger.html"
@@ -88,11 +88,7 @@ def build():
 <style>{HUB_STYLE}</style></head>
 <body>
 <div class="wrap">
-  <header class="topbar">
-    <a class="brand" href="/ops/#overview"><span class="brand-dot">T</span>
-    <span class="brand-name">Timelabs <span>Ledger</span></span></a>
-  </header>
-  {_appnav(active="ledger", drop_ready=True)}
+  {hub_header("ledger")}
   <main>
     <div class="page-head">
       <h1 class="page-title">Ledger</h1>
@@ -118,7 +114,7 @@ def build():
       <th class="n">Total paid</th></tr></thead>
       <tbody>{sup_rows or '<tr><td colspan="5" class="empty">No suppliers yet.</td></tr>'}</tbody>
     </table></div></section>
-    <footer><span>Timelabs Hub · Ledger</span><span>from suppliers.db — invoices in Drop land here once parsed</span></footer>
+    {hub_footer()}
   </main>
 </div>
 <script>
@@ -138,6 +134,7 @@ def build():
     }} catch(e){{ alert('Scan failed — try again.'); b.disabled=false; b.textContent='Scan Drop for new invoices'; }}
   }});
 </script>
+<script>{WHOAMI_JS}</script>
 </body></html>"""
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:

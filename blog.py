@@ -14,7 +14,7 @@ import sys
 import time
 
 sys.path.insert(0, "/root/ops-dashboard")
-from hub_shell import HUB_STYLE, _appnav
+from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS
 
 DB = "/root/ops-dashboard/data/hermes.db"
 OUT = "/var/www/ops/blog.html"
@@ -84,11 +84,7 @@ def build():
 </style></head>
 <body>
 <div class="wrap">
-  <header class="topbar">
-    <a class="brand" href="/ops/#overview"><span class="brand-dot">T</span>
-    <span class="brand-name">Timelabs <span>Blog</span></span></a>
-  </header>
-  {_appnav(active="tools", drop_ready=True)}
+  {hub_header("tools")}
   <main>
     <div class="page-head">
       <h1 class="page-title">Blog builder</h1>
@@ -99,9 +95,10 @@ def build():
       <div class="bgrid">{''.join(card(r) for r in drafted) or '<p class="empty">No drafts yet.</p>'}</div></section>
     <section><h2>Queued — {len(proposed)} topics</h2>
       <div class="bgrid">{''.join(card(r) for r in proposed)}</div></section>
-    <footer><span>Timelabs Hub · Blog builder</span><span>refreshed {generated}</span></footer>
+    {hub_footer()}
   </main>
 </div>
+<script>{WHOAMI_JS}</script>
 </body></html>"""
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:

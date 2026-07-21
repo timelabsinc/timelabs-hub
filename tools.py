@@ -11,7 +11,7 @@ import sys
 import time
 
 sys.path.insert(0, "/root/ops-dashboard")
-from hub_shell import HUB_STYLE, _appnav
+from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS
 
 OUT = "/var/www/ops/tools.html"
 
@@ -97,26 +97,17 @@ def build():
 </style></head>
 <body>
 <div class="wrap">
-  <header class="topbar">
-    <a class="brand" href="/ops/#overview"><span class="brand-dot">T</span>
-    <span class="brand-name">Timelabs <span>Tools</span></span></a>
-  </header>
-  {_appnav(active="tools", drop_ready=True)}
+  {hub_header("tools")}
   <main>
     <div class="page-head">
       <h1 class="page-title">All tools</h1>
       <p class="page-sub">Everything in Hub. The ones you use daily are pinned in the bar above; the rest live here — including what we're still building.</p>
     </div>
     {groups}
-    <footer><span>Timelabs Hub · Tools</span><span>refreshed {generated}</span></footer>
+    {hub_footer()}
   </main>
 </div>
-<script>
-  // reveal admin-only tiles (Key) for admins
-  fetch('/ops/agent/api/whoami').then(function(r){{return r.ok?r.json():null;}}).then(function(i){{
-    if(i&&i.admin) document.body.classList.add('is-admin');
-  }}).catch(function(){{}});
-</script>
+<script>{WHOAMI_JS}</script>
 </body></html>"""
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:

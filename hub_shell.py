@@ -795,6 +795,32 @@ def _appnav(active="face", drop_ready=False):
     return '<nav class="appnav" aria-label="Apps">' + "".join(out) + "</nav>"
 
 
+# One header + footer for every Hub page. The brand is ALWAYS "Timelabs Hub";
+# the section identity comes from the active nav pill and the page title — never
+# the brand. Keeps every page unmistakably one product.
+def hub_header(active):
+    return (
+        '<header class="topbar">'
+        '<a class="brand" href="/ops/#overview"><span class="brand-dot">T</span>'
+        '<span class="brand-name">Timelabs <span>Hub</span></span></a>'
+        '<div class="top-actions"><span id="who" class="who"></span></div>'
+        '</header>\n  ' + _appnav(active=active, drop_ready=True)
+    )
+
+
+def hub_footer(note="ops.timelabsco.in"):
+    return f'<footer><span>Timelabs Hub</span><span>{html.escape(note)}</span></footer>'
+
+
+# Fills the header's who-chip and reveals admin-only bits. Include on every page.
+WHOAMI_JS = """
+  fetch('/ops/agent/api/whoami').then(function(r){return r.ok?r.json():null;}).then(function(i){
+    if(i && i.email){ var w=document.getElementById('who'); if(w) w.textContent=i.email; }
+    if(i && i.admin) document.body.classList.add('is-admin');
+  }).catch(function(){});
+"""
+
+
 KEY_PANEL = """
 <div id="keyveil"></div>
 <aside id="keypanel" role="dialog" aria-label="Key — manage access">
@@ -857,18 +883,7 @@ def page(*, generated_at, lookback_days, source_status_html, kpi_html, verdict_h
 <body>
 {PTR}
 <div class="wrap">
-  <header class="topbar">
-    <a class="brand" href="/ops/#overview">
-      <span class="brand-dot">T</span>
-      <span class="brand-name">Timelabs <span>Hub</span></span>
-    </a>
-    <div class="top-actions">
-      <span id="who" class="who"></span>
-      <button id="refreshBtn" class="iconbtn" title="Refresh now" aria-label="Refresh now" onclick="doRefresh()">↻</button>
-    </div>
-  </header>
-
-  {_appnav(active="face", drop_ready=drop_ready)}
+  {hub_header("face")}
 
   <main>
     <div class="page-head">
@@ -921,10 +936,7 @@ def page(*, generated_at, lookback_days, source_status_html, kpi_html, verdict_h
     <div class="tabpanel" id="tab-content">{content_html or '<section><div class="panel"><p class="empty">Approved marketing copy will collect here.</p></div></section>'}</div>
     <div class="tabpanel" id="tab-findings">{findings_html}</div>
 
-    <footer>
-      <span>Timelabs Hub</span>
-      <span>daily refresh + on-demand</span>
-    </footer>
+    {hub_footer()}
   </main>
 </div>
 {KEY_PANEL}

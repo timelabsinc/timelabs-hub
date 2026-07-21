@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="color-scheme" content="light dark"><title>Quick product updater — Timelabs Hub</title>
+<meta name="color-scheme" content="light dark"><title>Ledger — Timelabs Hub</title>
 <style>
   :root{
     --bg:#f8f8f7; --card:#ffffff; --card-2:#f4f4f2; --border:#e8e7e3; --border-2:#dedcd6;
@@ -337,170 +337,55 @@
     #keypanel.open{transform:translate(-50%,50%) scale(1);opacity:1;pointer-events:auto;}
     .key-grip{display:none;}
   }
-
-  .pu-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
-  .pu-search{flex:1;min-width:200px;font-size:14px;border:1px solid var(--border);border-radius:var(--r-s);
-    background:var(--card);color:var(--ink);padding:9px 12px;}
-  .pu-search:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
-  .seg button{cursor:pointer;}
-  .prow{display:grid;grid-template-columns:44px 1fr 120px 120px 84px;gap:12px;align-items:center;
-    padding:11px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--card);
-    margin-bottom:8px;box-shadow:var(--shadow);}
-  .prow img{width:44px;height:44px;object-fit:cover;border-radius:8px;background:var(--card-2);}
-  .prow .ph{width:44px;height:44px;border-radius:8px;background:var(--card-2);display:flex;align-items:center;
-    justify-content:center;color:var(--muted);font-size:18px;}
-  .prow .nm{min-width:0;}
-  .prow .nm b{font-size:13.5px;font-weight:600;color:var(--ink);display:block;overflow:hidden;
-    text-overflow:ellipsis;white-space:nowrap;}
-  .prow .nm small{font-size:11.5px;color:var(--muted);}
-  .pinput{font-size:13.5px;border:1px solid var(--border);border-radius:7px;background:var(--bg);
-    color:var(--ink);padding:7px 9px;width:100%;}
-  .pinput:focus{outline:none;border-color:var(--accent);}
-  .pinput.dirty{border-color:var(--accent);background:var(--accent-bg);}
-  .psave{font-size:12.5px;font-weight:650;border:1px solid var(--border);border-radius:7px;background:var(--card);
-    color:var(--muted);padding:7px 0;cursor:not-allowed;}
-  .psave.on{background:var(--ink);color:var(--bg);border-color:var(--ink);cursor:pointer;}
-  .pu-bulk{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0;padding:11px 14px;
-    background:var(--accent-bg);border-radius:var(--r);font-size:13.5px;color:var(--ink);}
-  .pu-bulk button{font-size:12.5px;font-weight:650;border:none;border-radius:7px;background:var(--ink);
-    color:var(--bg);padding:7px 13px;cursor:pointer;}
-  .pu-setup{background:var(--warn-bg,rgba(224,173,81,.12));border-radius:var(--r);padding:16px;text-align:center;}
-  .pu-more{display:block;margin:14px auto 0;font-size:13px;font-weight:600;border:1px solid var(--border);
-    background:var(--card);color:var(--ink);border-radius:var(--r-s);padding:9px 18px;cursor:pointer;}
-  @media (max-width:640px){
-    .prow{grid-template-columns:40px 1fr;gap:8px;}
-    .prow img,.prow .ph{width:40px;height:40px;}
-    .prow .pinput,.prow .psave{grid-column:2;}
-  }
 </style></head>
 <body>
 <div class="wrap">
   <header class="topbar"><a class="brand" href="/ops/#overview"><span class="brand-dot">T</span><span class="brand-name">Timelabs <span>Hub</span></span></a><div class="top-actions"><span id="who" class="who"></span></div></header>
-  <nav class="appnav" aria-label="Apps"><a class="appitem" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg></span><span>Face</span></a><a class="appitem" href="/drop/"><span class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span><span>Drop</span></a><a class="appitem" href="/ops/ledger.html"><span class="ic"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span><span>Ledger</span></a><a class="appitem" href="/ops/agent/"><span class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg></span><span>Chat</span></a><a class="appitem active" href="/ops/tools.html"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg></span><span>Tools</span></a></nav>
+  <nav class="appnav" aria-label="Apps"><a class="appitem" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg></span><span>Face</span></a><a class="appitem" href="/drop/"><span class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span><span>Drop</span></a><a class="appitem active" href="/ops/ledger.html"><span class="ic"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span><span>Ledger</span></a><a class="appitem" href="/ops/agent/"><span class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg></span><span>Chat</span></a><a class="appitem" href="/ops/tools.html"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg></span><span>Tools</span></a></nav>
   <main>
     <div class="page-head">
-      <h1 class="page-title">Quick product updater</h1>
-      <p class="page-sub">Search, re-price, and launch products fast. Changes go live on your store immediately.</p>
+      <h1 class="page-title">Ledger</h1>
+      <p class="page-sub">What sourcing actually costs — suppliers, landed parts, and planned margins.</p>
+      <div class="head-controls">
+        <button class="btn" id="impBtn">Scan Drop for new invoices</button>
+        <span class="refreshed num">refreshed 2026-07-21 12:43 UTC</span>
+      </div>
     </div>
-    <div id="pu-body"></div>
+    <section><div class="kpis"><div class="kpi"><div class="kpi-top"><span class="label">Total paid</span></div><div class="val num">₹0</div><div class="ctx">31 invoices</div></div><div class="kpi"><div class="kpi-top"><span class="label">Freight</span></div><div class="val num">₹0</div><div class="ctx">international shipping</div></div><div class="kpi"><div class="kpi-top"><span class="label">Customs</span></div><div class="val num">₹0</div><div class="ctx">BCD + SWS + IGST</div></div><div class="kpi"><div class="kpi-top"><span class="label">Landed total</span></div><div class="val num">₹0</div><div class="ctx">everything, in INR</div></div></div></section>
+    <section><h2>Planned SKU margins</h2><div class="panel tscroll"><table>
+      <thead><tr><th>SKU</th><th>Category</th><th class="n">Price</th><th class="n">Cost</th>
+      <th class="n">Margin</th><th>Status</th></tr></thead>
+      <tbody><tr><td>NH35 movement — regulated 0/+10 s-d</td><td>movement</td><td class="n num">₹8,999</td><td class="n num">₹4,704</td><td class="n"><span class="pill warn">48%</span></td><td>pushed-draft</td></tr><tr><td>NH35 movement — factory spec</td><td>movement</td><td class="n num">₹6,999</td><td class="n num">₹4,704</td><td class="n"><span class="pill crit">33%</span></td><td>pushed-draft</td></tr><tr><td>SKX007/SRPD classic case</td><td>case</td><td class="n num">₹5,999</td><td class="n num">₹2,688</td><td class="n"><span class="pill good">55%</span></td><td>pushed-draft</td></tr><tr><td>Submariner-style case</td><td>case</td><td class="n num">₹5,999</td><td class="n num">₹2,688</td><td class="n"><span class="pill good">55%</span></td><td>pushed-draft</td></tr><tr><td>Fifty-Eight-style case</td><td>case</td><td class="n num">₹5,999</td><td class="n num">₹2,688</td><td class="n"><span class="pill good">55%</span></td><td>pushed-draft</td></tr><tr><td>Mother-of-pearl dial</td><td>dial</td><td class="n num">₹4,999</td><td class="n num">₹1,512</td><td class="n"><span class="pill good">70%</span></td><td>pushed-draft</td></tr><tr><td>Tapisserie dial (Royal-Oak style)</td><td>dial</td><td class="n num">₹4,499</td><td class="n num">₹1,512</td><td class="n"><span class="pill good">66%</span></td><td>pushed-draft</td></tr><tr><td>Ceramic bezel insert</td><td>bezel-insert</td><td class="n num">₹3,999</td><td class="n num">₹800</td><td class="n"><span class="pill good">80%</span></td><td>pushed-draft</td></tr><tr><td>Lumed sandwich/Mil-spec dial</td><td>dial</td><td class="n num">₹3,499</td><td class="n num">₹1,512</td><td class="n"><span class="pill good">57%</span></td><td>pushed-draft</td></tr><tr><td>Double-domed sapphire crystal</td><td>crystal</td><td class="n num">₹3,499</td><td class="n num">₹700</td><td class="n"><span class="pill good">80%</span></td><td>pushed-draft</td></tr><tr><td>VK63 mecaquartz chrono movement</td><td>movement</td><td class="n num">₹2,999</td><td class="n num">₹1,680</td><td class="n"><span class="pill warn">44%</span></td><td>pushed-draft</td></tr><tr><td>Flat sapphire crystal SKX</td><td>crystal</td><td class="n num">₹2,999</td><td class="n num">₹700</td><td class="n"><span class="pill good">77%</span></td><td>pushed-draft</td></tr><tr><td>Sunburst dial 28.5mm (NH35)</td><td>dial</td><td class="n num">₹2,499</td><td class="n num">₹588</td><td class="n"><span class="pill good">76%</span></td><td>pushed-draft</td></tr><tr><td>Chrono hand set — Daytona style</td><td>hands</td><td class="n num">₹1,999</td><td class="n num">₹294</td><td class="n"><span class="pill good">85%</span></td><td>pushed-draft</td></tr><tr><td>Hand set — premium BGW9 lume</td><td>hands</td><td class="n num">₹1,499</td><td class="n num">₹294</td><td class="n"><span class="pill good">80%</span></td><td>pushed-draft</td></tr><tr><td>Aluminium bezel insert</td><td>bezel-insert</td><td class="n num">₹1,499</td><td class="n num">₹800</td><td class="n"><span class="pill warn">47%</span></td><td>pushed-draft</td></tr><tr><td>Hand set — Mercedes/sword/snowflake</td><td>hands</td><td class="n num">₹999</td><td class="n num">₹294</td><td class="n"><span class="pill good">71%</span></td><td>pushed-draft</td></tr><tr><td>Build Your First Watch kit (NH35+case+dial+hands+tools)</td><td>complete-kit</td><td class="n num">₹18,999</td><td class="n num">₹9,000</td><td class="n"><span class="pill warn">53%</span></td><td>proposed</td></tr><tr><td>Royal-Oak-style integrated case + bracelet</td><td>case</td><td class="n num">₹13,999</td><td class="n num">₹2,688</td><td class="n"><span class="pill good">81%</span></td><td>pushed-draft</td></tr><tr><td>36mm fluted dress case bundle</td><td>case</td><td class="n num">₹10,999</td><td class="n num">₹2,688</td><td class="n"><span class="pill good">76%</span></td><td>proposed</td></tr><tr><td>Nautilus-style integrated case + bracelet</td><td>case</td><td class="n num">₹9,999</td><td class="n num">₹2,940</td><td class="n"><span class="pill good">71%</span></td><td>pushed-draft</td></tr><tr><td>NH36 day-date movement</td><td>movement</td><td class="n num">₹7,999</td><td class="n num">₹5,000</td><td class="n"><span class="pill warn">37%</span></td><td>proposed</td></tr><tr><td>Daytona-style chrono case (VK63)</td><td>case</td><td class="n num">₹7,499</td><td class="n num">₹2,688</td><td class="n"><span class="pill good">64%</span></td><td>proposed</td></tr><tr><td>Oyster/jubilee bracelet (SKX fit)</td><td>bracelet</td><td class="n num">₹4,999</td><td class="n num">₹1,344</td><td class="n"><span class="pill good">73%</span></td><td>proposed</td></tr><tr><td>Skeleton dial</td><td>dial</td><td class="n num">₹4,499</td><td class="n num">₹1,512</td><td class="n"><span class="pill good">66%</span></td><td>proposed</td></tr><tr><td>Roman/Arabic dial (Santos style)</td><td>dial</td><td class="n num">₹3,499</td><td class="n num">₹1,512</td><td class="n"><span class="pill good">57%</span></td><td>pushed-draft</td></tr><tr><td>Sapphire display caseback</td><td>caseback</td><td class="n num">₹2,999</td><td class="n num">₹800</td><td class="n"><span class="pill good">73%</span></td><td>proposed</td></tr><tr><td>Signed crown</td><td>crown</td><td class="n num">₹1,999</td><td class="n num">₹150</td><td class="n"><span class="pill good">92%</span></td><td>proposed</td></tr><tr><td>Essentials mod toolkit</td><td>tool</td><td class="n num">₹1,999</td><td class="n num">₹600</td><td class="n"><span class="pill good">70%</span></td><td>proposed</td></tr><tr><td>Chapter ring</td><td>chapter-ring</td><td class="n num">₹1,799</td><td class="n num">₹500</td><td class="n"><span class="pill good">72%</span></td><td>proposed</td></tr></tbody>
+    </table></div></section>
+    <section><h2>Cost per part</h2><div class="panel tscroll"><table>
+      <thead><tr><th>Part</th><th>Fits</th><th class="n">Qty</th><th class="n">Avg unit</th>
+      <th class="n">Total spend</th></tr></thead>
+      <tbody><tr><td>Bracelet</td><td>—</td><td class="n num">6</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Bracelet</td><td>NH35</td><td class="n num">1</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Bracelet</td><td>VK63</td><td class="n num">1</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Case</td><td>—</td><td class="n num">2</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Case</td><td>8285</td><td class="n num">1</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Case</td><td>NH05</td><td class="n num">1</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Case</td><td>NH34</td><td class="n num">4</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Case</td><td>NH35</td><td class="n num">29</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Case</td><td>VK63</td><td class="n num">2</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Clasp</td><td>—</td><td class="n num">1</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Complete-Watch</td><td>—</td><td class="n num">34</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Complete-Watch</td><td>8285</td><td class="n num">4</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Complete-Watch</td><td>NH05</td><td class="n num">5</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Complete-Watch</td><td>NH34</td><td class="n num">6</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Complete-Watch</td><td>NH35</td><td class="n num">32</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Complete-Watch</td><td>NH36</td><td class="n num">2</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Complete-Watch</td><td>NH38</td><td class="n num">5</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Complete-Watch</td><td>ST3600</td><td class="n num">1</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Complete-Watch</td><td>VK63</td><td class="n num">25</td><td class="n num">₹0</td><td class="n num">₹0</td></tr><tr><td>Crown</td><td>NH35</td><td class="n num">11</td><td class="n num">₹0</td><td class="n num">₹0</td></tr></tbody>
+    </table></div></section>
+    <section><h2>Suppliers</h2><div class="panel tscroll"><table>
+      <thead><tr><th>Supplier</th><th class="n">Invoices</th><th>First</th><th>Last</th>
+      <th class="n">Total paid</th></tr></thead>
+      <tbody><tr><td>Shenzhen Chengdaxin Technology Co.,Ltd</td><td class="n num">31</td><td class="num">2025-06-02</td><td class="num">2026-06-30</td><td class="n num">₹0</td></tr></tbody>
+    </table></div></section>
     <footer><span>Timelabs Hub</span><span>ops.timelabsco.in</span></footer>
   </main>
 </div>
-<div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>
-'use strict';
-var API = '/ops/agent/api';
-var state = { q: '', filter: 'all', cursor: null, hasMore: false, selected: {} };
-function $(id){ return document.getElementById(id); }
-function esc(s){ var d=document.createElement('div'); d.textContent=s==null?'':s; return d.innerHTML; }
-var toastT;
-function toast(m){ var t=$('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(function(){t.classList.remove('show');},2600); }
-
-function shell(){
-  $('pu-body').innerHTML =
-    '<div class="pu-controls">' +
-      '<input id="q" class="pu-search" type="search" placeholder="Search products, SKU…">' +
-      '<div class="seg" id="filter">' +
-        '<button data-f="all" class="active">All</button>' +
-        '<button data-f="active">Active</button>' +
-        '<button data-f="draft">Draft</button>' +
-      '</div>' +
-    '</div>' +
-    '<div id="bulk"></div><div id="list"></div>' +
-    '<button id="more" class="pu-more" style="display:none">Load more</button>';
-  var t=null;
-  $('q').addEventListener('input', function(){ clearTimeout(t); t=setTimeout(function(){ state.q=$('q').value.trim(); load(true); }, 350); });
-  $('filter').querySelectorAll('button').forEach(function(b){ b.onclick=function(){
-    $('filter').querySelectorAll('button').forEach(function(x){x.classList.remove('active');});
-    b.classList.add('active'); state.filter=b.dataset.f; load(true);
-  }; });
-  $('more').onclick=function(){ load(false); };
-}
-
-function buildQuery(){
-  var parts=[];
-  if(state.filter!=='all') parts.push('status:'+state.filter);
-  if(state.q) parts.push(state.q);
-  return parts.join(' ');
-}
-
-async function load(reset){
-  if(reset){ state.cursor=null; state.selected={}; $('list').innerHTML='<p class="empty" style="padding:20px">Loading…</p>'; }
-  try{
-    var url=API+'/shopify/products?q='+encodeURIComponent(buildQuery())+(state.cursor?'&after='+encodeURIComponent(state.cursor):'');
-    var res=await fetch(url);
-    if(res.status===403){ location.href='/oauth2/start?rd=/ops/product-updater.html'; return; }
-    var d=await res.json();
-    if(!res.ok) throw new Error(d.error||'failed');
-    state.cursor=d.cursor; state.hasMore=d.has_more;
-    if(reset) $('list').innerHTML='';
-    if(reset && !d.products.length){ $('list').innerHTML='<p class="empty" style="padding:20px">No products match.</p>'; }
-    d.products.forEach(addRow);
-    $('more').style.display=state.hasMore?'block':'none';
-    renderBulk();
-  }catch(e){ $('list').innerHTML='<div class="pu-setup">'+esc(e.message)+'</div>'; }
-}
-
-function addRow(p){
-  var row=document.createElement('div'); row.className='prow'; row.dataset.pid=p.id; row.dataset.vid=p.variant_id||'';
-  var img = p.image ? '<img loading="lazy" src="'+esc(p.image)+'" alt="">' : '<div class="ph">◷</div>';
-  row.innerHTML = img +
-    '<div class="nm"><b>'+esc(p.title)+'</b><small>'+esc(p.sku||p.type||'')+(p.inventory!=null?' · '+p.inventory+' in stock':'')+'</small></div>' +
-    '<input class="pinput price" type="number" step="0.01" value="'+esc(p.price||'')+'" '+(p.variant_id?'':'disabled')+'>' +
-    '<select class="pinput status">' +
-      ['ACTIVE','DRAFT','ARCHIVED'].map(function(s){return '<option value="'+s+'"'+(s===p.status?' selected':'')+'>'+s.charAt(0)+s.slice(1).toLowerCase()+'</option>';}).join('') +
-    '</select>' +
-    '<button class="psave">Save</button>';
-  var priceI=row.querySelector('.price'), statusI=row.querySelector('.status'), save=row.querySelector('.psave');
-  var orig={price:p.price, status:p.status};
-  function dirty(){
-    var d=(priceI.value!==(orig.price||'')) || (statusI.value!==orig.status);
-    save.classList.toggle('on', d);
-    priceI.classList.toggle('dirty', priceI.value!==(orig.price||''));
-    statusI.classList.toggle('dirty', statusI.value!==orig.status);
-  }
-  priceI.addEventListener('input', dirty); statusI.addEventListener('change', function(){ dirty(); state.selected[p.id]=(statusI.value==='ACTIVE'&&orig.status==='DRAFT'); });
-  save.onclick=async function(){
-    if(!save.classList.contains('on')) return;
-    save.textContent='…'; save.classList.remove('on');
-    try{
-      var body={product_id:p.id, variant_id:p.variant_id, title:p.title};
-      if(priceI.value!==(orig.price||'')) body.price=priceI.value;
-      if(statusI.value!==orig.status) body.status=statusI.value;
-      var res=await fetch(API+'/shopify/product/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      var d=await res.json();
-      if(!res.ok) throw new Error(d.error||'failed');
-      orig.price=priceI.value; orig.status=statusI.value; dirty();
-      save.textContent='Saved ✓'; toast(p.title+' updated');
-      setTimeout(function(){save.textContent='Save';},1500);
-    }catch(e){ toast(e.message); save.textContent='Retry'; save.classList.add('on'); }
-  };
-  $('list').appendChild(row);
-}
-
-function renderBulk(){
-  var drafts=[].slice.call(document.querySelectorAll('.prow')).filter(function(r){return r.querySelector('.status').value==='DRAFT';});
-  var box=$('bulk');
-  if(!drafts.length){ box.innerHTML=''; return; }
-  box.innerHTML='<div class="pu-bulk"><span>'+drafts.length+' draft'+(drafts.length>1?'s':'')+' loaded</span>'+
-    '<button id="actAll">Activate all loaded drafts</button></div>';
-  $('actAll').onclick=async function(){
-    if(!confirm('Set '+drafts.length+' draft product(s) to ACTIVE (live on the store)?')) return;
-    this.textContent='Activating…'; this.disabled=true;
-    var ok=0;
-    for(var i=0;i<drafts.length;i++){
-      var r=drafts[i];
-      try{
-        await fetch(API+'/shopify/product/update',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({product_id:r.dataset.pid, status:'ACTIVE', title:r.querySelector('.nm b').textContent})});
-        ok++; r.querySelector('.status').value='ACTIVE';
-      }catch(e){}
-    }
-    toast('Activated '+ok+' product'+(ok===1?'':'s')); load(true);
-  };
-}
-
-shell(); load(true);
+  document.getElementById('impBtn').addEventListener('click', async function(){
+    var b = this; b.disabled = true; b.textContent = 'Scanning…';
+    try {
+      var res = await fetch('/ops/agent/api/ledger/import', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+      var d = await res.json();
+      var ok = (d.results||[]).filter(function(r){return !r.error;});
+      if(!ok.length){ alert('No new invoices in Drop — Ledger is up to date.'); b.disabled=false; b.textContent='Scan Drop for new invoices'; return; }
+      var lines = ok.map(function(r){return '• ' + r.file + ' — ' + r.date + ' · ' + r.items + ' items · $' + r.total_usd;}).join('\n');
+      if(confirm('Found ' + ok.length + ' new invoice(s):\n\n' + lines + '\n\nImport into Ledger? (Totals are best-effort — check against the invoice.)')){
+        b.textContent = 'Importing…';
+        await fetch('/ops/agent/api/ledger/import', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{"commit":true}'});
+        setTimeout(function(){ location.reload(); }, 1200);
+      } else { b.disabled=false; b.textContent='Scan Drop for new invoices'; }
+    } catch(e){ alert('Scan failed — try again.'); b.disabled=false; b.textContent='Scan Drop for new invoices'; }
+  });
 </script>
 <script>
   fetch('/ops/agent/api/whoami').then(function(r){return r.ok?r.json():null;}).then(function(i){
