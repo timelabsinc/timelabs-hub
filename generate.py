@@ -16,8 +16,9 @@ import urllib.request
 import urllib.error
 
 sys.path.insert(0, "/root/ops-dashboard")
-from hub_shell import (  # the Hub/Face "Caliber" shell + chart engine
-    page, source_chip, _refund_pct, kpi_card, svg_gauge, svg_revenue_chart,
+from hub_shell import (  # the Hub/Face "Meridian" shell + chart engine
+    page, source_chip, _refund_pct, kpi_card, stat_pill, svg_revenue_chart,
+    verdict_banner,
 )
 
 ENV_PATH = "/root/ops-dashboard/.env"
@@ -565,23 +566,21 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
                              raw=round(meta["total_spend"]), prefix="₹")
     kpi_html = kpi_html or '<p class="empty">No sources connected yet.</p>'
 
-    # --- instrument dials + revenue chart (fail-soft when data is absent) ---
-    dials_html = ""
+    # --- conversion stat strip + revenue chart (fail-soft when data absent) ---
+    stats_html = ""
     if shopify.get("connected"):
         gross = shopify.get("gross_sales") or shopify.get("total_sales") or 0
         if gross > 0 and shopify.get("refund_total"):
             pct = 100 * shopify["refund_total"] / gross
-            dials_html += svg_gauge(pct, "Refund rate", "of gross, clawed back",
-                                    tone="crit" if pct > 12 else "accent")
+            stats_html += stat_pill("refund rate", f"{pct:.0f}%",
+                                    tone="crit" if pct > 12 else "")
         funnel = shopify.get("funnel") or {}
         cart, checkout = funnel.get("added_to_cart") or 0, funnel.get("reached_checkout") or 0
-        if cart:
-            dials_html += svg_gauge(100 * checkout / cart, "Cart → checkout",
-                                    "the verified funnel leak", tone="accent")
         sessions = funnel.get("sessions") or 0
         if sessions and cart:
-            dials_html += svg_gauge(100 * cart / sessions, "Session → cart",
-                                    "browse-to-intent", tone="good")
+            stats_html += stat_pill("session → cart", f"{100 * cart / sessions:.1f}%")
+        if cart:
+            stats_html += stat_pill("cart → checkout", f"{100 * checkout / cart:.0f}%")
 
     revenue_chart_html = ""
     if sales_daily and shopify.get("sales_daily_span"):
@@ -616,12 +615,7 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
                 f'<td class="n num">{c["ctr"]:.2f}%</td></tr>'
             )
 
-    verdict_html = (
-        '<div class="verdict"><div><b>Reading</b><p>'
-        + html.escape(analysis["text"])
-        + '</p><span class="stale">via ' + html.escape(analysis["model"])
-        + '</span></div></div>'
-    ) if analysis else ""
+    verdict_html = verdict_banner(analysis)
 
     source_status_html = (
         source_chip(shopify, "Shopify")
@@ -655,7 +649,7 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
         content_html=content_html,
         findings_html=findings_html,
         health_html=health_html,
-        dials_html=dials_html,
+        stats_html=stats_html,
         revenue_chart_html=revenue_chart_html,
         drop_ready=True,
     )

@@ -52,7 +52,7 @@ server {
         auth_request /oauth2/auth;
         error_page 401 = @oauth2_signin;
 
-        proxy_pass http://127.0.0.1:3923/;
+        proxy_pass http://127.0.0.1:3923;   # NO trailing slash: rp-loc needs the /drop/ prefix kept
         proxy_http_version 1.1;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
