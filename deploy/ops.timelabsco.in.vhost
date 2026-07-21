@@ -1,0 +1,139 @@
+# ops.timelabsco.in — HTTP: ACME renewal passthrough + redirect everything else to HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ops.timelabsco.in;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ops.timelabsco.in — HTTPS, Google-login version.
+# The password path (/ops-auth-check, @ops_login_redirect -> /ops/login)
+# is left in place below, unused, as a fast rollback: point auth_request
+# back at it and remove the oauth2 locations to undo this step.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ops.timelabsco.in;
+    http2 on;
+
+    ssl_certificate     /etc/letsencrypt/live/ops.timelabsco.in-0001/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ops.timelabsco.in-0001/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:MozSSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    client_max_body_size 50m;
+
+    root /var/www/html;
+
+    # bare domain -> Hub (nobody should need to know to type /ops)
+    location = / {
+        return 302 /ops;
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    # --- Drop (copyparty file tunnel), behind Key ---
+    location = /drop { return 301 /drop/; }
+    location /drop/ {
+        auth_request /oauth2/auth;
+        error_page 401 = @oauth2_signin;
+
+        proxy_pass http://127.0.0.1:3923/;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        client_max_body_size   2g;      # 200 MB product video + headroom
+        proxy_request_buffering off;    # stream uploads straight through
+        proxy_read_timeout     900s;    # slow-cellular multi-minute uploads
+        proxy_send_timeout     900s;
+    }
+
+    # --- old password gate: kept, unused, for rollback ---
+    location = /ops-auth-check {
+        internal;
+        proxy_pass http://127.0.0.1:8899/auth;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Original-URI $request_uri;
+    }
+    location @ops_login_redirect {
+        return 302 /ops/login;
+    }
+    location /ops/login {
+        proxy_pass http://127.0.0.1:8899/login;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+    location /ops/reset {
+        proxy_pass http://127.0.0.1:8899/reset;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # --- oauth2-proxy: the live gate ---
+    location /oauth2/ {
+        proxy_pass       http://127.0.0.1:4180;
+        proxy_set_header Host                    $host;
+        proxy_set_header X-Real-IP               $remote_addr;
+        proxy_set_header X-Scheme                $scheme;
+        proxy_set_header X-Auth-Request-Redirect $request_uri;
+    }
+
+    location = /oauth2/auth {
+        internal;
+        proxy_pass        http://127.0.0.1:4180;
+        proxy_set_header  Host           $host;
+        proxy_set_header  X-Real-IP      $remote_addr;
+        proxy_set_header  X-Scheme       $scheme;
+        proxy_set_header  Content-Length "";
+        proxy_pass_request_body off;
+    }
+
+    location @oauth2_signin {
+        return 302 /oauth2/start?rd=$request_uri;
+    }
+
+    location /ops {
+        alias /var/www/ops;
+        auth_request /oauth2/auth;
+        error_page 401 = @oauth2_signin;
+    }
+
+    location /ops/agent/api/ {
+        auth_request /oauth2/auth;
+        error_page 401 = @oauth2_signin;
+        auth_request_set $email $upstream_http_x_auth_request_email;
+        proxy_set_header X-User-Email $email;
+        proxy_pass http://127.0.0.1:8901/;
+        proxy_read_timeout 300s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /ops/refresh {
+        auth_request /oauth2/auth;
+        error_page 401 = @oauth2_signin;
+        proxy_pass http://127.0.0.1:8877/refresh;
+        proxy_read_timeout 270s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}

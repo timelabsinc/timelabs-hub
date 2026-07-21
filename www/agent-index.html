@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Timelabs — Agent</title>
+<style>
+  :root{ /* Caliber palette — keep in sync with hub_shell.py */
+    --ground:#0a0f0c;--surface:#131a15;--surface-2:#1a231d;--ink:#f0f4ef;--muted:#94a89b;
+    --line:#25332b;--accent:#d4af6a;--accent-soft:rgba(212,175,106,.13);--crit:#e06a45;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:"SF Mono","Cascadia Code","Consolas",ui-monospace,monospace;
+  }
+  @media (prefers-color-scheme: light){
+    :root{--ground:#edefe9;--surface:#fff;--surface-2:#f4f6f1;--ink:#141d17;--muted:#54685c;
+      --line:#dbe2da;--accent:#8a6a2c;--accent-soft:rgba(138,106,44,.11);--crit:#c1502e;}
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    display:flex;}
+  #app{flex:1;display:flex;flex-direction:column;min-width:0;height:100vh;height:100dvh;}
+
+  /* ---- sessions sidebar ---- */
+  #side{width:230px;flex:none;border-right:1px solid var(--line);background:var(--surface);
+    display:flex;flex-direction:column;height:100vh;height:100dvh;}
+  #side .side-head{padding:.9rem .9rem .6rem;display:flex;align-items:center;justify-content:space-between;}
+  #side .side-title{font-family:var(--mono);font-size:.62rem;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--muted);}
+  #newChat{font-family:var(--mono);font-size:.7rem;border:1px solid var(--accent);color:var(--accent);
+    background:transparent;border-radius:6px;padding:.3rem .6rem;cursor:pointer;}
+  #newChat:hover{background:var(--accent-soft);}
+  #sessionList{flex:1;overflow-y:auto;padding:.3rem .5rem .8rem;}
+  .sess{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;
+    border-radius:8px;padding:.5rem .6rem;cursor:pointer;color:var(--ink);font-size:.8rem;
+    line-height:1.3;margin-bottom:.15rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .sess:hover{border-color:var(--line);}
+  .sess.active{background:var(--accent-soft);border-color:var(--accent);}
+  .sess .when{display:block;font-family:var(--mono);font-size:.58rem;color:var(--muted);margin-top:.1rem;}
+  #sideToggle{display:none;}
+  @media (max-width:720px){
+    #side{position:fixed;left:0;top:0;bottom:0;z-index:30;transform:translateX(-100%);
+      transition:transform .2s;box-shadow:4px 0 20px rgba(0,0,0,.3);}
+    #side.open{transform:none;}
+    #sideToggle{display:inline-block;}
+    @media (prefers-reduced-motion: reduce){ #side{transition:none;} }
+  }
+
+  /* template chips above input */
+  .tchips{display:flex;gap:.4rem;max-width:760px;margin:0 auto .5rem;flex-wrap:wrap;}
+  .tchip{font-family:var(--mono);font-size:.64rem;border:1px solid var(--line);border-radius:999px;
+    background:var(--surface);color:var(--muted);padding:.28rem .65rem;cursor:pointer;}
+  .tchip:hover{border-color:var(--accent);color:var(--ink);}
+
+  header{display:flex;align-items:center;justify-content:space-between;gap:1rem;
+    padding:.9rem 1.2rem;border-bottom:1px solid var(--line);flex:none;}
+  .brand{display:flex;flex-direction:column;gap:.15rem;}
+  .wordmark{font-family:var(--mono);font-size:.62rem;letter-spacing:.28em;text-transform:uppercase;color:var(--accent);}
+  h1{font-family:var(--serif);font-weight:600;font-size:1.15rem;margin:0;}
+  .hdr-actions{display:flex;gap:.5rem;align-items:center;}
+  .hbtn{font-family:var(--mono);font-size:.7rem;color:var(--muted);text-decoration:none;
+    border:1px solid var(--line);border-radius:6px;padding:.35rem .7rem;background:transparent;cursor:pointer;}
+  .hbtn:hover{border-color:var(--accent);color:var(--ink);}
+
+  #chat{flex:1;overflow-y:auto;padding:1.2rem;display:flex;flex-direction:column;gap:.8rem;
+    scroll-behavior:smooth;}
+  .daysep{align-self:center;font-family:var(--mono);font-size:.62rem;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--muted);padding:.2rem .8rem;border:1px solid var(--line);
+    border-radius:999px;background:var(--surface);}
+  .msg{max-width:min(700px,88%);padding:.75rem 1rem .55rem;border-radius:12px;font-size:.93rem;
+    line-height:1.55;word-wrap:break-word;position:relative;}
+  .msg.user{align-self:flex-end;background:var(--accent-soft);border:1px solid var(--accent);
+    border-bottom-right-radius:4px;white-space:pre-wrap;}
+  .msg.agent{align-self:flex-start;background:var(--surface);border:1px solid var(--line);
+    border-bottom-left-radius:4px;}
+  .msg .who{display:flex;justify-content:space-between;gap:1rem;font-family:var(--mono);
+    font-size:.6rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:.35rem;}
+  .msg.agent .who b{color:var(--accent);font-weight:600;}
+  .msg .who time{font-weight:400;letter-spacing:.04em;}
+
+  /* rendered markdown */
+  .md h1,.md h2,.md h3{font-family:var(--serif);margin:.7rem 0 .35rem;line-height:1.25;}
+  .md h1{font-size:1.2rem}.md h2{font-size:1.08rem}.md h3{font-size:.98rem}
+  .md p{margin:.45rem 0;}
+  .md ul,.md ol{margin:.45rem 0;padding-left:1.4rem;}
+  .md li{margin:.2rem 0;}
+  .md code{font-family:var(--mono);font-size:.84em;background:var(--surface-2);
+    padding:.08em .35em;border-radius:4px;}
+  .md pre{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
+    padding:.7rem .9rem;overflow-x:auto;margin:.55rem 0;}
+  .md pre code{background:none;padding:0;font-size:.8rem;line-height:1.5;}
+  .md blockquote{margin:.55rem 0;padding:.2rem .9rem;border-left:3px solid var(--accent);
+    color:var(--muted);}
+  .md table{border-collapse:collapse;margin:.55rem 0;font-size:.85rem;display:block;overflow-x:auto;}
+  .md th,.md td{border:1px solid var(--line);padding:.35rem .6rem;text-align:left;}
+  .md th{background:var(--surface-2);font-weight:600;}
+  .md a{color:var(--accent);}
+  .md hr{border:none;border-top:1px solid var(--line);margin:.8rem 0;}
+  .md strong{font-weight:650;}
+
+  .actions{display:flex;gap:.35rem;margin-top:.5rem;padding-top:.45rem;border-top:1px solid var(--line);}
+  .abtn{font-family:var(--mono);font-size:.62rem;color:var(--muted);background:transparent;
+    border:1px solid var(--line);border-radius:5px;padding:.22rem .55rem;cursor:pointer;}
+  .abtn:hover{border-color:var(--accent);color:var(--ink);}
+
+  #empty{margin:auto;text-align:center;color:var(--muted);max-width:440px;padding:1rem;}
+  #empty .big{font-family:var(--serif);font-size:1.3rem;color:var(--ink);margin-bottom:.5rem;}
+  #empty p{font-size:.85rem;line-height:1.6;}
+  .suggestions{display:flex;flex-wrap:wrap;gap:.5rem;justify-content:center;margin-top:1rem;}
+  .suggestion{font-size:.78rem;padding:.45rem .8rem;border:1px solid var(--line);border-radius:999px;
+    background:var(--surface);color:var(--ink);cursor:pointer;}
+  .suggestion:hover{border-color:var(--accent);}
+
+  .thinking{align-self:flex-start;display:flex;align-items:center;gap:.6rem;padding:.8rem 1.1rem;
+    font-family:var(--mono);font-size:.72rem;color:var(--muted);}
+  .thinking .dots{display:flex;gap:.3rem;}
+  .thinking b{width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:.4;
+    animation:pulse 1.2s infinite;}
+  .thinking b:nth-child(2){animation-delay:.2s}
+  .thinking b:nth-child(3){animation-delay:.4s}
+  @keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
+  @media (prefers-reduced-motion: reduce){.thinking b{animation:none;opacity:.7}}
+
+  .attach-preview{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;max-width:760px;
+    margin:0 auto .5rem;padding:.45rem .6rem;background:var(--surface);border:1px solid var(--accent);
+    border-radius:10px;font-size:.76rem;}
+  .attach-chip{display:inline-flex;align-items:center;gap:.45rem;background:var(--surface-2);
+    border:1px solid var(--line);border-radius:8px;padding:.28rem .5rem;max-width:15rem;}
+  .attach-chip img{height:30px;width:30px;object-fit:cover;border-radius:5px;background:var(--ground);}
+  .attach-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .attach-chip button{background:none;border:none;color:var(--crit);cursor:pointer;font-size:.9rem;
+    padding:.15rem .25rem;min-width:28px;min-height:28px;}
+  .msg .img-note{font-family:var(--mono);font-size:.66rem;color:var(--muted);display:block;margin-top:.3rem;}
+
+  footer{flex:none;padding:.9rem 1.2rem calc(.9rem + env(safe-area-inset-bottom));
+    border-top:1px solid var(--line);background:var(--ground);}
+  .inputrow{display:flex;gap:.55rem;max-width:760px;margin:0 auto;align-items:flex-end;}
+  #attachBtn{flex:none;border:1px solid var(--line);background:var(--surface);color:var(--muted);
+    border-radius:12px;width:2.9rem;height:2.9rem;cursor:pointer;font-size:1.15rem;line-height:1;}
+  #attachBtn:hover{border-color:var(--accent);color:var(--ink);}
+  textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:12px;background:var(--surface);
+    color:var(--ink);font-family:var(--sans);font-size:.95rem;line-height:1.45;padding:.7rem .9rem;
+    max-height:9rem;min-height:2.9rem;}
+  textarea:focus{outline:2px solid var(--accent);border-color:var(--accent);}
+  #sendBtn{border:none;border-radius:12px;background:var(--accent);color:#141310;font-weight:700;
+    font-size:.9rem;padding:.8rem 1.2rem;cursor:pointer;flex:none;}
+  #sendBtn:hover{filter:brightness(1.08);}
+  #sendBtn:disabled{opacity:.5;cursor:wait;}
+  .hint{max-width:760px;margin:.5rem auto 0;font-family:var(--mono);font-size:.64rem;color:var(--muted);
+    text-align:center;}
+
+  @media print{
+    header,footer,.actions,.suggestions,#empty{display:none!important;}
+    body{background:#fff;color:#111;}
+    .msg{border-color:#ccc!important;background:#fff!important;max-width:100%;}
+    #chat{overflow:visible;}
+  }
+</style>
+</head>
+<body>
+<nav id="side" aria-label="Chats">
+  <div class="side-head">
+    <span class="side-title">Chats</span>
+    <button id="newChat" onclick="newSession()">+ New</button>
+  </div>
+  <div id="sessionList"></div>
+</nav>
+<div id="app">
+<header>
+  <div class="brand">
+    <span class="wordmark">Timelabs Co</span>
+    <h1>Agent</h1>
+  </div>
+  <div class="hdr-actions">
+    <button class="hbtn" id="sideToggle" onclick="document.getElementById('side').classList.toggle('open')" aria-label="Show chats">&#9776;</button>
+    <button class="hbtn" onclick="exportThread('md')" title="Download the whole conversation as Markdown">&#8681; .md</button>
+    <button class="hbtn" onclick="exportThread('pdf')" title="Download the whole conversation as PDF">&#8681; PDF</button>
+    <a class="hbtn" href="/ops/">&#8592; Command center</a>
+  </div>
+</header>
+
+<div id="chat">
+  <div id="empty">
+    <div class="big">What should we work on?</div>
+    <p>I can check your numbers, update the action plan, draft marketing copy, read photos you attach, or dig into anything on the server. One shared thread — whatever you or your partner ask here, the other can see. Replies support rich formatting and can be exported as PDF.</p>
+    <div class="suggestions">
+      <button class="suggestion" onclick="ask('How are sales this month? Give me a table.')">Sales this month</button>
+      <button class="suggestion" onclick="ask('What is blocked on the action plan?')">What's blocked?</button>
+      <button class="suggestion" onclick="ask('Write this week\'s community post about a watch we should feature')">Draft this week's post</button>
+    </div>
+  </div>
+</div>
+
+<div id="attachRow" style="display:none" class="attach-preview"></div>
+
+<footer>
+  <div class="tchips">
+    <button class="tchip" onclick="prefill('/caption ')">/caption</button>
+    <button class="tchip" onclick="prefill('/ad ')">/ad</button>
+    <button class="tchip" onclick="prefill('/product ')">/product</button>
+    <button class="tchip" onclick="prefill('/email ')">/email</button>
+    <button class="tchip" onclick="prefill('/post ')">/post</button>
+  </div>
+  <div class="inputrow">
+    <button id="attachBtn" onclick="document.getElementById('file').click()" title="Attach photos" aria-label="Attach photos">&#128247;</button>
+    <input id="file" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+    <textarea id="input" rows="1" placeholder="Ask your agent anything…" aria-label="Message"></textarea>
+    <button id="sendBtn" onclick="send()">Send</button>
+  </div>
+  <div class="hint">replies can take a minute — the agent checks real data before answering · attach, paste (Ctrl+V) or drop photos (up to 8 per message, it reads them incl. text via OCR) · /commands write in your brand voice · /model switches the AI model</div>
+</footer>
+</div><!-- /app -->
+
+<script>
+  const chat = document.getElementById('chat');
+  const input = document.getElementById('input');
+  const sendBtn = document.getElementById('sendBtn');
+  const empty = document.getElementById('empty');
+  const fileInput = document.getElementById('file');
+  let attachments = [];    // [{path, name, dataUrl}] — up to 8 per message
+  let lastDay = null;
+  let thread = [];         // {role, text, ts} for exports
+  let sessionId = parseInt(localStorage.getItem('tl_session') || '1', 10);
+
+  // ---------- sessions ----------
+  async function loadSessions(){
+    try{
+      const res = await fetch('api/sessions');
+      if(!res.ok) return;
+      const data = await res.json();
+      const list = document.getElementById('sessionList');
+      list.innerHTML = '';
+      if(!data.sessions.some(s => s.id === sessionId) && data.sessions.length){
+        sessionId = data.sessions[0].id;
+        localStorage.setItem('tl_session', sessionId);
+      }
+      for(const s of data.sessions){
+        const b = document.createElement('button');
+        b.className = 'sess' + (s.id === sessionId ? ' active' : '');
+        b.innerHTML = '';
+        b.appendChild(document.createTextNode(s.title));
+        const when = document.createElement('span');
+        when.className = 'when';
+        when.textContent = (s.updated_at || '').slice(0, 16).replace('T', ' ') + ' · ' + s.n + ' msg';
+        b.appendChild(when);
+        b.onclick = () => switchSession(s.id);
+        list.appendChild(b);
+      }
+    }catch(e){}
+  }
+  function resetChatView(){
+    chat.innerHTML = '';
+    chat.appendChild(empty);
+    thread = [];
+    lastDay = null;
+  }
+  async function switchSession(id){
+    sessionId = id;
+    localStorage.setItem('tl_session', id);
+    document.getElementById('side').classList.remove('open');
+    resetChatView();
+    await loadHistory();
+    await loadSessions();
+    input.focus();
+  }
+  async function newSession(){
+    try{
+      const res = await fetch('api/session/new', {method: 'POST'});
+      const data = await res.json();
+      if(res.ok && data.id) await switchSession(data.id);
+    }catch(e){}
+  }
+  function prefill(t){
+    input.value = t;
+    input.focus();
+    autosize();
+  }
+
+  // ---------- tiny safe markdown renderer (escape first, then transform) ----------
+  function esc(s){
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+            .replace(/"/g,'&quot;');
+  }
+  function inline(s){
+    return s
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  }
+  function renderMd(src){
+    const lines = esc(src).split('\n');
+    let html = '', i = 0;
+    while(i < lines.length){
+      let l = lines[i];
+      if(/^```/.test(l)){                                    // fenced code
+        let buf = [];
+        i++;
+        while(i < lines.length && !/^```/.test(lines[i])){ buf.push(lines[i]); i++; }
+        i++;
+        html += '<pre><code>' + buf.join('\n') + '</code></pre>';
+        continue;
+      }
+      if(/^\s*$/.test(l)){ i++; continue; }
+      if(/^#{1,3}\s/.test(l)){
+        const level = l.match(/^#+/)[0].length;
+        html += `<h${level}>` + inline(l.replace(/^#+\s*/,'')) + `</h${level}>`;
+        i++; continue;
+      }
+      if(/^(-{3,}|\*{3,})\s*$/.test(l)){ html += '<hr>'; i++; continue; }
+      if(/^\s*&gt;\s?/.test(l)){                              // blockquote
+        let buf = [];
+        while(i < lines.length && /^\s*&gt;\s?/.test(lines[i])){
+          buf.push(lines[i].replace(/^\s*&gt;\s?/,'')); i++;
+        }
+        html += '<blockquote>' + inline(buf.join(' ')) + '</blockquote>';
+        continue;
+      }
+      if(/^\s*([-*]|\d+\.)\s+/.test(l)){                      // lists
+        const ordered = /^\s*\d+\./.test(l);
+        const tag = ordered ? 'ol' : 'ul';
+        let items = [];
+        while(i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i])){
+          items.push('<li>' + inline(lines[i].replace(/^\s*([-*]|\d+\.)\s+/,'')) + '</li>');
+          i++;
+        }
+        html += `<${tag}>` + items.join('') + `</${tag}>`;
+        continue;
+      }
+      if(/\|/.test(l) && i+1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i+1])){  // table
+        const parseRow = r => r.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(c => inline(c.trim()));
+        const head = parseRow(l);
+        i += 2;
+        let body = [];
+        while(i < lines.length && /\|/.test(lines[i]) && !/^\s*$/.test(lines[i])){
+          body.push(parseRow(lines[i])); i++;
+        }
+        html += '<table><thead><tr>' + head.map(h=>'<th>'+h+'</th>').join('') + '</tr></thead><tbody>'
+              + body.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')
+              + '</tbody></table>';
+        continue;
+      }
+      let buf = [l];                                          // paragraph
+      i++;
+      while(i < lines.length && !/^\s*$/.test(lines[i]) &&
+            !/^(#{1,3}\s|```|\s*([-*]|\d+\.)\s|\s*&gt;)/.test(lines[i]) && !/\|/.test(lines[i])){
+        buf.push(lines[i]); i++;
+      }
+      html += '<p>' + inline(buf.join('<br>')) + '</p>';
+    }
+    return html;
+  }
+
+  // ---------- chat rendering ----------
+  function daySep(ts){
+    const day = (ts || new Date().toISOString()).slice(0,10);
+    if(day === lastDay) return;
+    lastDay = day;
+    const d = document.createElement('div');
+    d.className = 'daysep';
+    d.textContent = day === new Date().toISOString().slice(0,10) ? 'Today' : day;
+    chat.appendChild(d);
+  }
+  function fmtTime(ts){
+    try{
+      const d = ts ? new Date(ts.replace(' ','T') + (ts.includes('Z')?'':'Z')) : new Date();
+      return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    }catch(e){ return ''; }
+  }
+  function bubble(role, text, ts, imgNote){
+    if(empty.parentNode) empty.remove();
+    daySep(ts);
+    thread.push({role, text, ts: ts || new Date().toISOString()});
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.innerHTML = `<span class="who"><b>${role === 'user' ? 'You' : 'Agent'}</b><time>${fmtTime(ts)}</time></span>`;
+    if(role === 'agent'){
+      const body = document.createElement('div');
+      body.className = 'md';
+      body.innerHTML = renderMd(text);
+      div.appendChild(body);
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      actions.innerHTML =
+        '<button class="abtn" data-a="copy">Copy</button>' +
+        '<button class="abtn" data-a="md">&#8681; .md</button>' +
+        '<button class="abtn" data-a="pdf">&#8681; PDF</button>';
+      actions.addEventListener('click', e => {
+        const a = e.target.dataset.a;
+        if(a === 'copy') navigator.clipboard.writeText(text).then(()=>{ e.target.textContent='Copied'; setTimeout(()=>e.target.textContent='Copy',1200); });
+        if(a === 'md') downloadText(text, 'agent-reply.md');
+        if(a === 'pdf') downloadPdf(text, 'Timelabs Agent — reply');
+      });
+      div.appendChild(actions);
+    } else {
+      div.appendChild(document.createTextNode(text));
+      if(imgNote){
+        const n = document.createElement('span');
+        n.className = 'img-note';
+        n.textContent = '📷 ' + imgNote;
+        div.appendChild(n);
+      }
+    }
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+    return div;
+  }
+
+  function thinking(){
+    const div = document.createElement('div');
+    div.className = 'thinking';
+    div.innerHTML = '<span class="dots"><b></b><b></b><b></b></span><span class="t">working — 0s</span>';
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+    const start = Date.now();
+    div._timer = setInterval(() => {
+      const s = Math.round((Date.now()-start)/1000);
+      const mins = s >= 120 ? Math.round(s/60) + 'm' : s + 's';
+      div.querySelector('.t').textContent = (div._label || 'working — ') + mins;
+    }, 1000);
+    return div;
+  }
+  function stopThinking(div){ clearInterval(div._timer); div.remove(); }
+
+  // ---------- exports ----------
+  function downloadText(text, name){
+    const blob = new Blob([text], {type: 'text/markdown'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+  async function downloadPdf(markdown, title){
+    try{
+      const res = await fetch('api/export/pdf', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({markdown, title}),
+      });
+      if(!res.ok) throw new Error('export failed');
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = (title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') || 'export') + '.pdf';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }catch(e){
+      alert('PDF export failed — try again, or use the .md download.');
+    }
+  }
+  function exportThread(kind){
+    if(!thread.length) return;
+    const md = thread.map(m =>
+      `**${m.role === 'user' ? 'You' : 'Agent'}** · ${m.ts.slice(0,16).replace('T',' ')}\n\n${m.text}`
+    ).join('\n\n---\n\n');
+    if(kind === 'md') downloadText('# Timelabs Agent — conversation\n\n' + md, 'timelabs-agent-conversation.md');
+    else downloadPdf(md, 'Timelabs Agent — conversation');
+  }
+
+  // ---------- attachments (multi-photo: attach, paste, or drop several) ----------
+  const MAX_ATTACH = 8;
+  function renderAttachments(){
+    const row = document.getElementById('attachRow');
+    row.innerHTML = '';
+    attachments.forEach((a, i) => {
+      const chip = document.createElement('span');
+      chip.className = 'attach-chip';
+      const img = document.createElement('img');
+      img.alt = '';
+      if(a.dataUrl) img.src = a.dataUrl;
+      const name = document.createElement('span');
+      name.textContent = a.name;
+      const x = document.createElement('button');
+      x.textContent = '✕';
+      x.setAttribute('aria-label', 'Remove ' + a.name);
+      x.onclick = () => { attachments.splice(i, 1); renderAttachments(); };
+      chip.append(img, name, x);
+      row.appendChild(chip);
+    });
+    row.style.display = attachments.length ? 'flex' : 'none';
+  }
+  async function uploadImage(f){
+    if(!f) return;
+    if(attachments.length >= MAX_ATTACH){ alert('Up to ' + MAX_ATTACH + ' photos per message.'); return; }
+    if(f.size > 32*1024*1024){ alert(f.name + ' is too large — 32 MB max.'); return; }
+    // pasted clipboard blobs often lack a proper name/extension — give them one
+    if(!/\.(jpe?g|png|webp)$/i.test(f.name || '')){
+      const ext = (f.type || '').includes('png') ? '.png' : (f.type || '').includes('webp') ? '.webp' : '.jpg';
+      f = new File([f], 'pasted-' + Date.now() + ext, {type: f.type || 'image/png'});
+    }
+    const form = new FormData();
+    form.append('image', f);
+    try{
+      const res = await fetch('api/upload', {method:'POST', body: form});
+      const data = await res.json();
+      if(!res.ok || !data.path) throw new Error(data.error || 'upload failed');
+      const entry = {path: data.path, name: f.name, dataUrl: null};
+      attachments.push(entry);
+      renderAttachments();
+      const reader = new FileReader();
+      reader.onload = e => { entry.dataUrl = e.target.result; renderAttachments(); };
+      reader.readAsDataURL(f);
+    }catch(e){
+      alert('Could not upload ' + (f.name || 'the image') + ' — try again.');
+    }
+  }
+  fileInput.addEventListener('change', async () => {
+    for(const f of fileInput.files) await uploadImage(f);
+    fileInput.value = '';
+  });
+  // paste image(s) anywhere on the page (Ctrl+V / Cmd+V)
+  document.addEventListener('paste', e => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if(!items) return;
+    let found = false;
+    for(const it of items){
+      if(it.kind === 'file' && it.type.startsWith('image/')){
+        if(!found){ e.preventDefault(); found = true; }
+        uploadImage(it.getAsFile());
+      }
+    }
+  });
+  // drag & drop image(s) onto the page
+  document.addEventListener('dragover', e => { e.preventDefault(); });
+  document.addEventListener('drop', async e => {
+    e.preventDefault();
+    const files = (e.dataTransfer && e.dataTransfer.files) || [];
+    for(const f of files) if(f.type.startsWith('image/')) await uploadImage(f);
+  });
+  function clearAttach(){
+    attachments = [];
+    renderAttachments();
+  }
+
+  // ---------- send ----------
+  async function loadHistory(){
+    try{
+      const res = await fetch('api/history?session=' + sessionId);
+      if(!res.ok) return;
+      const data = await res.json();
+      for(const m of data.messages) bubble(m.role, m.text, m.created_at);
+    }catch(e){}
+  }
+  async function send(){
+    const text = input.value.trim();
+    if((!text && !attachments.length) || sendBtn.disabled) return;
+    const atts = attachments.slice();
+    clearAttach();
+    input.value = '';
+    autosize();
+    const label = atts.length > 1 ? '(' + atts.length + ' photos)' : '(photo)';
+    bubble('user', text || label, null, atts.map(a => a.name).join(', ') || null);
+    sendBtn.disabled = true;
+    const dots = thinking();
+    try{
+      const res = await fetch('api/send', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: text, session_id: sessionId,
+                              images: atts.map(a => ({path: a.path, name: a.name}))}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if(res.ok && data.pending){
+        // Long task: the agent keeps working server-side. Poll the thread until
+        // its reply lands (the lock guarantees the next agent message is ours).
+        dots._label = 'long task, running in background — ';
+        const startedAt = Date.now();
+        const poll = setInterval(async () => {
+          if(Date.now() - startedAt > 50*60*1000){
+            clearInterval(poll); stopThinking(dots);
+            bubble('agent', 'Still running after 50 minutes — reload this page later to see the result.');
+            return;
+          }
+          try{
+            const r = await fetch('api/history?session=' + sessionId);
+            if(!r.ok) return;
+            const d = await r.json();
+            const msgs = d.messages || [];
+            const last = msgs[msgs.length - 1];
+            if(last && last.role === 'agent'){
+              clearInterval(poll);
+              stopThinking(dots);
+              bubble('agent', last.text, last.created_at);
+              loadSessions();
+            }
+          }catch(e){}
+        }, 6000);
+        return;
+      }
+      stopThinking(dots);
+      if(res.ok && data.reply){ bubble('agent', data.reply); loadSessions(); }
+      else bubble('agent', data.error || 'Something went wrong — try again.');
+    }catch(e){
+      stopThinking(dots);
+      bubble('agent', 'Connection lost — check your internet and try again.');
+    }finally{
+      sendBtn.disabled = false;
+      input.focus();
+    }
+  }
+  function ask(q){ input.value = q; send(); }
+  function autosize(){
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 144) + 'px';
+  }
+  input.addEventListener('input', autosize);
+  input.addEventListener('keydown', e => {
+    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); send(); }
+  });
+
+  loadSessions().then(loadHistory);
+  input.focus();
+</script>
+</body>
+</html>

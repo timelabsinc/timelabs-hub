@@ -37,6 +37,14 @@ HERMES_SOFT_WAIT = 120   # seconds to hold the HTTP request open (nginx allows 3
 HERMES_HARD_TIMEOUT = 2700  # 45 min absolute cap for a single agent run
 CONTEXT_TURNS = 16  # messages (8 exchanges)
 
+# --- Key (invite/access) ----------------------------------------------------
+# The allowlist IS the access-control boundary (External+Published consent
+# screen). Admin-only endpoints below mutate it; oauth2-proxy hot-reloads on
+# change. ADMIN_EMAILS mirrors hub_shell.ADMIN_EMAILS — keep in sync.
+ALLOWLIST_PATH = "/etc/oauth2-proxy/allowlist.txt"
+ADMIN_EMAILS = ("timelabs.inc@gmail.com", "schezan.m@gmail.com")
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 PREAMBLE = (
@@ -138,19 +146,21 @@ def recent(session_id, limit):
     return list(reversed(rows))
 
 
-def build_prompt(session_id, message, image_path=None, image_name=None, ocr_text=None):
+def build_prompt(session_id, message, images=None):
+    """images: list of (path, name, ocr_text) — supports multi-photo messages."""
     lines = [PREAMBLE]
     for row in recent(session_id, CONTEXT_TURNS):
         speaker = "Owner" if row["role"] == "user" else "You"
         lines.append(f"{speaker}: {row['text']}")
-    if image_path:
+    for i, (path, name, ocr_text) in enumerate(images or [], 1):
+        n = f" {i} of {len(images)}" if len(images) > 1 else ""
         lines.append(
-            f"\nThe owner attached a photo ({image_name or 'image'}), saved at "
-            f"{image_path} — analyze it with your vision tool as part of answering."
+            f"\nThe owner attached a photo{n} ({name or 'image'}), saved at "
+            f"{path} — analyze it with your vision tool as part of answering."
         )
         if ocr_text:
             lines.append(
-                "\nOCR text extracted from the photo (verbatim, may contain recognition "
+                "\nOCR text extracted from this photo (verbatim, may contain recognition "
                 f"errors — trust your vision reading over this where they differ):\n{ocr_text}"
             )
     lines.append(f"\nOwner's new message: {message}\n\nYour reply:")
@@ -386,6 +396,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path, _, query = self.path.partition("?")
+        if path == "/allowlist":
+            self._handle_allowlist_get()
+            return
+        if path == "/whoami":
+            email = (self.headers.get("X-User-Email") or "").strip().lower()
+            self._json(200, {"email": email, "admin": email in ADMIN_EMAILS})
+            return
         if path == "/sessions":
             conn = db()
             rows = conn.execute(
@@ -413,6 +430,90 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         self._json(404, {"error": "not found"})
 
+    # --- Key: allowlist management (admin-only) -----------------------------
+    def _admin_email(self):
+        """The authenticated caller's email if they're an admin, else None.
+        nginx sets X-User-Email from oauth2-proxy's auth_request on every
+        /ops/agent/api/ request; the port is loopback-only otherwise."""
+        email = (self.headers.get("X-User-Email") or "").strip().lower()
+        return email if email in ADMIN_EMAILS else None
+
+    @staticmethod
+    def _read_allowlist():
+        try:
+            with open(ALLOWLIST_PATH) as f:
+                seen, out = set(), []
+                for line in f:
+                    e = line.strip().lower()
+                    if e and e not in seen:
+                        seen.add(e)
+                        out.append(e)
+                return out
+        except OSError:
+            return []
+
+    @staticmethod
+    def _write_allowlist(emails):
+        """Timestamped backup, then atomic replace (oauth2-proxy hot-reloads)."""
+        import shutil, time as _t
+        shutil.copy2(ALLOWLIST_PATH, f"{ALLOWLIST_PATH}.bak.{int(_t.time())}")
+        tmp = ALLOWLIST_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            f.write("\n".join(emails) + "\n")
+        os.replace(tmp, ALLOWLIST_PATH)
+
+    def _handle_allowlist_get(self):
+        admin = self._admin_email()
+        if not admin:
+            self._json(403, {"error": "admins only"})
+            return
+        members = self._read_allowlist()
+        self._json(200, {"members": [
+            {"email": e, "admin": e in ADMIN_EMAILS, "you": e == admin}
+            for e in members
+        ]})
+
+    def _handle_allowlist_change(self, action):
+        admin = self._admin_email()
+        if not admin:
+            self._json(403, {"error": "admins only"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            payload = json.loads(self.rfile.read(min(length, 4096)).decode())
+            email = str(payload.get("email", "")).strip().lower()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        if not EMAIL_RE.match(email):
+            self._json(400, {"error": "that doesn't look like an email address"})
+            return
+        members = self._read_allowlist()
+        if action == "add":
+            if email in members:
+                self._json(200, {"ok": True, "note": "already a member", "members": members})
+                return
+            members.append(email)
+        else:  # remove
+            if email == admin:
+                self._json(400, {"error": "you can't remove yourself — ask the other admin"})
+                return
+            remaining_admins = [e for e in members if e in ADMIN_EMAILS and e != email]
+            if email in ADMIN_EMAILS and not remaining_admins:
+                self._json(400, {"error": "refusing to remove the last admin"})
+                return
+            if email not in members:
+                self._json(404, {"error": "not a member"})
+                return
+            members = [e for e in members if e != email]
+        try:
+            self._write_allowlist(members)
+        except OSError as e:
+            self._json(500, {"error": f"could not write allowlist: {e}"})
+            return
+        print(f"[key] {admin} {action}ed {email}", flush=True)
+        self._json(200, {"ok": True, "members": members})
+
     def _handle_new_session(self):
         conn = db()
         cur = conn.execute("INSERT INTO webchat_sessions (title) VALUES ('New chat')")
@@ -426,19 +527,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             payload = json.loads(self.rfile.read(min(length, 32768)).decode())
             message = str(payload.get("message", "")).strip()
-            image_path = payload.get("image_path")
-            image_name = payload.get("image_name")
             session_id = int(payload.get("session_id") or 1)
+            # images: [{path, name}] — legacy single image_path/image_name still accepted
+            raw_images = payload.get("images") or []
+            if payload.get("image_path"):
+                raw_images.append({"path": payload["image_path"], "name": payload.get("image_name")})
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             self._json(400, {"error": "bad request"})
             return
         if not ensure_session(session_id):
             self._json(400, {"error": "unknown session"})
             return
-        # only accept paths our own /upload handed out
-        if image_path and (not str(image_path).startswith(UPLOAD_DIR + "/") or not os.path.isfile(image_path)):
-            image_path = None
-        if not message and not image_path:
+        # only accept paths our own /upload handed out (cap 8 per message)
+        images = []
+        for im in raw_images[:8]:
+            p = str((im or {}).get("path") or "")
+            if p.startswith(UPLOAD_DIR + "/") and os.path.isfile(p):
+                images.append((p, (im.get("name") or os.path.basename(p)), None))
+        if not message and not images:
             self._json(400, {"error": "empty message"})
             return
         # /model is handled locally — instant, no agent run, no lock needed
@@ -455,15 +561,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # From here the LOCK belongs to the worker thread; it releases it when the
         # agent run finishes (which may be long after this HTTP request returned).
         try:
-            shown = message or "(photo)"
-            if image_path:
-                shown += f"  [attached photo: {image_name or os.path.basename(image_path)}]"
+            shown = message or ("(photo)" if len(images) == 1 else f"({len(images)} photos)")
+            for _, name, _ in images:
+                shown += f"  [attached photo: {name}]"
             store(session_id, "user", shown)
-            expanded = expand_template(message) if message else "Please look at the attached photo."
-            ocr_text = ocr_image(image_path) if image_path else None
-            prompt = build_prompt(session_id, expanded, image_path, image_name, ocr_text)
+            expanded = expand_template(message) if message else (
+                "Please look at the attached photo." if len(images) == 1
+                else f"Please look at the {len(images)} attached photos."
+            )
+            images = [(p, n, ocr_image(p)) for p, n, _ in images]
+            prompt = build_prompt(session_id, expanded, images)
             pref_model, pref_provider = get_model_pref(session_id)
-            candidates = route_models(pref_model, pref_provider, bool(image_path))
+            candidates = route_models(pref_model, pref_provider, bool(images))
         except Exception:
             LOCK.release()
             raise
@@ -659,6 +768,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_upload()
         elif path == "/export/pdf":
             self._handle_export_pdf()
+        elif path == "/allowlist/add":
+            self._handle_allowlist_change("add")
+        elif path == "/allowlist/remove":
+            self._handle_allowlist_change("remove")
         else:
             self._json(404, {"error": "not found"})
 

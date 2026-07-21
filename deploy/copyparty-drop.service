@@ -1,0 +1,14 @@
+[Unit]
+Description=Timelabs Drop (copyparty file tunnel, localhost:3923)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ops-dashboard/data/drop
+ExecStart=/root/drop-venv/bin/python -m copyparty -c /etc/copyparty/drop.conf
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

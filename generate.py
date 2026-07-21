@@ -16,7 +16,9 @@ import urllib.request
 import urllib.error
 
 sys.path.insert(0, "/root/ops-dashboard")
-from hub_shell import page, source_chip, _refund_pct  # the Hub/Face shell
+from hub_shell import (  # the Hub/Face "Caliber" shell + chart engine
+    page, source_chip, _refund_pct, kpi_card, svg_gauge, svg_revenue_chart,
+)
 
 ENV_PATH = "/root/ops-dashboard/.env"
 OUT_PATH = "/var/www/ops/index.html"
@@ -535,24 +537,63 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
             '<p class="f-note">Logged by your AI team as facts are verified — newest first.</p></div></section>'
         )
     win = shopify.get("window_days", LOOKBACK_DAYS)
-    kpis = []
-    if shopify.get("connected"):
-        kpis.append(("Orders", str(shopify["order_count"]), f"{win}-day trailing"))
-        kpis.append(("Gross sales", fmt_inr(shopify.get("gross_sales", shopify.get("total_sales", 0))),
-                     f"AOV {fmt_inr(shopify['aov'])}"))
-        if shopify.get("net_sales") is not None:
-            kpis.append(("Net sales", fmt_inr(shopify["net_sales"]), "after discounts & returns"))
-        kpis.append(("Refunds", fmt_inr(shopify["refund_total"]), _refund_pct(shopify)))
-    if ga4.get("connected"):
-        kpis.append(("Sessions", f"{ga4['total_sessions']:,}", f"GA4 · {ga4.get('as_of', '—')}"))
-    if meta.get("connected"):
-        kpis.append(("Ad spend", fmt_inr(meta["total_spend"]), f"Meta · {meta.get('as_of', '—')}"))
+    sales_daily = shopify.get("sales_daily") or []       # sparse [(date, sales, orders)]
+    sessions_daily = shopify.get("sessions_daily") or [] # [(date, sessions)]
+    sales_vals = [float(v) for _, v, *rest in sales_daily]
+    session_vals = [float(v) for _, v in sessions_daily]
 
-    kpi_html = "".join(
-        f'<div class="kpi"><div class="label">{html.escape(k)}</div>'
-        f'<div class="val num">{html.escape(v)}</div><div class="ctx">{html.escape(c)}</div></div>'
-        for k, v, c in kpis
-    ) or '<p class="empty">No sources connected yet.</p>'
+    kpi_html = ""
+    if shopify.get("connected"):
+        gross = shopify.get("gross_sales", shopify.get("total_sales", 0))
+        kpi_html += kpi_card("Orders", str(shopify["order_count"]), f"{win}-day trailing",
+                             raw=shopify["order_count"])
+        kpi_html += kpi_card("Gross sales", fmt_inr(gross), f"AOV {fmt_inr(shopify['aov'])}",
+                             spark_vals=sales_vals, raw=round(gross), prefix="₹")
+        if shopify.get("net_sales") is not None:
+            kpi_html += kpi_card("Net sales", fmt_inr(shopify["net_sales"]),
+                                 "after discounts & returns",
+                                 raw=round(shopify["net_sales"]), prefix="₹", spark_tone="lume")
+        kpi_html += kpi_card("Refunds", fmt_inr(shopify["refund_total"]), _refund_pct(shopify),
+                             raw=round(shopify["refund_total"]), prefix="₹", spark_tone="crit")
+    if ga4.get("connected"):
+        kpi_html += kpi_card("Sessions", f"{ga4['total_sessions']:,}",
+                             f"GA4 · {ga4.get('as_of', '—')}",
+                             spark_vals=session_vals, raw=ga4["total_sessions"])
+    if meta.get("connected"):
+        kpi_html += kpi_card("Ad spend", fmt_inr(meta["total_spend"]),
+                             f"Meta · {meta.get('as_of', '—')}",
+                             raw=round(meta["total_spend"]), prefix="₹")
+    kpi_html = kpi_html or '<p class="empty">No sources connected yet.</p>'
+
+    # --- instrument dials + revenue chart (fail-soft when data is absent) ---
+    dials_html = ""
+    if shopify.get("connected"):
+        gross = shopify.get("gross_sales") or shopify.get("total_sales") or 0
+        if gross > 0 and shopify.get("refund_total"):
+            pct = 100 * shopify["refund_total"] / gross
+            dials_html += svg_gauge(pct, "Refund rate", "of gross, clawed back",
+                                    tone="crit" if pct > 12 else "accent")
+        funnel = shopify.get("funnel") or {}
+        cart, checkout = funnel.get("added_to_cart") or 0, funnel.get("reached_checkout") or 0
+        if cart:
+            dials_html += svg_gauge(100 * checkout / cart, "Cart → checkout",
+                                    "the verified funnel leak", tone="accent")
+        sessions = funnel.get("sessions") or 0
+        if sessions and cart:
+            dials_html += svg_gauge(100 * cart / sessions, "Session → cart",
+                                    "browse-to-intent", tone="good")
+
+    revenue_chart_html = ""
+    if sales_daily and shopify.get("sales_daily_span"):
+        chart = svg_revenue_chart(sales_daily, shopify["sales_daily_span"])
+        if chart:
+            revenue_chart_html = (
+                '<section><h2>Daily sales — last 90 days</h2><div class="panel">'
+                + chart +
+                '<div class="chart-legend"><span class="lg-sale"><i></i>sale day</span>'
+                '<span class="lg-refund"><i></i>refund day</span></div>'
+                '</div></section>'
+            )
 
     channel_rows = ""
     if ga4.get("connected") and ga4.get("by_channel"):
@@ -614,6 +655,9 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
         content_html=content_html,
         findings_html=findings_html,
         health_html=health_html,
+        dials_html=dials_html,
+        revenue_chart_html=revenue_chart_html,
+        drop_ready=True,
     )
 
 
