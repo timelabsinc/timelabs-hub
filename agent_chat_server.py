@@ -45,6 +45,36 @@ ALLOWLIST_PATH = "/etc/oauth2-proxy/allowlist.txt"
 ADMIN_EMAILS = ("timelabs.inc@gmail.com", "schezan.m@gmail.com")
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
+# --- Shopify OAuth (turn app key+secret into an Admin token via one approval) ---
+ENV_FILE = "/root/ops-dashboard/.env"
+SHOPIFY_OAUTH_CREDS = "/root/ops-dashboard/.shopify-oauth.json"
+SHOPIFY_SCOPES = ("read_products,write_products,read_inventory,write_inventory,"
+                  "read_content,write_content,read_themes,write_themes")
+SHOPIFY_REDIRECT = "https://ops.timelabsco.in/ops/agent/api/shopify/callback"
+_shopify_states = set()
+
+
+def write_env(updates):
+    """Upsert keys into .env without clobbering the rest; keep it 0600."""
+    try:
+        lines = open(ENV_FILE).read().splitlines()
+    except OSError:
+        lines = []
+    seen, out = set(), []
+    for line in lines:
+        k = line.split("=", 1)[0].strip() if "=" in line and not line.startswith("#") else None
+        if k in updates:
+            out.append(f"{k}={updates[k]}")
+            seen.add(k)
+        else:
+            out.append(line)
+    for k, v in updates.items():
+        if k not in seen:
+            out.append(f"{k}={v}")
+    with open(ENV_FILE, "w") as f:
+        f.write("\n".join(out) + "\n")
+    os.chmod(ENV_FILE, 0o600)
+
 
 def hub_event(kind, detail, actor="?", app="key"):
     """Shared Hub activity feed (hub_events in hermes.db) — Hermes watches this."""
@@ -425,6 +455,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             email = (self.headers.get("X-User-Email") or "").strip().lower()
             self._json(200, {"email": email, "admin": email in ADMIN_EMAILS})
             return
+        if path == "/shopify/connect":
+            self._handle_shopify_connect()
+            return
+        if path == "/shopify/callback":
+            self._handle_shopify_callback(query)
+            return
         if path == "/events":
             conn = db()
             try:
@@ -548,6 +584,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
         print(f"[key] {admin} {action}ed {email}", flush=True)
         hub_event(f"member_{action}", email, admin)
         self._json(200, {"ok": True, "members": members})
+
+    # --- Shopify connect (OAuth) -------------------------------------------
+    @staticmethod
+    def _shopify_creds():
+        try:
+            return json.load(open(SHOPIFY_OAUTH_CREDS))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _handle_shopify_connect(self):
+        email = (self.headers.get("X-User-Email") or "").strip().lower()
+        if email not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"})
+            return
+        creds = self._shopify_creds()
+        if not creds:
+            self._json(500, {"error": "no Shopify app credentials stored"})
+            return
+        state = secrets.token_urlsafe(16)
+        _shopify_states.add(state)
+        from urllib.parse import urlencode
+        url = f"https://{creds['shop']}/admin/oauth/authorize?" + urlencode({
+            "client_id": creds["client_id"], "scope": SHOPIFY_SCOPES,
+            "redirect_uri": SHOPIFY_REDIRECT, "state": state,
+        })
+        self._redirect(url)
+
+    def _handle_shopify_callback(self, query):
+        from urllib.parse import parse_qsl
+        params = dict(parse_qsl(query))
+        creds = self._shopify_creds()
+        code, state = params.get("code"), params.get("state")
+        shop = params.get("shop") or (creds or {}).get("shop", "")
+        if not creds or not code or state not in _shopify_states:
+            self._redirect("/ops/tools.html?shopify=failed")
+            return
+        _shopify_states.discard(state)
+        import urllib.request
+        from urllib.parse import urlencode
+        body = urlencode({"client_id": creds["client_id"],
+                          "client_secret": creds["client_secret"], "code": code}).encode()
+        try:
+            req = urllib.request.Request(f"https://{shop}/admin/oauth/access_token", data=body)
+            with urllib.request.urlopen(req, timeout=20) as r:
+                tok = json.loads(r.read())
+            access = tok.get("access_token")
+        except Exception as e:
+            print(f"[shopify] token exchange failed: {e}", flush=True)
+            self._redirect("/ops/tools.html?shopify=failed")
+            return
+        if not access:
+            self._redirect("/ops/tools.html?shopify=failed")
+            return
+        write_env({"SHOPIFY_SHOP": shop, "SHOPIFY_ADMIN_TOKEN": access})
+        email = (self.headers.get("X-User-Email") or "?").strip().lower()
+        print(f"[shopify] connected by {email}", flush=True)
+        hub_event("shopify_connected", "Shopify store connected", email, app="shopify")
+        self._redirect("/ops/tools.html?shopify=connected")
 
     def _handle_ledger_import(self):
         """Preview (default) or commit new supplier invoices from Drop into
