@@ -46,24 +46,45 @@ server {
         try_files $uri $uri/ =404;
     }
 
-    # --- Drop (copyparty file tunnel), behind Key ---
+    # --- Drop (Timelabs file tunnel: custom UI + chunked API), behind Key ---
     location = /drop { return 301 /drop/; }
-    location /drop/ {
+
+    # the single-page UI
+    location = /drop/ {
         auth_request /oauth2/auth;
         error_page 401 = @oauth2_signin;
+        alias /var/www/drop/index.html;
+        default_type text/html;
+        add_header Cache-Control "no-cache" always;
+    }
 
-        proxy_pass http://127.0.0.1:3923;   # NO trailing slash: rp-loc needs the /drop/ prefix kept
+    # chunked upload / listing / thumbnail API -> drop_server.py
+    location /drop/api/ {
+        auth_request /oauth2/auth;
+        error_page 401 = @oauth2_signin;
+        auth_request_set $email $upstream_http_x_auth_request_email;
+        proxy_set_header X-User-Email $email;
+
+        proxy_pass http://127.0.0.1:8903/;
         proxy_http_version 1.1;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
 
-        client_max_body_size   2g;      # 200 MB product video + headroom
-        proxy_request_buffering off;    # stream uploads straight through
-        proxy_read_timeout     900s;    # slow-cellular multi-minute uploads
-        proxy_send_timeout     900s;
+        client_max_body_size   32m;    # one 6 MB chunk + headroom
+        proxy_request_buffering off;   # stream chunks straight through
+        proxy_read_timeout     300s;   # per-chunk, not per-file — chunks are small
+        proxy_send_timeout     300s;
+    }
+
+    # never expose Drop's internal dirs (.uploads/.thumbs/.trash)
+    location ~ ^/drop/files/\. { return 404; }
+
+    # downloads + video streaming straight from disk (nginx handles Range)
+    location /drop/files/ {
+        auth_request /oauth2/auth;
+        error_page 401 = @oauth2_signin;
+        alias /srv/timelabs-drop/;
+        add_header Cache-Control "private, max-age=3600" always;
     }
 
     # --- old password gate: kept, unused, for rollback ---
