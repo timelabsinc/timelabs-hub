@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Timelabs OS — System Architecture</title>
+<style>
+  :root{
+    --bg:#f6f6f4; --card:#ffffff; --card-2:#f1f1ee; --border:#e5e4df; --border-2:#d8d7d0;
+    --ink:#1a1a18; --body:#43423d; --muted:#84837b;
+    --accent:#966711; --accent-2:#7c530c; --accent-bg:rgba(150,103,17,.09);
+    --good:#1a7f4b; --good-bg:rgba(26,127,75,.10);
+    --warn:#a86813; --warn-bg:rgba(168,104,19,.11);
+    --bad:#c23a2b; --bad-bg:rgba(194,58,43,.09);
+    --edge:#3a6ea5; --edge-bg:rgba(58,110,165,.10);
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Inter","Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Consolas,"Liberation Mono",monospace;
+    --shadow:0 1px 2px rgba(20,20,18,.05), 0 1px 1px rgba(20,20,18,.03);
+    --shadow-lg:0 6px 28px rgba(20,20,18,.09);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#101012; --card:#191a1c; --card-2:#202123; --border:#2a2b2e; --border-2:#393a3e;
+      --ink:#f1f1ef; --body:#c7c7c2; --muted:#8a8a84;
+      --accent:#d8a94c; --accent-2:#e7c176; --accent-bg:rgba(216,169,76,.11);
+      --good:#3fc380; --good-bg:rgba(63,195,128,.11);
+      --warn:#e0ad51; --warn-bg:rgba(224,173,81,.12);
+      --bad:#ef6b5b; --bad-bg:rgba(239,107,91,.11);
+      --edge:#6ea3dd; --edge-bg:rgba(110,163,221,.12);
+      --shadow:0 1px 2px rgba(0,0,0,.3);
+      --shadow-lg:0 10px 38px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f6f4; --card:#ffffff; --card-2:#f1f1ee; --border:#e5e4df; --border-2:#d8d7d0;
+    --ink:#1a1a18; --body:#43423d; --muted:#84837b;
+    --accent:#966711; --accent-2:#7c530c; --accent-bg:rgba(150,103,17,.09);
+    --good:#1a7f4b; --good-bg:rgba(26,127,75,.10); --warn:#a86813; --warn-bg:rgba(168,104,19,.11);
+    --bad:#c23a2b; --bad-bg:rgba(194,58,43,.09); --edge:#3a6ea5; --edge-bg:rgba(58,110,165,.10);
+    --shadow:0 1px 2px rgba(20,20,18,.05), 0 1px 1px rgba(20,20,18,.03); --shadow-lg:0 6px 28px rgba(20,20,18,.09);
+  }
+  :root[data-theme="dark"]{
+    --bg:#101012; --card:#191a1c; --card-2:#202123; --border:#2a2b2e; --border-2:#393a3e;
+    --ink:#f1f1ef; --body:#c7c7c2; --muted:#8a8a84;
+    --accent:#d8a94c; --accent-2:#e7c176; --accent-bg:rgba(216,169,76,.11);
+    --good:#3fc380; --good-bg:rgba(63,195,128,.11); --warn:#e0ad51; --warn-bg:rgba(224,173,81,.12);
+    --bad:#ef6b5b; --bad-bg:rgba(239,107,91,.11); --edge:#6ea3dd; --edge-bg:rgba(110,163,221,.12);
+    --shadow:0 1px 2px rgba(0,0,0,.3); --shadow-lg:0 10px 38px rgba(0,0,0,.45);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--body);font-family:var(--sans);line-height:1.6;
+    -webkit-font-smoothing:antialiased;font-size:15px;}
+  .num{font-variant-numeric:tabular-nums}
+  .mono{font-family:var(--mono)}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 24px 72px;}
+
+  header{border-bottom:1px solid var(--border);padding-bottom:26px;margin-bottom:34px;}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 12px;}
+  h1{font-size:clamp(28px,5vw,42px);line-height:1.08;letter-spacing:-.025em;color:var(--ink);
+    margin:0 0 12px;text-wrap:balance;font-weight:750;}
+  .lede{font-size:17px;color:var(--body);max-width:64ch;margin:0;}
+  .statrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-top:26px;}
+  .stat{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px 16px;box-shadow:var(--shadow);}
+  .stat .v{font-size:22px;font-weight:750;color:var(--ink);letter-spacing:-.02em;}
+  .stat .l{font-size:12px;color:var(--muted);margin-top:1px;}
+  .stat .v.ok{color:var(--good)} .stat .v.warn{color:var(--warn)}
+
+  h2{font-size:13px;font-family:var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--muted);
+    margin:52px 0 18px;font-weight:600;display:flex;align-items:center;gap:12px;}
+  h2::after{content:"";flex:1;height:1px;background:var(--border);}
+
+  /* ---- architecture diagram: request flows top → bottom ---- */
+  .diagram{display:flex;flex-direction:column;gap:0;}
+  .band{position:relative;border:1px solid var(--border);border-radius:14px;background:var(--card);
+    padding:14px 16px 16px;box-shadow:var(--shadow);}
+  .band + .band{margin-top:26px;}
+  .band + .band::before{content:"";position:absolute;top:-22px;left:50%;width:2px;height:20px;
+    background:linear-gradient(var(--border-2),var(--accent));transform:translateX(-50%);}
+  .band + .band::after{content:"";position:absolute;top:-9px;left:50%;width:7px;height:7px;
+    border-right:2px solid var(--accent);border-bottom:2px solid var(--accent);
+    transform:translateX(-50%) rotate(45deg);}
+  .band-h{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap;}
+  .band-h b{font-size:14px;color:var(--ink);font-weight:700;}
+  .band-h span{font-size:12.5px;color:var(--muted);}
+  .band.edge{border-color:color-mix(in srgb,var(--edge) 45%,var(--border));}
+  .band.access{border-color:color-mix(in srgb,var(--accent) 40%,var(--border));}
+  .nodes{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:10px;}
+  .node{background:var(--card-2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;}
+  .node .nm{font-size:13.5px;font-weight:650;color:var(--ink);display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .node .port{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--bg);
+    border:1px solid var(--border);border-radius:5px;padding:1px 6px;white-space:nowrap;}
+  .node .d{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.45;}
+  .node.hero{border-color:color-mix(in srgb,var(--accent) 55%,var(--border));background:var(--accent-bg);}
+  .node.ext{background:transparent;border-style:dashed;}
+  .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;}
+  .dot.live{background:var(--good);box-shadow:0 0 0 3px var(--good-bg);}
+  .dot.warnd{background:var(--warn);box-shadow:0 0 0 3px var(--warn-bg);}
+  .dot.down{background:var(--bad);box-shadow:0 0 0 3px var(--bad-bg);}
+  .dot.idle{background:var(--muted);}
+
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin:14px 2px 0;}
+  .legend span{display:flex;align-items:center;gap:6px;}
+
+  /* ---- inventory table ---- */
+  .tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:560px;}
+  th,td{text-align:left;padding:11px 15px;border-bottom:1px solid var(--border);}
+  thead th{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+    background:var(--card-2);font-weight:600;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody td:first-child{font-weight:650;color:var(--ink);}
+  td .port{font-family:var(--mono);font-size:12px;color:var(--muted);}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:650;padding:3px 9px;
+    border-radius:999px;white-space:nowrap;}
+  .chip.live{color:var(--good);background:var(--good-bg);}
+  .chip.warnd{color:var(--warn);background:var(--warn-bg);}
+  .chip.idle{color:var(--muted);background:var(--card-2);}
+  .chip.down{color:var(--bad);background:var(--bad-bg);}
+
+  /* ---- issues ---- */
+  .issues{display:grid;gap:12px;}
+  .issue{display:grid;grid-template-columns:auto 1fr;gap:14px;background:var(--card);border:1px solid var(--border);
+    border-radius:12px;padding:15px 17px;box-shadow:var(--shadow);}
+  .issue .sev{width:4px;border-radius:2px;}
+  .issue.crit .sev{background:var(--bad)} .issue.warn .sev{background:var(--warn)} .issue.ok .sev{background:var(--good)}
+  .issue h3{margin:0 0 4px;font-size:14.5px;color:var(--ink);font-weight:700;}
+  .issue p{margin:0;font-size:13.5px;color:var(--body);}
+  .issue .fix{margin-top:7px;font-size:13px;color:var(--muted);}
+  .issue .fix b{color:var(--accent);font-weight:650;}
+
+  /* ---- roadmap ---- */
+  .road{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;}
+  .rcard{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:17px 18px;
+    box-shadow:var(--shadow);display:flex;flex-direction:column;gap:9px;transition:transform .15s ease,box-shadow .15s ease;}
+  .rcard:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg);}
+  .rcard h3{margin:0;font-size:15.5px;color:var(--ink);font-weight:700;letter-spacing:-.01em;}
+  .rcard p{margin:0;font-size:13.5px;color:var(--body);flex:1;}
+  .badges{display:flex;gap:7px;flex-wrap:wrap;}
+  .badge{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
+    padding:3px 8px;border-radius:6px;border:1px solid var(--border);color:var(--muted);}
+  .badge.eff{color:var(--good);border-color:transparent;background:var(--good-bg);}
+  .badge.rew{color:var(--accent);border-color:transparent;background:var(--accent-bg);}
+  .badge.dep{color:var(--warn);border-color:transparent;background:var(--warn-bg);}
+  .rnum{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:700;}
+
+  footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--border);color:var(--muted);font-size:12.5px;
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+  a{color:var(--accent);}
+  @media (prefers-reduced-motion: reduce){.rcard{transition:none;}}
+
+  .osbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:-8px 0 30px;padding-bottom:18px;
+    border-bottom:1px solid var(--border);}
+  .osbrand{display:flex;align-items:center;gap:9px;text-decoration:none;}
+  .osdot{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent-2));
+    display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px;}
+  .osname{font-weight:700;font-size:15px;color:var(--ink);}
+  .osname span{color:var(--muted);font-weight:500;}
+  .osnav{display:flex;gap:3px;flex-wrap:wrap;margin-left:auto;}
+  .osnav a{font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;padding:6px 12px;border-radius:8px;}
+  .osnav a:hover{color:var(--ink);background:var(--card-2);}
+  .osnav a.on{color:var(--accent);background:var(--accent-bg);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="osbar">
+    <a class="osbrand" href="/ops/#overview"><span class="osdot">T</span><span class="osname">Timelabs <span>Hub</span></span></a>
+    <nav class="osnav">
+      <a href="/ops/#overview">Face</a><a href="/drop/">Drop</a><a href="/ops/ledger.html">Ledger</a>
+      <a href="/ops/agent/">Chat</a><a href="/ops/tools.html" class="on">Tools</a>
+    </nav>
+  </div>
+
+  <header>
+    <p class="eyebrow">Timelabs OS · ops.timelabsco.in</p>
+    <h1>System architecture &amp; state of the machine</h1>
+    <p class="lede">One VPS runs the whole operation — a browser-only front door, an AI operations layer, and the business data underneath. This is every moving part as it stands today, what's healthy, and where the next low-effort wins are.</p>
+    <div class="statrow">
+      <div class="stat"><div class="v num">14</div><div class="l">app services</div></div>
+      <div class="stat"><div class="v ok">Healthy</div><div class="l">edge · auth · apps</div></div>
+      <div class="stat"><div class="v num">5.8<span style="font-size:14px">/7.8 GB</span></div><div class="l">memory used</div></div>
+      <div class="stat"><div class="v num">127 GB</div><div class="l">disk free</div></div>
+      <div class="stat"><div class="v num">10 d</div><div class="l">uptime</div></div>
+      <div class="stat"><div class="v warn">3 flags</div><div class="l">need attention</div></div>
+    </div>
+  </header>
+
+  <h2>Request flow — top to bottom</h2>
+  <div class="diagram">
+
+    <div class="band">
+      <div class="band-h"><b>People &amp; devices</b><span>browsers only — nothing installed on any device</span></div>
+      <div class="nodes">
+        <div class="node"><div class="nm">iPhone <span class="port">Safari</span></div><div class="d">Uploads, quick checks, photo capture</div></div>
+        <div class="node"><div class="nm">Mac / desktop <span class="port">Chrome</span></div><div class="d">Full dashboard &amp; admin work</div></div>
+        <div class="node ext"><div class="nm">Anyone with a link</div><div class="d">Public share pages — no login</div></div>
+      </div>
+    </div>
+
+    <div class="band edge">
+      <div class="band-h"><b>Edge — nginx</b><span class="port">:443 TLS</span><span>the only thing exposed to the internet</span></div>
+      <div class="nodes">
+        <div class="node"><div class="nm">nginx <span class="dot live"></span></div><div class="d">HTTPS, Let's Encrypt (auto-renew), reverse proxy, upload streaming</div></div>
+        <div class="node"><div class="nm">Public shares <span class="port">/s/</span></div><div class="d">Token-gated file/folder pages — the one route that skips login by design</div></div>
+      </div>
+    </div>
+
+    <div class="band access">
+      <div class="band-h"><b>Key — access control</b><span>every route below passes through here first</span></div>
+      <div class="nodes">
+        <div class="node hero"><div class="nm">oauth2-proxy <span class="port">:4180</span></div><div class="d">Google sign-in → checks allowlist.txt. This file is the entire security boundary.</div></div>
+        <div class="node"><div class="nm">Legacy password <span class="port">:8899</span></div><div class="d">Old gate, dormant — now redirects into Google. Break-glass only.</div></div>
+      </div>
+    </div>
+
+    <div class="band">
+      <div class="band-h"><b>The apps — Hub</b><span>served behind Key, one coherent product</span></div>
+      <div class="nodes">
+        <div class="node hero"><div class="nm">Face <span class="port">static + gen</span></div><div class="d">The dashboard — live Shopify KPIs, funnel, plan, findings. Built by generate.py.</div></div>
+        <div class="node hero"><div class="nm">Drop <span class="port">:8903</span></div><div class="d">Files &amp; videos — resumable uploads, thumbnails, share links, organize, Drive import.</div></div>
+        <div class="node hero"><div class="nm">Ledger <span class="port">static + gen</span></div><div class="d">CFO view — landed cost, per-part cost, planned-SKU margins from suppliers.db.</div></div>
+        <div class="node hero"><div class="nm">Chat <span class="port">:8901</span></div><div class="d">Talk to Hermes/Claude with photos; also serves the Key admin API.</div></div>
+        <div class="node"><div class="nm">Refresh trigger <span class="port">:8877</span></div><div class="d">On-demand dashboard rebuild (the 7d/30d/90d buttons).</div></div>
+      </div>
+    </div>
+
+    <div class="band">
+      <div class="band-h"><b>Agent layer — Hermes</b><span>the always-on operator that watches &amp; acts</span></div>
+      <div class="nodes">
+        <div class="node"><div class="nm">Hermes gateway <span class="dot warnd"></span></div><div class="d">Conversation loop + tool use. Currently rate-limited on Anthropic (see flags).</div></div>
+        <div class="node"><div class="nm">WhatsApp bridge <span class="port">:3000</span><span class="dot warnd"></span></div><div class="d">Connected, but failing to decrypt many group messages → order capture is dark.</div></div>
+        <div class="node"><div class="nm">Hermes MCP <span class="dot live"></span></div><div class="d">Tool servers (web, memory, vision, skills) — the SAFE_WEB toolset for chat.</div></div>
+        <div class="node"><div class="nm">Hub activity bus <span class="port">hub_events</span></div><div class="d">Drop &amp; Key write events here; Hermes reads them — apps talking to each other.</div></div>
+      </div>
+    </div>
+
+    <div class="band">
+      <div class="band-h"><b>Data — on this box</b><span>small, fast, backed up daily</span></div>
+      <div class="nodes">
+        <div class="node"><div class="nm">hermes.db <span class="port">268 KB</span></div><div class="d">Orders, action plan, memory facts, content queue, chat, hub_events.</div></div>
+        <div class="node"><div class="nm">suppliers.db <span class="port">204 KB</span></div><div class="d">Invoices, part costs, planned SKUs, sourcing intel.</div></div>
+        <div class="node"><div class="nm">Drop storage <span class="port">/srv</span></div><div class="d">Team files &amp; product video, 127 GB free. Thumbnails + trash + share tokens.</div></div>
+        <div class="node"><div class="nm">Daily backups <span class="dot live"></span></div><div class="d">hermes + postgres dumps → local + rclone. Running.</div></div>
+      </div>
+    </div>
+
+    <div class="band">
+      <div class="band-h"><b>Outside world</b><span>integrations, each with its own trust level</span></div>
+      <div class="nodes">
+        <div class="node ext"><div class="nm">Shopify <span class="dot warnd"></span></div><div class="d">Live store data — pulled via a Claude session today, not yet self-refreshing.</div></div>
+        <div class="node ext"><div class="nm">Google Drive <span class="dot live"></span></div><div class="d">Read-only import into Drop. Connected &amp; working.</div></div>
+        <div class="node ext"><div class="nm">GA4 · Meta <span class="dot idle"></span></div><div class="d">Sessions &amp; ad spend — bridged snapshot, currently stale.</div></div>
+        <div class="node ext"><div class="nm">Anthropic <span class="dot down"></span></div><div class="d">Claude for chat &amp; analysis — unfunded, so it falls back to a free model.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><span class="dot live"></span> healthy</span>
+    <span><span class="dot warnd"></span> degraded</span>
+    <span><span class="dot down"></span> blocked</span>
+    <span><span class="dot idle"></span> stale / idle</span>
+  </div>
+
+  <h2>Service inventory</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Service</th><th>Port</th><th>Role</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>nginx</td><td class="port">443 / 80</td><td>TLS edge &amp; reverse proxy — the whole public surface</td><td><span class="chip live">live</span></td></tr>
+        <tr><td>oauth2-proxy</td><td class="port">4180</td><td>Google SSO + allowlist gate (Key)</td><td><span class="chip live">live</span></td></tr>
+        <tr><td>drop</td><td class="port">8903</td><td>Drop backend — uploads, thumbs, shares, Drive, organize</td><td><span class="chip live">live</span></td></tr>
+        <tr><td>ops-agent-chat</td><td class="port">8901</td><td>Chat with Hermes + Key admin API</td><td><span class="chip live">live</span></td></tr>
+        <tr><td>ops-dashboard-refresh</td><td class="port">8877</td><td>On-demand Face/Ledger rebuild</td><td><span class="chip live">live</span></td></tr>
+        <tr><td>Hermes gateway</td><td class="port">9119</td><td>Agent conversation loop &amp; scheduled jobs</td><td><span class="chip warnd">rate-limited</span></td></tr>
+        <tr><td>WhatsApp bridge</td><td class="port">3000</td><td>Group messaging → order capture</td><td><span class="chip warnd">decrypt errors</span></td></tr>
+        <tr><td>ops-auth (legacy)</td><td class="port">8899</td><td>Old password gate — dormant, break-glass</td><td><span class="chip idle">standby</span></td></tr>
+        <tr><td>postgresql</td><td class="port">5432</td><td>Serves only Paperclip (which is stopped)</td><td><span class="chip idle">idle</span></td></tr>
+        <tr><td>alook (wrangler)</td><td class="port">15210-12</td><td>Dev-mode stack, no traffic — holding 2.9 GB RAM</td><td><span class="chip idle">idle</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>State of the system — 3 flags</h2>
+  <div class="issues">
+    <div class="issue crit"><div class="sev"></div><div>
+      <h3>Claude is running on empty</h3>
+      <p>The Anthropic balance is unfunded, so the Hermes gateway hits an hourly rate-limit and every Claude call falls back to a free model — weaker on the work that matters most (financial reads, customer copy). This is the single biggest quality lever, and the one thing blocking a first-class Claude presence in Hub.</p>
+      <p class="fix"><b>Fix:</b> fund a small extra-usage balance → the existing <span class="mono">/model claude</span> path lights up instantly, zero new code. Or commit to free models and stop the hourly retries.</p>
+    </div></div>
+    <div class="issue warn"><div class="sev"></div><div>
+      <h3>WhatsApp groups aren't being read</h3>
+      <p>The bridge is connected, but throwing constant "no session to decrypt" errors on group messages — so the order-capture-from-WhatsApp feature is effectively dark (0 orders captured). Classic stale sender-key state after a long-lived session.</p>
+      <p class="fix"><b>Fix:</b> re-link the WhatsApp session (fresh pair) to rebuild group keys, then verify a test order in the group flows into Face → Orders.</p>
+    </div></div>
+    <div class="issue warn"><div class="sev"></div><div>
+      <h3>2.9 GB of RAM is parked on idle tools</h3>
+      <p>The <b>alook</b> dev cluster (2.9 GB) and <b>postgres</b> (running only for the stopped Paperclip app) are consuming memory and attack surface for zero current benefit — on a 7.8 GB box that's real headroom.</p>
+      <p class="fix"><b>Fix:</b> a keep / kill / productionize decision on each. Retiring both frees ~3 GB immediately and is fully reversible.</p>
+    </div></div>
+    <div class="issue ok"><div class="sev"></div><div>
+      <h3>What's solid</h3>
+      <p>TLS, Google login, Face, Drop, Ledger, Chat, Key, public shares, Google Drive import, and daily backups are all healthy. The edge is tight — one door, everything behind it authenticated.</p>
+    </div></div>
+  </div>
+
+  <h2>Low-effort, high-reward — build next</h2>
+  <div class="road">
+    <div class="rcard">
+      <div class="badges"><span class="rnum">01</span><span class="badge eff">Low effort</span><span class="badge rew">High reward</span></div>
+      <h3>Fund Claude → put it in Hub</h3>
+      <p>Unblocks the biggest quality jump with almost no build. Then Hermes can pull useful facts from every Claude chat straight into its own memory — the "aware of everything" loop you want.</p>
+    </div>
+    <div class="rcard">
+      <div class="badges"><span class="rnum">02</span><span class="badge eff">Low effort</span><span class="badge rew">High reward</span></div>
+      <h3>Content engine, switched on</h3>
+      <p>27 blog topics are already queued and idle. Wire the queue → Blog Studio drafts → a review card on Face. This is the AI-visibility growth lever (winning citations for "Seiko mods in India") — sitting unused.</p>
+    </div>
+    <div class="rcard">
+      <div class="badges"><span class="rnum">03</span><span class="badge eff">Low effort</span><span class="badge rew">Med reward</span></div>
+      <h3>Live activity feed on Face</h3>
+      <p>The hub_events bus already records every upload, share, and access change. Surface it as a "what's happening" timeline on Face — the data's flowing, it just needs a panel.</p>
+    </div>
+    <div class="rcard">
+      <div class="badges"><span class="rnum">04</span><span class="badge dep">Med effort</span><span class="badge rew">High reward</span></div>
+      <h3>Ledger fills itself from Drop</h3>
+      <p>Drop an invoice spreadsheet into <span class="mono">Supplier Invoices/</span> and have it parse into the cost tables automatically. Closes the loop between the file tunnel and the CFO view.</p>
+    </div>
+    <div class="rcard">
+      <div class="badges"><span class="rnum">05</span><span class="badge dep">Med effort</span><span class="badge rew">High reward</span></div>
+      <h3>Revive WhatsApp order capture</h3>
+      <p>Re-link the bridge, get group messages decrypting again, and show captured orders on Face → Orders. A core feature that's currently dead weight.</p>
+    </div>
+    <div class="rcard">
+      <div class="badges"><span class="rnum">06</span><span class="badge eff">Low effort</span><span class="badge rew">Med reward</span></div>
+      <h3>Reclaim the machine</h3>
+      <p>Retire idle alook + Paperclip/postgres → ~3 GB back, smaller attack surface, simpler mental model. One decision, reversible.</p>
+    </div>
+  </div>
+
+  <footer>
+    <span>Timelabs OS — architecture snapshot · 21 Jul 2026</span>
+    <span>one VPS · browser-only front door · Hermes + Claude inside</span>
+  </footer>
+</div>
+</body>
+</html>
