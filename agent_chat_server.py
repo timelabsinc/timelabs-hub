@@ -19,6 +19,7 @@ import secrets
 import sqlite3
 import subprocess
 import threading
+import urllib.request
 
 HOST, PORT = "127.0.0.1", 8901
 DB = "/root/ops-dashboard/data/hermes.db"
@@ -161,6 +162,60 @@ def theme_prompt(request, flat_settings):
         "(e.g. \"playfair_display_n4\", \"open_sans_n4\").\n"
         "- Change as few keys as needed. No prose, no markdown fences — only the JSON object."
     )
+
+
+def _download_images(urls, limit=4):
+    """Fetch a few image URLs (Drop /raw links or external) to local temp files
+    so the vision model can see them. Returns [(path, url)], skipping failures."""
+    saved = []
+    for u in urls[:limit]:
+        u = str(u).strip()
+        if not u.startswith(("http://", "https://")):
+            continue
+        try:
+            req = urllib.request.Request(u, headers={"User-Agent": "LabsOS/1.0"})
+            with urllib.request.urlopen(req, timeout=25) as r:
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                data = r.read(9 * 1024 * 1024)  # cap ~9MB per image
+        except Exception:
+            continue
+        if not data:
+            continue
+        ext = ".png" if "png" in ctype else ".webp" if "webp" in ctype else ".jpg"
+        path = os.path.join(UPLOAD_DIR, f"aidraft_{secrets.token_hex(6)}{ext}")
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+            saved.append((path, u))
+        except OSError:
+            pass
+    return saved
+
+
+def ai_product_prompt(saved, hint=""):
+    """Vision prompt: turn product photos into a Shopify listing (JSON)."""
+    lines = ["You are writing a Shopify product listing for Timelabs Co, an India-based brand "
+             "selling Seiko watch-mod parts and complete builds (cases, dials, movements, hands, "
+             "bezels, straps, crystals)."]
+    for i, (path, _) in enumerate(saved, 1):
+        lines.append(f"Product photo {i} is saved at {path} — analyze it with your vision tool: "
+                     "identify the part type, materials, colour, finish, movement/case if visible, "
+                     "and any printed branding or specs.")
+    if hint:
+        lines.append(f"The owner's rough idea / context: {hint}")
+    lines.append(
+        "Write the listing in the Timelabs brand voice: confident, concrete, no hype, no emoji. "
+        "Reply with ONLY a JSON object with these keys:\n"
+        '- "title": concise and specific, under 70 characters.\n'
+        '- "type": exactly one of Case, Dial, Hands, Movement, Bezel, Bezel insert, Crystal, '
+        'Chapter ring, Crown, Strap, Bracelet, Gasket, Case back, Complete build, Tool, Accessory.\n'
+        '- "tags": array of 4-8 lowercase tags (e.g. "seiko-mod", "nh35", "sapphire").\n'
+        '- "description": HTML — a 2-3 sentence opening (design/build + one distinctive detail), '
+        "then a <ul> specs list (material, size/fit, compatible movement or case where visible).\n"
+        '- "price": a suggested price as a number in INR, or "" if genuinely unsure.\n'
+        "No text outside the JSON object."
+    )
+    return "\n".join(lines)
 
 
 def apply_content_op(desc, op, block="", name="", find="", replace=""):
@@ -1074,6 +1129,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, {"results": results, "changed": n_changed,
                          "total": len(results), "dry_run": dry, "sample": sample})
 
+    def _handle_shopify_ai_draft(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 16384)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"}); return
+        images = [u for u in (p.get("images") or []) if str(u).strip()]
+        hint = str(p.get("hint", "")).strip()[:500]
+        if not images and not hint:
+            self._json(400, {"error": "add a photo, or type a rough idea to draft from"}); return
+        saved = _download_images(images)
+        if images and not saved:
+            self._json(502, {"error": "couldn't read those photos — try different images"}); return
+        if not LOCK.acquire(blocking=False):
+            self._json(409, {"error": "The agent is busy — try again in a moment."}); return
+        draft = None
+        try:
+            prompt = ai_product_prompt(saved, hint)
+            for model, provider in (("claude-sonnet-4-6", "anthropic"), (None, None)):
+                try:
+                    reply = run_hermes(prompt, model, provider)
+                except Exception:
+                    continue
+                draft = _extract_json_obj(reply)
+                if isinstance(draft, dict):
+                    break
+        finally:
+            LOCK.release()
+            for path, _ in saved:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        if not isinstance(draft, dict):
+            self._json(502, {"error": "AI couldn't draft this one — try again, or add a hint."}); return
+        tags = draft.get("tags")
+        if isinstance(tags, list):
+            tags = [str(t).strip() for t in tags if str(t).strip()][:20]
+        else:
+            tags = [t.strip() for t in str(tags or "").split(",") if t.strip()]
+        price = draft.get("price", draft.get("price_suggestion", ""))
+        self._json(200, {
+            "title": str(draft.get("title", "")).strip()[:255],
+            "type": str(draft.get("type", "")).strip()[:100],
+            "tags": tags,
+            "description": str(draft.get("description", "")),
+            "price": re.sub(r"[^0-9.]", "", str(price)) if price not in (None, "") else "",
+        })
+
     def _handle_shopify_product_create(self):
         if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
             self._json(403, {"error": "admins only"})
@@ -1407,6 +1513,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_allowlist_change("remove")
         elif path == "/ledger/import":
             self._handle_ledger_import()
+        elif path == "/shopify/product/ai-draft":
+            self._handle_shopify_ai_draft()
         elif path == "/shopify/product/create":
             self._handle_shopify_product_create()
         elif path == "/shopify/theme/suggest":

@@ -70,6 +70,10 @@ def build():
   .btn:active{{transform:scale(.97);}}
   .btn svg{{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;
     stroke-linecap:round;stroke-linejoin:round;}}
+  .btn.ai{{width:100%;justify-content:center;margin-top:9px;background:var(--accent-bg);
+    border-color:transparent;color:var(--accent);font-weight:700;}}
+  .btn.ai:hover{{border-color:var(--accent);}}
+  .btn.ai svg{{stroke:var(--accent);}}
   .btn.primary{{background:var(--ink);color:var(--bg);border-color:var(--ink);width:100%;
     justify-content:center;padding:13px;font-size:14.5px;}}
   .btn.primary[disabled]{{opacity:.45;cursor:not-allowed;}}
@@ -193,7 +197,8 @@ function render(){{
           '<button class="btn" id="from-url"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>Paste URL</button>'+
         '</div>'+
         '<div class="urlrow" id="urlrow" style="display:none"><input id="f-url" class="pin" placeholder="https://… image link"><button class="btn" id="url-add">Add</button></div>'+
-        '<div class="hint">Photos from Drop are shared with a public link automatically so Shopify can fetch them. The first photo becomes the cover.</div>'+
+        '<button class="btn ai" id="ai-draft"><svg viewBox="0 0 24 24"><path d="M9 3l1.2 3.3L13.5 7.5 10.2 8.7 9 12 7.8 8.7 4.5 7.5l3.3-1.2z"/><path d="M17 12l.8 2.2L20 15l-2.2.8L17 18l-.8-2.2L14 15l2.2-.8z"/></svg>Draft the details with AI</button>'+
+        '<div class="hint">Add photos, then let AI read them and write the title, type, tags &amp; description. Photos from Drop are shared automatically so Shopify can fetch them; the first is the cover.</div>'+
       '</div>'+
       '<div class="pb-field"><label>Publish as</label>'+
         '<div class="seg" id="status-seg">'+
@@ -224,8 +229,26 @@ function render(){{
   $('from-url').onclick=function(){{var r=$('urlrow');r.style.display=r.style.display==='none'?'flex':'none';if(r.style.display==='flex')$('f-url').focus();}};
   $('url-add').onclick=function(){{var u=$('f-url').value.trim();if(!u)return;if(!/^https?:\\/\\//.test(u)){{toast('Give a full https:// link');return;}}form.images.push(u);$('f-url').value='';drawImgs();sync();}};
   $('f-url').addEventListener('keydown',function(e){{if(e.key==='Enter'){{e.preventDefault();$('url-add').click();}}}});
+  $('ai-draft').onclick=aiDraft;
   $('create').onclick=submit;
   drawImgs();sync();
+}}
+
+async function aiDraft(){{
+  var hint=($('f-title').value||'').trim();
+  if(!form.images.length && !hint){{ toast('Add a photo first, or type a rough idea in the title'); return; }}
+  var btn=$('ai-draft'); var lbl=btn.innerHTML; btn.disabled=true; btn.textContent='Reading the photos…';
+  try{{
+    var d=await api('/shopify/product/ai-draft',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{images:form.images,hint:hint}})}});
+    if(d.title){{ form.title=d.title; $('f-title').value=d.title; }}
+    if(d.type){{ form.type=d.type; $('f-type').value=d.type; }}
+    if(d.tags&&d.tags.length){{ form.tags=d.tags.join(', '); $('f-tags').value=form.tags; }}
+    if(d.description){{ form.desc=d.description; $('f-desc').value=d.description; }}
+    if(d.price){{ form.price=String(d.price); $('f-price').value=form.price; }}
+    sync();
+    toast('Drafted with AI — review and tweak, then create');
+  }}catch(e){{ toast(e.message); }}
+  btn.disabled=false; btn.innerHTML=lbl;
 }}
 function bind(id,key){{$(id).addEventListener('input',function(){{form[key]=$(id).value;sync();}});}}
 
