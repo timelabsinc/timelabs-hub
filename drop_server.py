@@ -47,6 +47,26 @@ PUBLIC_BASE = "https://ops.timelabsco.in"
 GDRIVE_TOKEN = "/root/ops-dashboard/.gdrive-token.json"
 OAUTH_CLIENT = "/root/oauth-client.json"
 GDRIVE_REDIRECT = PUBLIC_BASE + "/drop/api/gdrive/callback"
+HERMES_DB = "/root/ops-dashboard/data/hermes.db"
+
+
+def hub_event(kind, detail, actor="?"):
+    """Log to hub_events in hermes.db — the shared feed Hermes watches, so the
+    whole Hub stays visible to the agent (uploads, shares, organize, access)."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(HERMES_DB, timeout=5)
+        conn.execute("""CREATE TABLE IF NOT EXISTS hub_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            app TEXT NOT NULL DEFAULT 'drop',
+            kind TEXT NOT NULL, actor TEXT, detail TEXT)""")
+        conn.execute("INSERT INTO hub_events (kind, actor, detail) VALUES (?,?,?)",
+                     (kind, actor, detail[:500]))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[events] {e}", flush=True)
 MAX_CHUNK = 16 * 1024 * 1024          # per-request cap; client sends 6 MB
 MAX_FILE = 4 * 1024 * 1024 * 1024     # 4 GB per file is plenty for product video
 NAME_RE = re.compile(r"^[^/\\\x00-\x1f]{1,200}$")
@@ -341,6 +361,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             shutil.move(src, os.path.join(TRASH, f"{int(time.time())}-{name}"))
             done.append(name)
         print(f"[drop] {self._user()} trashed {done}", flush=True)
+        hub_event("delete", ", ".join(done), self._user())
         self._json(200, {"ok": True, "deleted": done})
 
     # ------------------------------------------------------------- organize
@@ -356,6 +377,76 @@ class Handler(http.server.BaseHTTPRequestHandler):
             for col in range(8):
                 bits = (bits << 1) | (1 if px[row * 9 + col] > px[row * 9 + col + 1] else 0)
         return bits
+
+    _vocab_cache = None
+
+    @classmethod
+    def _vocab(cls):
+        """Watch-domain vocabulary from suppliers.db: movements, style families,
+        part categories. OCR tokens matched here become folder names."""
+        if cls._vocab_cache is not None:
+            return cls._vocab_cache
+        vocab = {}
+        try:
+            import sqlite3
+            conn = sqlite3.connect("/root/ops-dashboard/data/suppliers.db", timeout=5)
+            for (m,) in conn.execute("SELECT DISTINCT model_compat FROM invoice_items WHERE model_compat IS NOT NULL"):
+                for part in re.split(r"[/,\s]+", m):
+                    if 3 <= len(part) <= 8:
+                        vocab[part.upper()] = part.upper()
+            for (s,) in conn.execute("SELECT DISTINCT style_ref FROM invoice_items WHERE style_ref IS NOT NULL"):
+                pretty = s.replace("-", " ").title()
+                vocab[s.replace("-", "").upper()] = pretty
+                for w in s.split("-"):
+                    if len(w) >= 4:
+                        vocab[w.upper()] = pretty
+            for (c,) in conn.execute("SELECT DISTINCT part_category FROM invoice_items WHERE part_category IS NOT NULL"):
+                if c and len(c) >= 4:
+                    vocab[c.upper()] = c.title() + "s"
+            conn.close()
+        except Exception as e:
+            print(f"[organize] vocab: {e}", flush=True)
+        for extra in ("SKX", "SEIKO", "NH35A", "NH36A"):
+            vocab.setdefault(extra, extra.replace("A", "") if extra.endswith("A") else extra.title())
+        cls._vocab_cache = vocab
+        return vocab
+
+    def _vision_names(self, d, groups):
+        """Best-effort: ask Hermes (vision) to name still-generic groups from a
+        sample thumbnail each. Silent fallback — never blocks organize."""
+        generic = [g for g in groups if g["name"].startswith("Set ")]
+        if not generic:
+            return
+        samples = []
+        for g in generic[:6]:
+            fp = os.path.join(d, g["files"][0])
+            st = os.stat(fp)
+            key = hashlib.sha1(f"vn|{fp}|{st.st_size}".encode()).hexdigest()
+            tp = os.path.join(THUMBS, key + ".jpg")
+            if not os.path.exists(tp):
+                try:
+                    if not make_thumb(fp, tp, 640):
+                        continue
+                except Exception:
+                    continue
+            samples.append((g, tp))
+        if not samples:
+            return
+        listing = "\n".join(f"{i+1}. {tp}" for i, (_, tp) in enumerate(samples))
+        prompt = ("Look at each numbered image file with your vision tool. Each shows watch "
+                  "parts or watches (Seiko-mod business). Reply ONLY with JSON: a list of "
+                  f"short 2-4 word folder names, one per image, same order. Images:\n{listing}")
+        try:
+            r = subprocess.run(["hermes", "-t", "vision", "-z", prompt],
+                               capture_output=True, text=True, timeout=90)
+            m = re.search(r"\[.*\]", r.stdout, re.S)
+            names = json.loads(m.group(0)) if m else []
+            for (g, _), nm in zip(samples, names):
+                nm = safe_name(re.sub(r"[^\w \-]", "", str(nm)).strip()[:40] or "")
+                if nm:
+                    g["name"] = nm.title()
+        except Exception as e:
+            print(f"[organize] vision naming skipped: {e}", flush=True)
 
     @staticmethod
     def _ocr_tokens(path):
@@ -431,11 +522,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             for m in members:
                 for t in tokens.get(m, []):
                     toks[t] = toks.get(t, 0) + 1
-            common = [t for t, c in sorted(toks.items(), key=lambda x: -x[1]) if c >= 2]
+            vocab = self._vocab()
+            hits = {}
+            for t, c in toks.items():
+                key = t.replace("-", "").upper()
+                if key in vocab:
+                    hits[vocab[key]] = hits.get(vocab[key], 0) + c
             seq += 1
-            gname = (common[0].title() if common else f"Set {seq}")
+            if hits:
+                ranked = sorted(hits.items(), key=lambda x: -x[1])
+                gname = " · ".join(n for n, _ in ranked[:2])
+            else:
+                common = [t for t, c in sorted(toks.items(), key=lambda x: -x[1]) if c >= 2]
+                gname = (common[0].title() if common else f"Set {seq}")
             groups.append({"name": gname, "files": sorted(members)})
         groups.sort(key=lambda g: -len(g["files"]))
+        self._vision_names(d, groups)
         self._json(200, {"groups": groups,
                          "scanned": len(names),
                          "ungrouped": len(names) - sum(len(g["files"]) for g in groups)})
@@ -469,6 +571,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 shutil.move(src_p, unique_path(target, fn))
                 moved += 1
         print(f"[drop] {self._user()} organized {moved} files into {made}", flush=True)
+        hub_event("organize", f"{moved} photos into folders: {', '.join(made)}", self._user())
         self._json(200, {"ok": True, "moved": moved, "folders": made})
 
     # ------------------------------------------------------------- google drive
@@ -673,6 +776,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             json.dump({"rel": rel, "by": self._user(), "created": int(time.time()),
                        "is_dir": os.path.isdir(os.path.join(d, name))}, f)
         print(f"[drop] {self._user()} shared {rel} -> /s/{tok}", flush=True)
+        hub_event("share_created", f"public link for {rel}", self._user())
         self._json(200, {"token": tok, "url": f"{PUBLIC_BASE}/s/{tok}"})
 
     def _share_revoke(self):
@@ -684,6 +788,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         os.remove(fp)
         print(f"[drop] {self._user()} revoked share {tok}", flush=True)
+        hub_event("share_revoked", tok, self._user())
         self._json(200, {"ok": True})
 
     # ---- public, token-gated (reached via nginx /s/ without login) ----
@@ -935,6 +1040,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             os.remove(meta_p)
         print(f"[drop] {self._user()} uploaded {os.path.basename(dst)} "
               f"({meta['size']} B) -> {meta['rel'] or '/'}", flush=True)
+        hub_event("upload", f"{os.path.basename(dst)} ({meta['size']//1000000} MB) into /{meta['rel']}", self._user())
         self._json(200, {"ok": True, "name": os.path.basename(dst)})
 
     def log_message(self, fmt, *args):

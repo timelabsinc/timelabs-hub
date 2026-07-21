@@ -745,6 +745,11 @@ def main():
     os.replace(tmp_path, OUT_PATH)
     os.system(f"chown www-data:www-data {OUT_PATH}")
     print(f"wrote {OUT_PATH} (shopify={shopify.get('connected')}, ga4={ga4.get('connected')}, meta={meta.get('connected')})")
+    try:
+        import ledger
+        ledger.build()
+    except Exception as e:
+        print(f"[ledger] {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

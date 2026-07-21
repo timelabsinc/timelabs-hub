@@ -737,7 +737,7 @@ def _appnav(active="face", drop_ready=False):
     items = [
         ("face", 'href="/ops/#overview"', "Face", ""),
         ("drop", drop_attr, "Drop", ""),
-        ("ledger", 'href="#" data-soon="Ledger"', "Ledger", ""),
+        ("ledger", 'href="/ops/ledger.html"', "Ledger", ""),
         ("chat", 'href="/ops/agent/"', "Chat", ""),
         ("key", 'href="#" id="keyNav"', "Key", " admin-only"),
     ]

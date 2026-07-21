@@ -45,6 +45,23 @@ ALLOWLIST_PATH = "/etc/oauth2-proxy/allowlist.txt"
 ADMIN_EMAILS = ("timelabs.inc@gmail.com", "schezan.m@gmail.com")
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
+
+def hub_event(kind, detail, actor="?", app="key"):
+    """Shared Hub activity feed (hub_events in hermes.db) — Hermes watches this."""
+    try:
+        conn = sqlite3.connect(DB, timeout=5)
+        conn.execute("""CREATE TABLE IF NOT EXISTS hub_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            app TEXT NOT NULL DEFAULT 'drop',
+            kind TEXT NOT NULL, actor TEXT, detail TEXT)""")
+        conn.execute("INSERT INTO hub_events (app, kind, actor, detail) VALUES (?,?,?,?)",
+                     (app, kind, actor, detail[:500]))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[events] {e}", flush=True)
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 PREAMBLE = (
@@ -55,7 +72,12 @@ PREAMBLE = (
     "so structure longer answers like a clean document. You have your usual tools "
     "(terminal, files, web, vision) and the business database at "
     "/root/ops-dashboard/data/hermes.db (orders, products, action_items, "
-    "memory_facts, content_library) — use them when the question needs real data. "
+    "memory_facts, content_library, and hub_events — a live feed of everything "
+    "happening in Hub: file uploads, public share links, photo organizing, and "
+    "access changes; check it when asked what's new). Team files live in Drop at "
+    "/srv/timelabs-drop (browse it directly). Sourcing costs and margins are in "
+    "/root/ops-dashboard/data/suppliers.db, surfaced at /ops/ledger.html. "
+    "When a conversation surfaces something durable, save it to memory_facts. "
     "LEARN PROACTIVELY: when this conversation produces a decision, preference, "
     "correction, or new task, write it to the database yourself (action_items for "
     "tasks, memory_facts for knowledge, content_library for approved copy) and "
@@ -512,6 +534,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(500, {"error": f"could not write allowlist: {e}"})
             return
         print(f"[key] {admin} {action}ed {email}", flush=True)
+        hub_event(f"member_{action}", email, admin)
         self._json(200, {"ok": True, "members": members})
 
     def _handle_new_session(self):
