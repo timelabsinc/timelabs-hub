@@ -27,6 +27,7 @@ IC = {
     "product": '<path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M12 12l9-5M12 12v10M12 12L3 7"/>',
     "content": '<path d="M17 3l4 4L8 20l-5 1 1-5z"/><path d="M14 6l4 4"/>',
     "map": '<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/>',
+    "files": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
 }
 
 # (key, name, description, href-or-None, status)  status: "live" | "soon" | "admin"
@@ -48,6 +49,7 @@ TOOLS = [
     ]),
     ("Admin", [
         ("key", "Key", "Who can sign in to Hub — invite &amp; remove people.", "/ops/#key", "admin"),
+        ("files", "System files", "Browse the Hermes server files — read-only, hidden-file toggle.", "/ops/files.html", "admin"),
         ("map", "System map", "How the whole OS fits together — services, health, roadmap.", "/ops/architecture.html", "admin"),
     ]),
 ]

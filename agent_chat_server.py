@@ -25,6 +25,7 @@ HOST, PORT = "127.0.0.1", 8901
 DB = "/root/ops-dashboard/data/hermes.db"
 UPLOAD_DIR = "/root/ops-dashboard/data/uploads"
 THEME_BACKUPS = "/root/ops-dashboard/theme-backups"
+FS_ROOT = "/root"   # System-files browser is confined to the Hermes home
 # Chat-photo cap. Modern phone photos routinely exceed the old 11 MB ceiling;
 # 32 MB stays comfortably under nginx's 50m on this vhost. Large videos go
 # through Drop (copyparty), not this endpoint. Formats stay jpg/png/webp — the
@@ -108,6 +109,33 @@ def hub_event(kind, detail, actor="?", app="key"):
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(THEME_BACKUPS, exist_ok=True)
+
+def _fs_resolve(p):
+    """Resolve a client path, confined to FS_ROOT (blocks symlink escape/..)."""
+    rp = os.path.realpath(p or FS_ROOT)
+    if rp != FS_ROOT and not rp.startswith(FS_ROOT + os.sep):
+        return None
+    return rp
+
+
+def _fs_protected(path):
+    """True if a file's CONTENTS must be withheld from the web browser because it
+    holds credentials. Listing/metadata is still allowed; download is blocked too.
+    Deliberately conservative — better to over-protect than leak a token."""
+    base = os.path.basename(path).lower()
+    low = path.lower()
+    if base == ".env" or base.startswith(".env."):
+        return True
+    if base in ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".htpasswd", ".netrc"):
+        return True
+    if "/.ssh/" in low and not low.endswith(".pub"):
+        return True
+    if base.endswith((".pem", ".key", ".ppk", ".p12", ".pfx", ".keystore")):
+        return True
+    if any(w in base for w in ("secret", "oauth", "credential", "password", "token", "apikey", "api_key")):
+        return True
+    return False
+
 
 def _extract_json_obj(text):
     """Pull the first JSON object out of a model reply (handles fences/prose)."""
@@ -617,6 +645,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/shopify/product/detail":
             self._handle_shopify_detail(query)
             return
+        if path == "/fs/list":
+            self._handle_fs_list(query)
+            return
+        if path == "/fs/read":
+            self._handle_fs_read(query)
+            return
+        if path == "/fs/download":
+            self._handle_fs_download(query)
+            return
         if path == "/shopify/theme/settings":
             self._handle_shopify_theme_settings()
             return
@@ -931,6 +968,93 @@ class Handler(http.server.BaseHTTPRequestHandler):
             hub_event("product_update", f"{p.get('title', pid.split('/')[-1])}: "
                       + ", ".join(f"{k}={v}" for k, v in changed.items()), actor, app="shopify")
         self._json(200, {"ok": True, "changed": changed})
+
+    # --- System files browser (admin, read-only, confined to FS_ROOT) --------
+    def _handle_fs_list(self, query):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        from urllib.parse import parse_qsl
+        params = dict(parse_qsl(query))
+        show_hidden = params.get("hidden") == "1"
+        d = _fs_resolve(params.get("path") or FS_ROOT)
+        if d is None or not os.path.isdir(d):
+            self._json(404, {"error": "no such folder"}); return
+        entries = []
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    hidden = e.name.startswith(".")
+                    if hidden and not show_hidden:
+                        continue
+                    try:
+                        st = e.stat(follow_symlinks=False)
+                        is_dir = e.is_dir(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    entries.append({
+                        "name": e.name, "path": os.path.join(d, e.name),
+                        "is_dir": is_dir, "size": None if is_dir else st.st_size,
+                        "mtime": int(st.st_mtime), "hidden": hidden,
+                        "link": e.is_symlink(),
+                        "protected": (not is_dir) and _fs_protected(os.path.join(d, e.name)),
+                    })
+        except OSError as ex:
+            self._json(500, {"error": str(ex)}); return
+        entries.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+        self._json(200, {"path": d, "root": FS_ROOT,
+                         "parent": (os.path.dirname(d) if d != FS_ROOT else None),
+                         "entries": entries})
+
+    def _handle_fs_read(self, query):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        from urllib.parse import parse_qsl
+        path = _fs_resolve(dict(parse_qsl(query)).get("path", ""))
+        if path is None or not os.path.isfile(path):
+            self._json(404, {"error": "no such file"}); return
+        if _fs_protected(path):
+            self._json(200, {"protected": True, "name": os.path.basename(path),
+                             "reason": "This file holds credentials, so it's withheld from the "
+                                       "web browser. View it over SSH if you truly need it."}); return
+        size = os.path.getsize(path)
+        if size > 512 * 1024:
+            self._json(200, {"too_large": True, "size": size, "name": os.path.basename(path)}); return
+        try:
+            data = open(path, "rb").read()
+        except OSError as ex:
+            self._json(500, {"error": str(ex)}); return
+        try:
+            self._json(200, {"content": data.decode("utf-8"), "size": size,
+                             "name": os.path.basename(path)})
+        except UnicodeDecodeError:
+            self._json(200, {"binary": True, "size": size, "name": os.path.basename(path)})
+
+    def _handle_fs_download(self, query):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        from urllib.parse import parse_qsl
+        path = _fs_resolve(dict(parse_qsl(query)).get("path", ""))
+        if path is None or not os.path.isfile(path):
+            self._json(404, {"error": "no such file"}); return
+        if _fs_protected(path):
+            self._json(403, {"error": "this file is protected (credentials)"}); return
+        size = os.path.getsize(path)
+        name = os.path.basename(path).replace('"', "")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(262144)
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
     def _handle_shopify_theme_settings(self):
         if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
