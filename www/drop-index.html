@@ -275,7 +275,8 @@
 
   /* menu + modal + toast */
   #menu{position:fixed;z-index:120;background:var(--card);border:1px solid var(--border);border-radius:12px;
-    box-shadow:var(--shadow-lg);padding:5px;min-width:170px;display:none;}
+    box-shadow:var(--shadow-lg);padding:5px;min-width:190px;display:none;
+    max-height:min(360px,80vh);overflow-y:auto;}
   #menu.on{display:block;}
   #menu button{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border-radius:8px;
     font-size:13.5px;font-weight:550;color:var(--ink);text-align:left;}
@@ -283,6 +284,16 @@
   #menu button.danger{color:var(--bad);}
   #menu button.danger:hover{background:var(--bad-bg);}
   #menu .ic{width:16px;height:16px;}
+  #infobox{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:130;display:flex;align-items:center;justify-content:center;padding:16px;}
+  .ibx{background:var(--card);border:1px solid var(--border);border-radius:14px;max-width:430px;width:100%;padding:16px 18px;box-shadow:var(--shadow-lg);}
+  .ihd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+  .ihd b{font-size:15px;color:var(--ink);}
+  .ix{border:none;background:none;font-size:22px;line-height:1;color:var(--muted);cursor:pointer;padding:0 4px;}
+  .ir{display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid var(--border);font-size:13.5px;}
+  .ir:last-child{border-bottom:none;}
+  .ir span{color:var(--muted);flex-shrink:0;}
+  .ir b{text-align:right;word-break:break-word;font-weight:600;color:var(--ink);}
+  .ir a{color:var(--accent);font-weight:600;}
   #veil{position:fixed;inset:0;z-index:115;display:none;}
   #veil.on{display:block;}
   .toast{position:fixed;left:50%;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0) + 14px);
@@ -639,6 +650,31 @@ function render(){
 
 /* ---------------- context menu ---------------- */
 const ICON_LINK = '<svg class="ic" viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>';
+const ICON_EYE = '<svg class="ic" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+const ICON_CLOUD = '<svg class="ic" viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.4A3.5 3.5 0 0 1 18 18z"/><path d="M12 11v6M9.5 13.5 12 11l2.5 2.5"/></svg>';
+const ICON_INFO = '<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>';
+function showInfo(d){
+  const rows=[];
+  const kv=(k,v)=>rows.push('<div class="ir"><span>'+k+'</span><b>'+esc(v)+'</b></div>');
+  kv('Name', d.name);
+  kv('Type', d.is_dir?'Folder':((d.kind||'file')+(d.ext?' · '+d.ext.toUpperCase():'')));
+  kv(d.is_dir?'Contents':'Size', d.is_dir?((d.count||0)+' items · '+fmtSize(d.size)):fmtSize(d.size));
+  if(d.width) kv('Dimensions', d.width+' × '+d.height+' px');
+  kv('Modified', fmtDate(d.mtime));
+  kv('Location', '/'+d.path);
+  let sh='';
+  const s=d.shares||{};
+  if(s.full) sh+='<div class="ir"><span>Public link</span><a href="'+esc(s.full)+'" target="_blank" rel="noopener">open ↗</a></div>';
+  if(s.view) sh+='<div class="ir"><span>Customer link</span><a href="'+esc(s.view)+'" target="_blank" rel="noopener">open ↗</a></div>';
+  if(!s.full && !s.view) sh='<div class="ir"><span>Sharing</span><b style="opacity:.55">Not shared</b></div>';
+  const box=document.createElement('div'); box.id='infobox';
+  box.innerHTML='<div class="ibx"><div class="ihd"><b>Get info</b><button class="ix" aria-label="Close">×</button></div>'+rows.join('')+sh+'</div>';
+  document.body.appendChild(box);
+  const close=()=>box.remove();
+  box.querySelector('.ix').onclick=close;
+  box.onclick=e=>{ if(e.target===box) close(); };
+  document.addEventListener('keydown', function esc2(ev){ if(ev.key==='Escape'){ close(); document.removeEventListener('keydown',esc2); } });
+}
 async function copyText(t){
   try { await navigator.clipboard.writeText(t); return true; }
   catch(e){ prompt('Copy this link:', t); return true; }
@@ -647,22 +683,30 @@ async function showMenu(e, name, isDir){
   const m = $('menu');
   m.innerHTML =
     '<button id="mSh">' + ICON_LINK + 'Share link</button>' +
+    '<button id="mShV">' + ICON_EYE + 'Share for customers</button>' +
+    '<button id="mDrive">' + ICON_CLOUD + (isDir ? 'Sync to Drive' : 'Save to Drive') + '</button>' +
     (isDir ? '<button id="mDl">' + ICONS.dl + 'Download as ZIP</button>'
            : '<button id="mDl">' + ICONS.dl + 'Download</button>') +
+    '<button id="mInfo">' + ICON_INFO + 'Get info</button>' +
     '<button id="mRn">' + ICONS.edit + 'Rename</button>' +
     '<button id="mDe" class="danger">' + ICONS.trash + 'Delete</button>';
   m.classList.add('on');
   $('veil').classList.add('on');
   const x = Math.min(e.clientX || (e.currentTarget && e.currentTarget.getBoundingClientRect().left) || 40, innerWidth - 200);
-  const y = Math.min(e.clientY || (e.currentTarget && e.currentTarget.getBoundingClientRect().bottom) || 200, innerHeight - 210);
+  const y = Math.min(e.clientY || (e.currentTarget && e.currentTarget.getBoundingClientRect().bottom) || 200, innerHeight - 340);
   m.style.left = x + 'px'; m.style.top = y + 'px';
   // if already shared, swap the Share item into copy/remove
   try {
     const info = await api('/share/info?path=' + encodeURIComponent(state.path) + '&name=' + encodeURIComponent(name));
-    if(info.token){
+    if(info.full){
       $('mSh').innerHTML = ICON_LINK + 'Copy link · <span style="color:var(--good)">shared</span>';
-      $('mSh').dataset.url = info.url;
-      $('mSh').dataset.token = info.token;
+      $('mSh').dataset.url = info.full.url;
+      $('mSh').dataset.token = info.full.token;
+    }
+    if(info.view){
+      $('mShV').innerHTML = ICON_EYE + 'Copy customer link · <span style="color:var(--good)">shared</span>';
+      $('mShV').dataset.url = info.view.url;
+      $('mShV').dataset.token = info.view.token;
     }
   } catch(err){}
   $('mSh').onclick = async () => {
@@ -680,6 +724,31 @@ async function showMenu(e, name, isDir){
       const r = await api('/share', {method:'POST', body: JSON.stringify({path: state.path, name})});
       await copyText(r.url);
       toast('Public link copied — anyone with it can view');
+    } catch(err){ toast(err.message); }
+  };
+  $('mShV').onclick = async () => {
+    const existing = $('mShV').dataset.url;
+    hideMenu();
+    try {
+      if(existing){ await copyText(existing); toast('Customer link copied — view-only'); return; }
+      const r = await api('/share', {method:'POST', body: JSON.stringify({path: state.path, name, mode:'view'})});
+      await copyText(r.url);
+      toast('Customer link copied — view-only, no download');
+    } catch(err){ toast(err.message); }
+  };
+  $('mDrive').onclick = async () => {
+    hideMenu();
+    toast((isDir ? 'Syncing ' : 'Saving ') + name + ' to Drive…');
+    try {
+      const r = await api('/gdrive/export', {method:'POST', body: JSON.stringify({path: state.path, name})});
+      toast(isDir ? ('Synced ' + (r.count||0) + ' file' + (r.count===1?'':'s') + ' to Drive') : 'Saved to Drive ✓');
+    } catch(err){ toast(err.message); }
+  };
+  $('mInfo').onclick = async () => {
+    hideMenu();
+    try {
+      const d = await api('/info?path=' + encodeURIComponent(state.path) + '&name=' + encodeURIComponent(name));
+      showInfo(d);
     } catch(err){ toast(err.message); }
   };
   $('mDl').onclick = () => {

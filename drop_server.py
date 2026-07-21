@@ -207,6 +207,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._list(params.get("path", ""))
         elif path == "/share/info":
             self._share_info(params.get("path", ""), params.get("name", ""))
+        elif path == "/info":
+            self._info(params.get("path", ""), params.get("name", ""))
         elif path == "/thumb":
             self._thumb(params.get("path", ""), big=params.get("big") == "1")
         elif path == "/gdrive/status":
@@ -286,6 +288,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._organize_apply()
         elif path == "/gdrive/import":
             self._gdrive_import()
+        elif path == "/gdrive/export":
+            self._gdrive_export()
         elif path == "/share":
             self._share_create()
         elif path == "/share/revoke":
@@ -629,7 +633,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "client_id": cid,
             "redirect_uri": GDRIVE_REDIRECT,
             "response_type": "code",
-            "scope": "https://www.googleapis.com/auth/drive.readonly",
+            "scope": ("https://www.googleapis.com/auth/drive.readonly "
+                      "https://www.googleapis.com/auth/drive.file"),
             "access_type": "offline",
             "prompt": "consent",
         })
@@ -791,11 +796,152 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _share_info(self, rel_dir, name):
         want = (rel_dir.strip("/") + "/" + name).strip("/") if name else rel_dir.strip("/")
+        out = {"token": None, "full": None, "view": None}
         for tok, meta in self._share_all().items():
             if meta.get("rel") == want:
-                self._json(200, {"token": tok, "url": f"{PUBLIC_BASE}/s/{tok}"})
+                mode = meta.get("mode", "full")
+                entry = {"token": tok, "url": f"{PUBLIC_BASE}/s/{tok}"}
+                out[mode] = entry
+                if mode == "full" or out["token"] is None:
+                    out["token"] = tok          # back-compat: prefer the full link
+                    out["url"] = entry["url"]
+        self._json(200, out)
+
+    def _info(self, rel_dir, name):
+        """Rich metadata for a file/folder: size, kind, image dimensions, dates,
+        and current share links (full + view-only)."""
+        name = safe_name(name)
+        d = safe_rel(rel_dir)
+        if d is None or not name or not os.path.exists(os.path.join(d, name)):
+            self._json(404, {"error": "not found"})
+            return
+        fp = os.path.join(d, name)
+        st = os.stat(fp)
+        is_dir = os.path.isdir(fp)
+        rel = (rel_dir.strip("/") + "/" + name).strip("/")
+        info = {"name": name, "is_dir": is_dir, "path": rel,
+                "mtime": int(st.st_mtime), "ctime": int(st.st_ctime)}
+        if is_dir:
+            try:
+                kids = [x for x in os.scandir(fp) if not x.name.startswith(".")]
+                info["count"] = len(kids)
+                info["size"] = sum((x.stat().st_size for x in kids if x.is_file()), 0)
+            except OSError:
+                info["count"], info["size"] = 0, 0
+        else:
+            info["size"] = st.st_size
+            info["kind"] = kind_of(name)
+            info["ext"] = os.path.splitext(name)[1].lstrip(".").lower()
+            if info["kind"] == "image":
+                try:
+                    from PIL import Image
+                    with Image.open(fp) as im:
+                        info["width"], info["height"] = im.size
+                except Exception:
+                    pass
+        shares = {"full": None, "view": None}
+        for tok, meta in self._share_all().items():
+            if meta.get("rel") == rel:
+                shares[meta.get("mode", "full")] = f"{PUBLIC_BASE}/s/{tok}"
+        info["shares"] = shares
+        self._json(200, info)
+
+    # ------------------------------------------------------- Drive export
+    def _gdrive_upload(self, access, name, fp, parent=None):
+        import mimetypes
+        mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        meta = {"name": name}
+        if parent:
+            meta["parents"] = [parent]
+        try:
+            data = open(fp, "rb").read()
+        except OSError as e:
+            return None, str(e)
+        boundary = "labs" + secrets.token_hex(12)
+        body = (
+            f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode()
+            + json.dumps(meta).encode()
+            + f"\r\n--{boundary}\r\nContent-Type: {mime}\r\n\r\n".encode()
+            + data + f"\r\n--{boundary}--\r\n".encode()
+        )
+        req = urllib.request.Request(
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
+            data=body, method="POST",
+            headers={"Authorization": f"Bearer {access}",
+                     "Content-Type": f"multipart/related; boundary={boundary}"})
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                return json.loads(r.read()).get("id"), None
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read()).get("error", {}).get("message", "")
+            except Exception:
+                msg = ""
+            if e.code in (401, 403) and ("insufficient" in msg.lower() or "scope" in msg.lower()
+                                         or "permission" in msg.lower()):
+                return None, ("Drive is connected read-only. Reconnect Google Drive to allow saving "
+                              "to it (the cloud button now asks for write access).")
+            return None, (msg[:180] or f"Drive upload error {e.code}")
+        except Exception as e:
+            return None, str(e)
+
+    def _gdrive_mkfolder(self, access, name):
+        body = json.dumps({"name": name,
+                           "mimeType": "application/vnd.google-apps.folder"}).encode()
+        req = urllib.request.Request("https://www.googleapis.com/drive/v3/files?fields=id",
+                                     data=body, method="POST",
+                                     headers={"Authorization": f"Bearer {access}",
+                                              "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read()).get("id"), None
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read()).get("error", {}).get("message", "")
+            except Exception:
+                msg = ""
+            if e.code in (401, 403) and ("insufficient" in msg.lower() or "scope" in msg.lower()):
+                return None, "Drive is connected read-only — reconnect to allow writing."
+            return None, (msg[:180] or f"Drive error {e.code}")
+        except Exception as e:
+            return None, str(e)
+
+    def _gdrive_export(self):
+        p = self._body_json()
+        d = safe_rel((p or {}).get("path", ""))
+        name = safe_name((p or {}).get("name", ""))
+        if d is None or not name or not os.path.exists(os.path.join(d, name)):
+            self._json(404, {"error": "no such file or folder"})
+            return
+        access = self._gdrive_access()
+        if not access:
+            self._json(401, {"error": "Google Drive isn't connected — tap the cloud to connect it."})
+            return
+        fp = os.path.join(d, name)
+        if os.path.isdir(fp):
+            fid, err = self._gdrive_mkfolder(access, name)
+            if err:
+                self._json(502, {"error": err})
                 return
-        self._json(200, {"token": None})
+            n = 0
+            for e in sorted(os.scandir(fp), key=lambda x: x.name.lower()):
+                if e.is_file() and not e.name.startswith("."):
+                    _, err = self._gdrive_upload(access, e.name, e.path, parent=fid)
+                    if err:
+                        self._json(502, {"error": err})
+                        return
+                    n += 1
+            hub_event("gdrive_export", f"{name} folder ({n} files) to Drive", self._user())
+            self._json(200, {"ok": True, "count": n,
+                             "link": f"https://drive.google.com/drive/folders/{fid}"})
+        else:
+            gid, err = self._gdrive_upload(access, name, fp)
+            if err:
+                self._json(502, {"error": err})
+                return
+            hub_event("gdrive_export", f"{name} to Drive", self._user())
+            self._json(200, {"ok": True,
+                             "link": f"https://drive.google.com/file/d/{gid}/view"})
 
     def _share_create(self):
         p = self._body_json()
@@ -804,18 +950,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if d is None or not name or not os.path.exists(os.path.join(d, name)):
             self._json(404, {"error": "no such file or folder"})
             return
+        mode = "view" if (p or {}).get("mode") == "view" else "full"
         rel = ((p.get("path") or "").strip("/") + "/" + name).strip("/")
-        for tok, meta in self._share_all().items():   # reuse existing link
-            if meta.get("rel") == rel:
-                self._json(200, {"token": tok, "url": f"{PUBLIC_BASE}/s/{tok}"})
+        for tok, meta in self._share_all().items():   # reuse a link of the same mode
+            if meta.get("rel") == rel and meta.get("mode", "full") == mode:
+                self._json(200, {"token": tok, "url": f"{PUBLIC_BASE}/s/{tok}", "mode": mode})
                 return
         tok = secrets.token_urlsafe(16)
         with open(os.path.join(SHARES, tok + ".json"), "w") as f:
             json.dump({"rel": rel, "by": self._user(), "created": int(time.time()),
-                       "is_dir": os.path.isdir(os.path.join(d, name))}, f)
-        print(f"[drop] {self._user()} shared {rel} -> /s/{tok}", flush=True)
-        hub_event("share_created", f"public link for {rel}", self._user())
-        self._json(200, {"token": tok, "url": f"{PUBLIC_BASE}/s/{tok}"})
+                       "is_dir": os.path.isdir(os.path.join(d, name)), "mode": mode}, f)
+        label = "view-only link" if mode == "view" else "public link"
+        print(f"[drop] {self._user()} shared {rel} ({mode}) -> /s/{tok}", flush=True)
+        hub_event("share_created", f"{label} for {rel}", self._user())
+        self._json(200, {"token": tok, "url": f"{PUBLIC_BASE}/s/{tok}", "mode": mode})
 
     def _share_revoke(self):
         p = self._body_json()
@@ -843,6 +991,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._html(404, "<h2>File no longer exists</h2>")
             return
         want_raw = len(parts) > 3 and parts[3] == "raw"
+        view_only = meta.get("mode") == "view"
+        if view_only and want_raw:
+            # customers get a thumbnail to look at, never the original file
+            self._html(403, "<h2>View-only</h2><p>This link is for viewing only — the "
+                            "original file isn't available to download.</p>")
+            return
         if os.path.isdir(target):
             sub = safe_name(params.get("f", "") or "")
             if want_raw and sub and os.path.isfile(os.path.join(target, sub)):
@@ -877,15 +1031,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 '@media(prefers-color-scheme:dark){body{background:#111113;color:#f2f2f0}}'
                 'main{flex:1;max-width:900px;width:100%;margin:0 auto;padding:24px 16px}'
                 'h2{font-size:20px} a{color:#996c1f}'
-                '.f{display:flex;align-items:center;gap:12px;padding:10px 0;'
-                'border-bottom:1px solid rgba(128,128,128,.25);font-size:14.5px}'
+                '.f{display:flex;align-items:center;gap:12px;padding:10px 0;color:inherit;'
+                'text-decoration:none;border-bottom:1px solid rgba(128,128,128,.25);font-size:14.5px}'
+                'a.f{cursor:zoom-in}'
                 '.f img{width:52px;height:52px;object-fit:cover;border-radius:8px}'
                 '.f .nm{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis}'
                 '.f small{opacity:.6}'
-                '.dl{display:inline-block;background:#191918;color:#f8f8f7;border-radius:8px;'
-                'padding:10px 18px;font-weight:600;text-decoration:none;margin-top:14px}'
+                '.acts{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:16px 0}'
+                '.muted{opacity:.6;font-size:13px;text-align:center;margin:8px 0}'
+                '.dl{display:inline-block;background:#191918;color:#f8f8f7;border:none;border-radius:8px;'
+                'padding:10px 18px;font-weight:600;font-size:15px;font-family:inherit;'
+                'text-decoration:none;cursor:pointer}'
                 '@media(prefers-color-scheme:dark){.dl{background:#f2f2f0;color:#111113}}'
-                'img.hero,video.hero{max-width:100%;max-height:70vh;border-radius:12px;display:block;margin:14px 0}'
+                '.dl.ghost{background:transparent;color:inherit;border:1px solid rgba(128,128,128,.4)}'
+                'img.hero,video.hero{max-width:100%;max-height:70vh;border-radius:12px;display:block;margin:14px auto}'
                 'footer{padding:14px;text-align:center;font-size:12px;opacity:.55}'
                 '</style></head><body><main>' + body_html + '</main>'
                 '<footer>Shared via Labs Drop</footer></body></html>').encode()
@@ -896,26 +1055,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(page)
 
+    @staticmethod
+    def _copy_script():
+        return ("<script>function cpy(b){navigator.clipboard.writeText(location.href).then("
+                "function(){var t=b.textContent;b.textContent='Copied!';"
+                "setTimeout(function(){b.textContent=t;},1500);});}</script>")
+
     def _share_file_page(self, tok, meta, target):
         name = os.path.basename(target)
         kind = kind_of(name)
         size = os.path.getsize(target)
-        raw = f"/s/{tok}/raw"
+        raw, thumb = f"/s/{tok}/raw", f"/s/{tok}?thumb=1"
+        view_only = meta.get("mode") == "view"
         if kind == "image":
-            ext = os.path.splitext(name)[1].lower()
-            src = f"/s/{tok}?thumb=1" if ext in (".heic", ".heif", ".avif") else raw
-            hero = f'<img class="hero" src="{src}" alt="">'
+            if view_only:
+                hero = f'<img class="hero" src="{thumb}" alt="">'
+            else:
+                ext = os.path.splitext(name)[1].lower()
+                src = thumb if ext in (".heic", ".heif", ".avif") else raw
+                hero = f'<img class="hero" src="{src}" alt="">'
         elif kind == "video":
-            hero = f'<video class="hero" src="{raw}" controls playsinline></video>'
-        elif kind == "audio":
+            hero = (f'<img class="hero" src="{thumb}" alt="" onerror="this.style.display=\'none\'">'
+                    if view_only else f'<video class="hero" src="{raw}" controls playsinline></video>')
+        elif kind == "audio" and not view_only:
             hero = f'<video class="hero" src="{raw}" controls style="max-height:70px"></video>'
         else:
             hero = ""
         mb = f"{size/1e6:.1f} MB" if size >= 1e6 else f"{size/1e3:.0f} KB"
-        self._html(200, f"<h2>{name}</h2><p>{mb}</p>{hero}"
-                        f'<a class="dl" href="{raw}" download>Download</a>', name)
+        acts = '<button class="dl ghost" onclick="cpy(this)">Copy link</button>'
+        if not view_only:
+            acts = f'<a class="dl" href="{raw}" download>Download</a>' + acts
+        badge = '<p class="muted">Shared for viewing only</p>' if view_only else f'<p class="muted">{mb}</p>'
+        self._html(200, f"<h2>{name}</h2>{badge}{hero}<div class=\"acts\">{acts}</div>"
+                   + self._copy_script(), name)
 
     def _share_folder_page(self, tok, meta, target):
+        view_only = meta.get("mode") == "view"
         rows = []
         with os.scandir(target) as it:
             entries = sorted((e for e in it if e.is_file() and not e.name.startswith(".")),
@@ -924,14 +1099,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             k = kind_of(e.name)
             size = e.stat().st_size
             mb = f"{size/1e6:.1f} MB" if size >= 1e6 else f"{size/1e3:.0f} KB"
-            img = (f'<img loading="lazy" src="/s/{tok}?thumb=1&f={urllib.parse.quote(e.name)}" '
-                   'onerror="this.style.visibility=\'hidden\'">'
+            q = urllib.parse.quote(e.name)
+            thumb = f"/s/{tok}?thumb=1&f={q}"
+            img = (f'<img loading="lazy" src="{thumb}" onerror="this.style.visibility=\'hidden\'">'
                    if k in ("image", "video") else '<span style="width:52px"></span>')
-            rows.append(f'<div class="f">{img}<span class="nm">{e.name}</span>'
-                        f'<small>{mb}</small>'
-                        f'<a href="/s/{tok}/raw?f={urllib.parse.quote(e.name)}" download>Download</a></div>')
+            if view_only:
+                rows.append(f'<a class="f" href="{thumb}" target="_blank" rel="noopener">{img}'
+                            f'<span class="nm">{e.name}</span><small>{mb}</small></a>')
+            else:
+                rows.append(f'<div class="f">{img}<span class="nm">{e.name}</span><small>{mb}</small>'
+                            f'<a href="/s/{tok}/raw?f={q}" download>Download</a></div>')
         name = os.path.basename(target)
-        self._html(200, f"<h2>{name}</h2>" + ("".join(rows) or "<p>Empty folder.</p>"), name)
+        badge = '<p class="muted">Shared for viewing only</p>' if view_only else ''
+        acts = '<div class="acts"><button class="dl ghost" onclick="cpy(this)">Copy link</button></div>'
+        self._html(200, f"<h2>{name}</h2>{badge}{acts}" + ("".join(rows) or "<p>Empty folder.</p>")
+                   + self._copy_script(), name)
 
     def _download_zip(self, rel):
         """Package a folder as a .zip and stream it (export a whole folder)."""
