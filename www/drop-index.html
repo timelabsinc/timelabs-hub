@@ -147,7 +147,13 @@
   body.is-admin .admin-only{display:flex;}
   @media (min-width:760px){
     :root{--nav-h:0px;}
-    .appnav{position:sticky;top:auto;display:none;}
+    .appnav{position:static;display:inline-flex;background:var(--card-2);border:1px solid var(--border);
+      border-top:1px solid var(--border);border-radius:10px;padding:3px;box-shadow:none;gap:2px;
+      margin:0 0 12px;}
+    .appitem{flex:0 0 auto;flex-direction:row;gap:7px;min-height:auto;padding:7px 14px;font-size:12.5px;
+      border-radius:8px;}
+    .appitem .ic{width:15px;height:15px;}
+    .appitem.active{background:var(--card);color:var(--ink);box-shadow:var(--shadow);}
     .wrap{padding-bottom:120px;}
     .fab{bottom:26px;}
     .topbar .btn.desktop-only{display:inline-flex;}
@@ -201,6 +207,32 @@
   .vnav.prev{left:4px;} .vnav.next{right:4px;}
   .vnav .ic{width:26px;height:26px;stroke-width:2.4;}
 
+  /* google drive sheet */
+  #gdsheet{position:fixed;left:0;right:0;bottom:0;z-index:118;background:var(--card);
+    border:1px solid var(--border);border-bottom:none;border-radius:16px 16px 0 0;
+    transform:translateY(105%);transition:transform .28s var(--ease);max-height:75vh;
+    display:flex;flex-direction:column;box-shadow:var(--shadow-lg);}
+  #gdsheet.open{transform:none;}
+  .gd-head{display:flex;align-items:center;gap:6px;padding:12px 16px;border-bottom:1px solid var(--border);}
+  .gd-head b{flex:1;font-size:15px;color:var(--ink);}
+  #gdBody{overflow-y:auto;padding:4px 16px 20px;}
+  .gd-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);font-size:13.5px;}
+  .gd-row:last-child{border-bottom:none;}
+  .gd-row .ic{width:18px;height:18px;color:var(--muted);flex:0 0 auto;}
+  .gd-row.dir .ic{color:var(--accent);}
+  .gd-row .nm{flex:1;min-width:0;color:var(--ink);font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .gd-row small{color:var(--muted);flex:0 0 auto;}
+  .gd-imp{font-size:12px;font-weight:650;border:1px solid var(--border);border-radius:7px;
+    padding:5px 11px;color:var(--accent);}
+  .gd-imp:hover{background:var(--accent-bg);}
+  .gd-imp:disabled{opacity:.45;}
+  @media (min-width:760px){
+    #gdsheet{left:50%;right:auto;bottom:50%;transform:translate(-50%,60%) scale(.97);opacity:0;
+      width:min(520px,92vw);border-radius:14px;border-bottom:1px solid var(--border);pointer-events:none;
+      transition:transform .25s var(--ease), opacity .18s;}
+    #gdsheet.open{transform:translate(-50%,50%) scale(1);opacity:1;pointer-events:auto;}
+  }
+
   /* menu + modal + toast */
   #menu{position:fixed;z-index:120;background:var(--card);border:1px solid var(--border);border-radius:12px;
     box-shadow:var(--shadow-lg);padding:5px;min-width:170px;display:none;}
@@ -246,9 +278,19 @@
       Upload
     </button>
   </header>
+<nav class="appnav" aria-label="Apps">
+  <a class="appitem" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg></span><span>Face</span></a>
+  <a class="appitem active" href="/drop/"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span><span>Drop</span></a>
+  <a class="appitem" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><path d="M5 3h14v18H5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span><span>Ledger</span></a>
+  <a class="appitem" href="/ops/agent/"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg></span><span>Chat</span></a>
+  <a class="appitem admin-only" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><circle cx="8" cy="14" r="4"/><path d="M11 11l8-8M17 4l3 3M14 7l2 2"/></svg></span><span>Key</span></a>
+</nav>
 
   <div class="toolbar">
     <nav class="crumbs" id="crumbs" aria-label="Folder path"></nav>
+    <button class="iconbtn" id="gdBtn" title="Google Drive" aria-label="Google Drive">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M7 18a5 5 0 0 1-.9-9.92A6 6 0 0 1 17.7 9.3 4.5 4.5 0 0 1 17 18z"/></svg>
+    </button>
     <button class="iconbtn" id="newBtnM" title="New folder" aria-label="New folder">
       <svg class="ic" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v6M9 14h6"/></svg>
     </button>
@@ -269,13 +311,6 @@
 </button>
 <input id="file" type="file" multiple hidden>
 
-<nav class="appnav" aria-label="Apps">
-  <a class="appitem" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg></span><span>Face</span></a>
-  <a class="appitem active" href="/drop/"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span><span>Drop</span></a>
-  <a class="appitem" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><path d="M5 3h14v18H5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span><span>Ledger</span></a>
-  <a class="appitem" href="/ops/agent/"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg></span><span>Chat</span></a>
-  <a class="appitem admin-only" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><circle cx="8" cy="14" r="4"/><path d="M11 11l8-8M17 4l3 3M14 7l2 2"/></svg></span><span>Key</span></a>
-</nav>
 
 <div id="dz"><svg class="ic" viewBox="0 0 24 24"><path d="M12 16V4M6 10l6-6 6 6"/><path d="M4 20h16"/></svg><b id="dzLabel">Drop to upload</b></div>
 
@@ -308,6 +343,16 @@
   </div>
 </div>
 
+<div id="gdsheet" role="dialog" aria-label="Google Drive">
+  <div class="gd-head">
+    <b>Google Drive</b>
+    <button class="iconbtn" id="gdBack" aria-label="Back" style="display:none">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <button class="iconbtn" id="gdClose" aria-label="Close">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div id="gdBody"><p class="empty" style="padding:14px">Loading…</p></div>
+</div>
 <div id="veil"></div>
 <div id="menu"></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -473,17 +518,49 @@ function render(){
 }
 
 /* ---------------- context menu ---------------- */
-function showMenu(e, name, isDir){
+const ICON_LINK = '<svg class="ic" viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>';
+async function copyText(t){
+  try { await navigator.clipboard.writeText(t); return true; }
+  catch(e){ prompt('Copy this link:', t); return true; }
+}
+async function showMenu(e, name, isDir){
   const m = $('menu');
   m.innerHTML =
     (!isDir ? '<button id="mDl">' + ICONS.dl + 'Download</button>' : '') +
+    '<button id="mSh">' + ICON_LINK + 'Share link</button>' +
     '<button id="mRn">' + ICONS.edit + 'Rename</button>' +
     '<button id="mDe" class="danger">' + ICONS.trash + 'Delete</button>';
   m.classList.add('on');
   $('veil').classList.add('on');
   const x = Math.min(e.clientX || 40, innerWidth - 190);
-  const y = Math.min(e.clientY || 200, innerHeight - 170);
+  const y = Math.min(e.clientY || 200, innerHeight - 210);
   m.style.left = x + 'px'; m.style.top = y + 'px';
+  // if already shared, swap the Share item into copy/remove
+  try {
+    const info = await api('/share/info?path=' + encodeURIComponent(state.path) + '&name=' + encodeURIComponent(name));
+    if(info.token){
+      $('mSh').innerHTML = ICON_LINK + 'Copy link · <span style="color:var(--good)">shared</span>';
+      $('mSh').dataset.url = info.url;
+      $('mSh').dataset.token = info.token;
+    }
+  } catch(err){}
+  $('mSh').onclick = async () => {
+    const existing = $('mSh').dataset.url;
+    hideMenu();
+    try {
+      if(existing){
+        await copyText(existing);
+        if(confirm('Link copied. This file is visible to ANYONE with the link.\n\nRemove the public link instead?')){
+          await api('/share/revoke', {method:'POST', body: JSON.stringify({token: $('mSh').dataset.token})});
+          toast('Public link removed');
+        }
+        return;
+      }
+      const r = await api('/share', {method:'POST', body: JSON.stringify({path: state.path, name})});
+      await copyText(r.url);
+      toast('Public link copied — anyone with it can view');
+    } catch(err){ toast(err.message); }
+  };
   if(!isDir) $('mDl').onclick = () => { hideMenu(); download(name); };
   $('mRn').onclick = async () => {
     hideMenu();
@@ -521,7 +598,10 @@ function openView(i){
   let el;
   if(f.kind === 'image'){
     el = document.createElement('img');
-    el.src = fileURL(f.name);
+    // browsers can't decode HEIC/AVIF from iPhones — use the server-converted 1280px jpeg
+    el.src = /\.(heic|heif|avif)$/i.test(f.name)
+      ? API + '/thumb?big=1&path=' + encodeURIComponent((state.path ? state.path + '/' : '') + f.name)
+      : fileURL(f.name);
   } else if(f.kind === 'video'){
     el = document.createElement('video');
     el.src = fileURL(f.name);
@@ -722,6 +802,63 @@ async function newFolder(){
 }
 $('newBtn').onclick = newFolder;
 $('newBtnM').onclick = newFolder;
+
+/* ---------------- Google Drive ---------------- */
+let gdStack = [];   // [{id, name}]
+function gdOpenSheet(){ $('gdsheet').classList.add('open'); $('veil').classList.add('on'); }
+function gdCloseSheet(){ $('gdsheet').classList.remove('open'); $('veil').classList.remove('on'); }
+$('gdClose').onclick = gdCloseSheet;
+$('gdBack').onclick = () => { gdStack.pop(); gdList(); };
+$('gdBtn').onclick = async () => {
+  try {
+    const st = await api('/gdrive/status');
+    if(!st.connected){
+      if(confirm('Connect the Timelabs Google Drive? You will be sent to Google to approve read-only access.')){
+        location.href = API + '/gdrive/connect';
+      }
+      return;
+    }
+    gdStack = [];
+    gdOpenSheet();
+    gdList();
+  } catch(e){ toast(e.message); }
+};
+async function gdList(){
+  const cur = gdStack[gdStack.length - 1];
+  $('gdBack').style.display = gdStack.length ? '' : 'none';
+  $('gdBody').innerHTML = '<p class="empty" style="padding:14px">Loading…</p>';
+  try {
+    const data = await api('/gdrive/list?folder=' + (cur ? cur.id : 'root'));
+    if(!data.items.length){ $('gdBody').innerHTML = '<p class="empty" style="padding:14px">Empty folder.</p>'; return; }
+    $('gdBody').innerHTML = data.items.map((f, i) =>
+      '<div class="gd-row' + (f.dir ? ' dir' : '') + '" data-i="' + i + '">' +
+      (f.dir ? ICONS.folder : ICONS[f.gdoc ? 'doc' : 'file']) +
+      '<span class="nm">' + esc(f.name) + '</span>' +
+      (f.dir ? '<small>›</small>'
+        : f.gdoc ? '<small>Google Doc</small>'
+        : '<small>' + fmtSize(f.size) + '</small><button class="gd-imp" data-i="' + i + '">Import</button>') +
+      '</div>').join('');
+    $('gdBody').querySelectorAll('.gd-row.dir').forEach(r => {
+      r.onclick = () => { const f = data.items[+r.dataset.i]; gdStack.push({id: f.id, name: f.name}); gdList(); };
+    });
+    $('gdBody').querySelectorAll('.gd-imp').forEach(b => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const f = data.items[+b.dataset.i];
+        b.disabled = true; b.textContent = 'Importing…';
+        try {
+          await api('/gdrive/import', {method:'POST', body: JSON.stringify({id: f.id, name: f.name, path: state.path})});
+          toast(f.name + ' is importing — it will appear here shortly');
+          b.textContent = 'Queued ✓';
+          setTimeout(load, 4000);
+        } catch(err){ toast(err.message); b.disabled = false; b.textContent = 'Import'; }
+      };
+    });
+  } catch(e){
+    $('gdBody').innerHTML = '<p class="empty" style="padding:14px">' + esc(e.message) +
+      (e.status === 401 ? ' — <a href="' + API + '/gdrive/connect">reconnect</a>' : '') + '</p>';
+  }
+}
 
 /* admin chip for Key nav */
 (async () => {

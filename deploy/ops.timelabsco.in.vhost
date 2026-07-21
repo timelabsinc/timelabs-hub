@@ -46,6 +46,16 @@ server {
         try_files $uri $uri/ =404;
     }
 
+    # --- Drop public share links: token IS the auth, deliberately no login ---
+    location /s/ {
+        proxy_pass http://127.0.0.1:8903;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;           # stream video without spooling to disk
+        proxy_read_timeout 300s;
+    }
+
     # --- Drop (Timelabs file tunnel: custom UI + chunked API), behind Key ---
     location = /drop { return 301 /drop/; }
 
@@ -99,16 +109,11 @@ server {
     location @ops_login_redirect {
         return 302 /ops/login;
     }
-    location /ops/login {
-        proxy_pass http://127.0.0.1:8899/login;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-    location /ops/reset {
-        proxy_pass http://127.0.0.1:8899/reset;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
+    # Legacy password pages now bounce into the Google flow — the old page kept
+    # asking for a password via browser autocomplete (2026-07-21, Schezan).
+    # Break-glass rollback: restore the two proxy_pass 8899 blocks from a .bak.
+    location /ops/login { return 302 /oauth2/start?rd=/ops/; }
+    location /ops/reset { return 302 /oauth2/start?rd=/ops/; }
 
     # --- oauth2-proxy: the live gate ---
     location /oauth2/ {

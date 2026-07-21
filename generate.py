@@ -310,6 +310,28 @@ def fetch_health():
 
 # --------------------------------------------------------------------------- Analysis (LLM)
 ANALYSIS_MODEL = ENV.get("ANALYSIS_MODEL", "claude-sonnet-4-6")
+DROP_ROOT = "/srv/timelabs-drop"
+
+
+def fetch_drop_recent(limit=5):
+    """Most recent files in Drop — surfaced on Face so uploads are instantly visible."""
+    out = []
+    try:
+        for base, dirs, files in os.walk(DROP_ROOT):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for f in files:
+                if f.startswith("."):
+                    continue
+                p = os.path.join(base, f)
+                rel = os.path.relpath(p, DROP_ROOT)
+                st = os.stat(p)
+                out.append((st.st_mtime, rel, f, st.st_size))
+        out.sort(reverse=True)
+    except OSError as e:
+        print(f"[drop] {e}", file=sys.stderr)
+    return out[:limit]
+
+
 ANALYSIS_TIMEOUT = 150  # accuracy over speed — give the primary model room to think
 
 
@@ -458,6 +480,20 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
             '<p class="f-note"><a href="#orders" onclick="showTab(\'orders\')">All orders &#8594;</a></p>'
             '</div></section>'
         )
+    drop_recent = fetch_drop_recent()
+    drop_html = ""
+    if drop_recent:
+        rows = "".join(
+            f'<div class="oo-row"><b>{html.escape(name)}</b>'
+            f'<span class="num">{(size/1e6):.1f} MB</span>'
+            f'<span class="f-meta">{html.escape(rel.rsplit("/", 1)[0] if "/" in rel else "Drop")}</span></div>'
+            for _mt, rel, name, size in drop_recent
+        )
+        drop_html = (
+            '<section><h2>Recent in Drop</h2><div class="panel">' + rows +
+            '<p class="f-note"><a href="/drop/">Open Drop →</a></p></div></section>'
+        )
+
     content_html = ""
     if content:
         items = "".join(
@@ -650,7 +686,7 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
         findings_html=findings_html,
         health_html=health_html,
         stats_html=stats_html,
-        revenue_chart_html=revenue_chart_html,
+        revenue_chart_html=revenue_chart_html + drop_html,
         drop_ready=True,
     )
 
