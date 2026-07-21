@@ -258,7 +258,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ------------------------------------------------------------- POST/PUT
     def do_POST(self):
         path = self.path.split("?")[0]
-        if path == "/gdrive/import":
+        if path == "/organize/scan":
+            self._organize_scan()
+        elif path == "/organize/apply":
+            self._organize_apply()
+        elif path == "/gdrive/import":
             self._gdrive_import()
         elif path == "/share":
             self._share_create()
@@ -338,6 +342,134 @@ class Handler(http.server.BaseHTTPRequestHandler):
             done.append(name)
         print(f"[drop] {self._user()} trashed {done}", flush=True)
         self._json(200, {"ok": True, "deleted": done})
+
+    # ------------------------------------------------------------- organize
+    @staticmethod
+    def _dhash(path):
+        """64-bit difference hash — near-identical shots land within ~10 bits."""
+        from PIL import Image, ImageOps
+        with Image.open(path) as im:
+            im = ImageOps.exif_transpose(im).convert("L").resize((9, 8))
+            px = list(im.getdata())
+        bits = 0
+        for row in range(8):
+            for col in range(8):
+                bits = (bits << 1) | (1 if px[row * 9 + col] > px[row * 9 + col + 1] else 0)
+        return bits
+
+    @staticmethod
+    def _ocr_tokens(path):
+        """Meaningful uppercase-ish tokens (model codes like NH35, SKX) via tesseract."""
+        try:
+            r = subprocess.run(["tesseract", path, "stdout", "--psm", "6", "-l", "eng"],
+                               capture_output=True, text=True, timeout=8)
+            words = re.findall(r"[A-Za-z0-9]{3,12}", r.stdout or "")
+            out = []
+            for w in words:
+                if any(c.isdigit() for c in w) and any(c.isalpha() for c in w):
+                    out.append(w.upper())          # model-code shaped: NH35, SKX007
+                elif w.isupper() and len(w) >= 4:
+                    out.append(w)
+            return out[:10]
+        except Exception:
+            return []
+
+    def _organize_scan(self):
+        p = self._body_json()
+        rel = (p or {}).get("path", "")
+        d = safe_rel(rel)
+        if d is None or not os.path.isdir(d):
+            self._json(404, {"error": "no such folder"})
+            return
+        imgs = []
+        with os.scandir(d) as it:
+            for e in it:
+                if e.is_file() and not e.name.startswith(".") and kind_of(e.name) == "image":
+                    imgs.append(e.name)
+        imgs = sorted(imgs)[:200]
+        if len(imgs) < 3:
+            self._json(200, {"groups": [], "note": "not enough images to organize"})
+            return
+        hashes, tokens = {}, {}
+        for name in imgs:
+            fp = os.path.join(d, name)
+            try:
+                hashes[name] = self._dhash(fp)
+            except Exception:
+                continue
+            if len(imgs) <= 60:                    # OCR only when the set is small
+                ext = os.path.splitext(name)[1].lower()
+                if ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp"):
+                    tokens[name] = self._ocr_tokens(fp)
+                else:
+                    tokens[name] = []
+        names = [n for n in imgs if n in hashes]
+        # union-find over pairwise hamming distance
+        parent = {n: n for n in names}
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+        for i, a in enumerate(names):
+            for b in names[i + 1:]:
+                if bin(hashes[a] ^ hashes[b]).count("1") <= 12:
+                    union(a, b)
+        clusters = {}
+        for n in names:
+            clusters.setdefault(find(n), []).append(n)
+        groups = []
+        seq = 0
+        for members in clusters.values():
+            if len(members) < 2:
+                continue
+            toks = {}
+            for m in members:
+                for t in tokens.get(m, []):
+                    toks[t] = toks.get(t, 0) + 1
+            common = [t for t, c in sorted(toks.items(), key=lambda x: -x[1]) if c >= 2]
+            seq += 1
+            gname = (common[0].title() if common else f"Set {seq}")
+            groups.append({"name": gname, "files": sorted(members)})
+        groups.sort(key=lambda g: -len(g["files"]))
+        self._json(200, {"groups": groups,
+                         "scanned": len(names),
+                         "ungrouped": len(names) - sum(len(g["files"]) for g in groups)})
+
+    def _organize_apply(self):
+        p = self._body_json(cap=256 * 1024)
+        rel = (p or {}).get("path", "")
+        d = safe_rel(rel)
+        groups = (p or {}).get("groups") or []
+        if d is None or not isinstance(groups, list) or not groups:
+            self._json(400, {"error": "bad request"})
+            return
+        moved, made = 0, []
+        for g in groups[:40]:
+            gname = safe_name(str((g or {}).get("name", "")))
+            files = (g or {}).get("files") or []
+            if not gname or not isinstance(files, list):
+                continue
+            target = os.path.join(d, gname)
+            if os.path.exists(target) and not os.path.isdir(target):
+                continue
+            os.makedirs(target, exist_ok=True)
+            made.append(gname)
+            for raw in files[:500]:
+                fn = safe_name(str(raw))
+                if not fn:
+                    continue
+                src_p = os.path.join(d, fn)
+                if not os.path.isfile(src_p):
+                    continue
+                shutil.move(src_p, unique_path(target, fn))
+                moved += 1
+        print(f"[drop] {self._user()} organized {moved} files into {made}", flush=True)
+        self._json(200, {"ok": True, "moved": moved, "folders": made})
 
     # ------------------------------------------------------------- google drive
     @staticmethod
