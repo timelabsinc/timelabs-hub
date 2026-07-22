@@ -114,6 +114,9 @@ def cmd_orders(args):
             })
     except Exception as e:
         live = [{"error": str(e)}]
+    if args.query:
+        ql = args.query.lower()
+        live = [o for o in live if ql in json.dumps(o).lower()]
     logged = []
     try:
         conn = sqlite3.connect(HDB)
@@ -129,7 +132,11 @@ def cmd_orders(args):
         conn.close()
     except Exception as e:
         logged = [{"error": str(e)}]
-    out({"live_storefront": live, "logged_in_labs": logged})
+    if args.query:
+        ql = args.query.lower()
+        logged = [o for o in logged if ql in json.dumps(o).lower()]
+    out({"query": args.query or None, "live_storefront": live, "logged_in_labs": logged,
+         "note": "both channels searched - a product can appear in either"})
 
 
 def cmd_products(args):
@@ -406,6 +413,7 @@ def main():
         return sp
 
     sp = add("orders", cmd_orders); sp.add_argument("--limit", type=int, default=15)
+    sp.add_argument("--query", default="", help="filter BOTH channels by product/customer text")
     sp = add("products", cmd_products)
     sp.add_argument("--query", default=""); sp.add_argument("--limit", type=int, default=25)
     sp = add("product", cmd_product); sp.add_argument("id")
