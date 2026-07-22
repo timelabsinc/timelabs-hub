@@ -132,6 +132,7 @@ function editor(theme){{
     '<div class="te-card">'+
       '<div class="te-top"><span class="nm">'+esc(current.theme)+'</span><span class="tag">Live</span>'+
         '<button class="rev" id="revert" disabled>Undo last change</button></div>'+
+      '<div class="note" style="margin:0 0 14px">Type what you want below and press <b>Suggest changes</b>. Claude reads your live theme and proposes exact settings — they appear <b>underneath as a list you tick</b>, and <b>nothing is saved until you press Apply</b>.</div>'+
       '<div class="prompt"><label>Describe the change</label>'+
         '<textarea id="req" placeholder="e.g. make the primary buttons deep navy and use a serif heading font"></textarea>'+
         '<div class="egs" id="egs"></div>'+
@@ -180,6 +181,10 @@ function renderPreview(d){{
       '<button class="btn" id="discard">Discard</button></div>';
   updateApplyLabel();
   $('prev').querySelectorAll('.chg input').forEach(function(cb){{cb.onchange=updateApplyLabel;}});
+  // The proposal renders below the prompt, so scroll it into view and flag the
+  // Apply button — otherwise it reads as "nothing happened" (it did, once).
+  try{{ $('prev').scrollIntoView({{behavior:'smooth',block:'nearest'}}); }}catch(e){{}}
+  toast(ch.length+' change'+(ch.length>1?'s':'')+' proposed — review below, then Apply');
   $('apply').onclick=applyChanges;
   $('discard').onclick=function(){{$('prev').innerHTML='';current.changes=[];}};
 }}
