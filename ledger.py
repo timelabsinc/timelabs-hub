@@ -39,6 +39,16 @@ def build():
     n_inv, spend, freight, customs = totals[0] or 0, totals[1] or 0, totals[2] or 0, totals[3] or 0
     landed = spend + freight + customs
 
+    # What the bank took. Invoices are billed in USD but paid from an Indian
+    # account, so the effective rate carries a forex markup + transfer fee on top
+    # of the market rate — that gap is real money and was previously invisible.
+    fx = q(conn, "SELECT SUM(COALESCE(total,0)), AVG(COALESCE(exchange_rate,0)) "
+                 "FROM invoices WHERE UPPER(COALESCE(currency,'USD'))='USD'")[0]
+    usd_total, eff_rate = fx[0] or 0, fx[1] or 0
+    MARKET_REF = 86.0                       # rough average across the invoice window
+    bank_cost = usd_total * (eff_rate - MARKET_REF) if eff_rate else 0
+    bank_pct = (bank_cost / (usd_total * MARKET_REF) * 100) if usd_total and eff_rate else 0
+
     suppliers = q(conn, "SELECT name, invoices, first_order, last_order, total_paid_inr "
                         "FROM v_supplier_summary WHERE invoices > 0 ORDER BY total_paid_inr DESC")
     parts = q(conn, "SELECT part_category, model_compat, total_qty, avg_unit_inr, total_spend_inr "
@@ -52,9 +62,10 @@ def build():
         f'<div class="kpi"><div class="kpi-top"><span class="label">{k}</span></div>'
         f'<div class="val num">{v}</div><div class="ctx">{c}</div></div>'
         for k, v, c in [
-            ("Total paid", inr(spend), f"{n_inv} invoices"),
+            ("Total paid", inr(spend), f"{n_inv} invoices · ${usd_total:,.0f} invoiced"),
+            ("Cost of banking", inr(bank_cost),
+             f"forex + transfer, ~{bank_pct:.0f}% on top" if bank_cost else "rate not set"),
             ("Freight", inr(freight), "international shipping"),
-            ("Customs", inr(customs), "BCD + SWS + IGST"),
             ("Landed total", inr(landed), "everything, in INR"),
         ])
 
