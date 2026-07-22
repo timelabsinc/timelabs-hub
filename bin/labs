@@ -26,6 +26,9 @@ Safety follows the convention shopify_admin.py already established here:
   labs theme-set key=value [key=value] change theme settings
   labs costs                           landed cost per part, from the invoices
   labs drive                           Google Drive/Sheets connection status
+  labs search "black watches"          find photos by what is IN them
+  labs files [--path folder]           browse Drop
+  labs customers | events | access | topics
 """
 import argparse
 import json
@@ -193,6 +196,73 @@ def cmd_drive(args):
         die(str(e))
 
 
+
+def cmd_search(args):
+    """Search Drop by what's IN the photo (AI descriptions) as well as by name."""
+    import urllib.request, urllib.parse
+    url = "http://127.0.0.1:8903/search?q=" + urllib.parse.quote(args.query)
+    with urllib.request.urlopen(url, timeout=30) as r:
+        d = json.loads(r.read())
+    out({"query": d.get("query"), "described_photos": d.get("indexed"),
+         "not_yet_described": d.get("unindexed"),
+         "results": [{"name": x["name"], "folder": x["dir"], "matched_by": x["why"]}
+                     for x in d.get("results", [])[:args.limit]]})
+
+
+def cmd_files(args):
+    """Browse Drop (the product-media store)."""
+    import urllib.request, urllib.parse
+    url = "http://127.0.0.1:8903/list?path=" + urllib.parse.quote(args.path or "")
+    with urllib.request.urlopen(url, timeout=30) as r:
+        d = json.loads(r.read())
+    out({"path": d.get("path"), "free_gb": d.get("free_gb"),
+         "folders": [x["name"] for x in d.get("dirs", [])],
+         "files": [{"name": x["name"], "kind": x["kind"], "size": x["size"]}
+                   for x in d.get("files", [])[:args.limit]]})
+
+
+def cmd_customers(args):
+    try:
+        conn = sqlite3.connect(HDB); conn.row_factory = sqlite3.Row
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM customers ORDER BY rowid DESC LIMIT ?", (args.limit,))]
+        conn.close(); out({"customers": rows})
+    except Exception as e:
+        die(str(e))
+
+
+def cmd_events(args):
+    """What's happened across Labs OS lately — the shared activity feed."""
+    try:
+        conn = sqlite3.connect(HDB); conn.row_factory = sqlite3.Row
+        rows = [dict(r) for r in conn.execute(
+            "SELECT created_at, app, kind, actor, detail FROM hub_events "
+            "ORDER BY id DESC LIMIT ?", (args.limit,))]
+        conn.close(); out({"events": rows})
+    except Exception as e:
+        die(str(e))
+
+
+def cmd_access(args):
+    try:
+        import access_store
+        out({"people": access_store.everyone(),
+             "roles": {k: v["blurb"] for k, v in access_store.ROLES.items()}})
+    except Exception as e:
+        die(str(e))
+
+
+def cmd_topics(args):
+    """The blog topic plan (content_queue) — what's proposed vs drafted."""
+    try:
+        conn = sqlite3.connect(HDB); conn.row_factory = sqlite3.Row
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM content_queue ORDER BY status DESC, priority LIMIT ?", (args.limit,))]
+        conn.close(); out({"topics": rows})
+    except Exception as e:
+        die(str(e))
+
+
 # ------------------------------------------------------------------ writes
 def cmd_product_create(args):
     s = api()
@@ -346,6 +416,12 @@ def main():
     sp = add("article", cmd_article); sp.add_argument("id")
     sp = add("theme", cmd_theme); sp.add_argument("--filter", default="")
     sp = add("costs", cmd_costs); sp.add_argument("--limit", type=int, default=20)
+    sp = add("search", cmd_search); sp.add_argument("query"); sp.add_argument("--limit", type=int, default=20)
+    sp = add("files", cmd_files); sp.add_argument("--path", default=""); sp.add_argument("--limit", type=int, default=40)
+    sp = add("customers", cmd_customers); sp.add_argument("--limit", type=int, default=25)
+    sp = add("events", cmd_events); sp.add_argument("--limit", type=int, default=25)
+    add("access", cmd_access)
+    sp = add("topics", cmd_topics); sp.add_argument("--limit", type=int, default=40)
     add("drive", cmd_drive)
 
     sp = add("product-create", cmd_product_create)
