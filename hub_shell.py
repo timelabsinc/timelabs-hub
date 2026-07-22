@@ -962,6 +962,31 @@ ASSIST_JS = r"""
 # head so window.LabsRTE exists before their page code runs; RTE_CSS ships in
 # HUB_STYLE so the styles are available everywhere.
 # ---------------------------------------------------------------------------
+ORDERS_CSS = r"""
+.src{display:inline-block;font-size:10.5px;font-weight:650;letter-spacing:.03em;text-transform:uppercase;
+  padding:2px 7px;border-radius:5px;white-space:nowrap;}
+.src-website{color:#1f6f4a;background:rgba(31,111,74,.13);}
+.src-form{color:#996c1f;background:var(--accent-bg);}
+.src-whatsapp{color:#1c7a3e;background:rgba(37,211,102,.15);}
+.src-instagram{color:#a3346b;background:rgba(193,53,132,.13);}
+@media (prefers-color-scheme:dark){
+  .src-website{color:#6fd6a4;} .src-whatsapp{color:#63dc92;} .src-instagram{color:#e88ac0;}
+}
+.oo-row .src{margin-right:2px;}
+.sell-row{display:grid;grid-template-columns:1fr 120px 44px 90px;gap:10px;align-items:center;
+  padding:7px 0;border-bottom:1px solid var(--border);font-size:13.5px;}
+.sell-row:last-of-type{border-bottom:none;}
+.sell-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);}
+.sell-bar{background:var(--card-2);border-radius:4px;height:8px;overflow:hidden;}
+.sell-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#d8a94c);border-radius:4px;}
+.sell-n{text-align:right;color:var(--ink);font-weight:650;}
+.sell-rev{text-align:right;color:var(--muted);font-size:12.5px;}
+@media(max-width:560px){
+  .sell-row{grid-template-columns:1fr 60px 40px;}
+  .sell-rev{display:none;}
+}
+"""
+
 RTE_CSS = r"""
 .rte{border:1px solid var(--border);border-radius:var(--r-s);background:var(--bg);overflow:hidden;transition:border-color .12s,box-shadow .12s;}
 .rte:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
@@ -1026,7 +1051,7 @@ window.LabsRTE=(function(){
 """
 
 # Wire the assistant + editor styles into every generated page.
-HUB_STYLE = HUB_STYLE + ASSIST_CSS + RTE_CSS
+HUB_STYLE = HUB_STYLE + ASSIST_CSS + RTE_CSS + ORDERS_CSS
 WHOAMI_JS = WHOAMI_JS + "\n" + ASSIST_JS
 HUB_SCRIPT = HUB_SCRIPT + "\n" + ASSIST_JS
 

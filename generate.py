@@ -237,21 +237,101 @@ def fetch_action_plan():
         return [], 0
 
 
-def fetch_orders(limit=12):
+def fetch_logged_orders(limit=60):
+    """Orders logged into hermes.db — the order form and WhatsApp capture.
+    `source` is stored on the row; when it's blank we infer it (a WhatsApp
+    capture always carries a chat_id/sender_number, a form paste never does)."""
     import sqlite3
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
             "SELECT received_at, customer_name, product, price_inr, quantity, status, "
-            "extraction_confidence FROM orders "
+            "source, sender_number, chat_id FROM orders "
             f"WHERE received_at >= date('now', '-{LOOKBACK_DAYS} days') "
             "ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         conn.close()
-        return rows
     except Exception as e:
         print(f"[orders] {e}", file=sys.stderr)
         return []
+    out = []
+    for r in rows:
+        src = (r[6] or "").strip().lower()
+        if src in ("", "none"):
+            src = "whatsapp" if (r[7] or r[8]) else "form"
+        out.append({"when": (r[0] or "")[:16], "customer": r[1] or "—",
+                    "product": r[2] or "—", "amount": float(r[3] or 0),
+                    "qty": int(r[4] or 1), "status": (r[5] or "new").lower(),
+                    "source": src, "ref": ""})
+    return out
+
+
+def fetch_shopify_orders(limit=30):
+    """Live storefront orders. Needs read_orders (granted 2026-07-21); fails
+    soft to [] so the dashboard still builds if Shopify is unreachable."""
+    try:
+        sys.path.insert(0, "/root/ops-dashboard")
+        import shopify_api
+        if not shopify_api.configured():
+            return []
+        q = """query($n: Int!) { orders(first: $n, sortKey: CREATED_AT, reverse: true) {
+                 nodes { name createdAt displayFinancialStatus
+                         totalPriceSet { shopMoney { amount } }
+                         customer { displayName }
+                         lineItems(first: 5) { nodes { title quantity } } } } }"""
+        nodes = shopify_api.admin_graphql(q, {"n": limit})["orders"]["nodes"]
+    except Exception as e:
+        print(f"[shopify-orders] {e}", file=sys.stderr)
+        return []
+    out = []
+    for n in nodes:
+        li = (n.get("lineItems") or {}).get("nodes") or []
+        title = li[0]["title"] if li else "—"
+        if len(li) > 1:
+            title += f" +{len(li) - 1} more"
+        qty = sum(int(x.get("quantity") or 1) for x in li) or 1
+        try:
+            amt = float(((n.get("totalPriceSet") or {}).get("shopMoney") or {}).get("amount") or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        out.append({"when": (n.get("createdAt") or "")[:16].replace("T", " "),
+                    "customer": (n.get("customer") or {}).get("displayName") or "—",
+                    "product": title, "amount": amt, "qty": qty,
+                    "status": (n.get("displayFinancialStatus") or "").lower(),
+                    "source": "website", "ref": n.get("name") or ""})
+    return out
+
+
+def fetch_orders(limit=40):
+    """Every order, whatever door it came through, newest first."""
+    merged = fetch_logged_orders() + fetch_shopify_orders()
+    merged.sort(key=lambda o: o.get("when") or "", reverse=True)
+    return merged[:limit]
+
+
+SOURCE_LABEL = {"website": "Website", "form": "Order form",
+                "whatsapp": "WhatsApp", "instagram": "Instagram"}
+
+
+def order_source_pill(src):
+    return (f'<span class="src src-{html.escape(src)}">'
+            f'{html.escape(SOURCE_LABEL.get(src, src.title() or "Other"))}</span>')
+
+
+def product_analytics(orders, top=8):
+    """What's selling and what isn't — units + revenue per product, across
+    every source, so it reflects the whole business not just the storefront."""
+    agg = {}
+    for o in orders:
+        name = (o.get("product") or "—").split(" +")[0].strip()
+        if not name or name == "—":
+            continue
+        a = agg.setdefault(name, {"units": 0, "revenue": 0.0, "orders": 0})
+        a["units"] += o.get("qty") or 1
+        a["revenue"] += o.get("amount") or 0.0
+        a["orders"] += 1
+    ranked = sorted(agg.items(), key=lambda kv: (-kv[1]["units"], -kv[1]["revenue"]))
+    return ranked[:top], ranked[-top:][::-1] if len(ranked) > top else []
 
 
 def fetch_research():
@@ -444,40 +524,71 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
     )
     orders_html = ""
     if orders:
+        by_src = {}
+        for o in orders:
+            by_src[o["source"]] = by_src.get(o["source"], 0) + 1
+        mix = " · ".join(f'{SOURCE_LABEL.get(s, s.title())}: <b>{n}</b>'
+                         for s, n in sorted(by_src.items(), key=lambda kv: -kv[1]))
+        total_rev = sum(o["amount"] for o in orders)
         rows = "".join(
-            f'<tr><td class="num">{html.escape((r[0] or "")[:16])}</td>'
-            f'<td>{html.escape(r[1] or "—")}</td><td>{html.escape(r[2] or "—")}</td>'
-            f'<td class="n num">{fmt_inr(r[3]) if r[3] else "—"}</td>'
-            f'<td class="n num">{r[4] or 1}</td>'
-            f'<td>{html.escape(r[5] or "new")}</td>'
-            f'<td>{html.escape(r[6] or "")}</td></tr>'
-            for r in orders
+            f'<tr><td class="num">{html.escape(o["when"])}</td>'
+            f'<td>{order_source_pill(o["source"])}</td>'
+            f'<td>{html.escape(o["customer"])}'
+            + (f' <span class="f-meta num">{html.escape(o["ref"])}</span>' if o["ref"] else "")
+            + f'</td><td>{html.escape(o["product"])}</td>'
+            f'<td class="n num">{fmt_inr(o["amount"]) if o["amount"] else "—"}</td>'
+            f'<td class="n num">{o["qty"]}</td>'
+            f'<td>{html.escape(o["status"] or "new")}</td></tr>'
+            for o in orders
         )
+        top, slow = product_analytics(orders)
+        max_units = max((v["units"] for _, v in top), default=1) or 1
+        sell_rows = "".join(
+            f'<div class="sell-row"><span class="sell-nm">{html.escape(n)}</span>'
+            f'<span class="sell-bar"><i style="width:{max(6, round(v["units"] / max_units * 100))}%"></i></span>'
+            f'<span class="sell-n num">{v["units"]}</span>'
+            f'<span class="sell-rev num">{fmt_inr(v["revenue"])}</span></div>'
+            for n, v in top
+        )
+        slow_html = ""
+        if slow:
+            slow_html = (
+                '<p class="f-note" style="margin-top:12px">Slowest movers: '
+                + ", ".join(f'{html.escape(n)} ({v["units"]})' for n, v in slow[:5]) + '</p>'
+            )
         orders_html = (
-            '<section><h2>Orders captured from WhatsApp</h2><div class="panel tscroll">'
-            '<table><thead><tr><th>When</th><th>Customer</th><th>Product</th>'
-            '<th class="n">Price</th><th class="n">Qty</th><th>Status</th><th>Confidence</th></tr></thead>'
+            '<section><h2>Orders — every source</h2><div class="panel">'
+            f'<p class="f-note">{mix} &nbsp;·&nbsp; {len(orders)} orders &nbsp;·&nbsp; '
+            f'<b>{fmt_inr(total_rev)}</b> total</p></div>'
+            '<div class="panel tscroll" style="margin-top:10px">'
+            '<table><thead><tr><th>When</th><th>Source</th><th>Customer</th><th>Product</th>'
+            '<th class="n">Value</th><th class="n">Qty</th><th>Status</th></tr></thead>'
             f'<tbody>{rows}</tbody></table></div></section>'
+            '<section><h2>What&#8217;s selling</h2><div class="panel">'
+            f'{sell_rows}{slow_html}'
+            '<p class="f-note">Units across every channel — storefront, order form and WhatsApp combined.</p>'
+            '</div></section>'
         )
     else:
         orders_html = (
-            '<section><h2>Orders captured from WhatsApp</h2><div class="panel">'
-            '<p class="empty">None logged yet. Post "order received" + the details in the '
-            'TimeLabsHomeBot group and the row appears here with what the agent extracted.</p>'
+            '<section><h2>Orders — every source</h2><div class="panel">'
+            '<p class="empty">No orders in this window yet. They appear here automatically from '
+            'the storefront, the <a href="/ops/order-form.html">order form</a>, and WhatsApp capture.</p>'
             '</div></section>'
         )
     overview_orders_html = ""
     if orders:
         rows = "".join(
-            f'<div class="oo-row"><span class="f-meta num">{html.escape((r[0] or "")[:16])}</span>'
-            f'<b>{html.escape(r[2] or "—")}</b>'
-            f'<span class="num">{fmt_inr(r[3]) if r[3] else "—"}</span>'
-            f'<span class="pill neutral">{html.escape(r[5] or "new")}</span></div>'
-            for r in orders[:3]
+            f'<div class="oo-row"><span class="f-meta num">{html.escape(o["when"])}</span>'
+            f'{order_source_pill(o["source"])}'
+            f'<b>{html.escape(o["product"])}</b>'
+            f'<span class="num">{fmt_inr(o["amount"]) if o["amount"] else "—"}</span></div>'
+            for o in orders[:4]
         )
         overview_orders_html = (
             '<section><h2>Latest orders</h2><div class="panel">' + rows +
-            '<p class="f-note"><a href="#orders" onclick="showTab(\'orders\')">All orders &#8594;</a></p>'
+            '<p class="f-note"><a href="#orders" onclick="showTab(\'orders\')">All orders &#8594;</a>'
+            ' &nbsp;·&nbsp; <a href="/ops/order-form.html">Log an order &#8594;</a></p>'
             '</div></section>'
         )
     drop_recent = fetch_drop_recent()
