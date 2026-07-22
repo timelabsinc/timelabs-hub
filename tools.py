@@ -28,6 +28,8 @@ IC = {
     "content": '<path d="M17 3l4 4L8 20l-5 1 1-5z"/><path d="M14 6l4 4"/>',
     "map": '<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/>',
     "files": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    "access": '<path d="M16 11a4 4 0 1 0-8 0"/><circle cx="12" cy="7" r="3"/><path d="M4 21v-1a6 6 0 0 1 6-6h1"/><rect x="14" y="14" width="7" height="6" rx="1.5"/><path d="M16 14v-2a2 2 0 0 1 4 0v2"/>',
+    "orders": '<path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/>',
     "order": '<path d="M6 2h9l3 3v17H6z"/><path d="M9 9h6M9 13h6M9 17h4"/>',
 }
 
@@ -38,6 +40,7 @@ TOOLS = [
         ("drop", "Drop", "Files &amp; product video — upload, share, organize.", "/drop/", "live"),
         ("ledger", "Ledger", "Costs &amp; margins from your supplier invoices.", "/ops/ledger.html", "live"),
         ("chat", "Chat", "Ask the team (Hermes / Claude) with photos.", "/ops/agent/", "live"),
+        ("orders", "Order form", "Log an order in seconds — orders, customers &amp; what&#39;s selling.", "/ops/order-form.html", "live"),
         ("order", "Order form", "Log an order with a photo — syncs to the Orders sheet.", "/ops/order-form.html", "live"),
     ]),
     ("Content &amp; growth", [
@@ -51,6 +54,7 @@ TOOLS = [
     ]),
     ("Admin", [
         ("key", "Key", "Who can sign in to Hub — invite &amp; remove people.", "/ops/#key", "admin"),
+        ("access", "Tool access", "Who may use which tools — roles &amp; restricted logins.", "/ops/access.html", "admin"),
         ("files", "System files", "Browse the Hermes server files — read-only, hidden-file toggle.", "/ops/files.html", "admin"),
         ("map", "System map", "How the whole OS fits together — services, health, roadmap.", "/ops/architecture.html", "admin"),
     ]),

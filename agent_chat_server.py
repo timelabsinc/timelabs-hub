@@ -680,6 +680,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/customers/list":
             self._handle_customers_list()
             return
+        if path == "/access/me":
+            self._handle_access_me()
+            return
+        if path == "/access/list":
+            self._handle_access_list()
+            return
         if path == "/fs/list":
             self._handle_fs_list(query)
             return
@@ -1003,6 +1009,51 @@ class Handler(http.server.BaseHTTPRequestHandler):
             hub_event("product_update", f"{p.get('title', pid.split('/')[-1])}: "
                       + ", ".join(f"{k}={v}" for k, v in changed.items()), actor, app="shopify")
         self._json(200, {"ok": True, "changed": changed})
+
+    # --- Tool access: who may use what -------------------------------------
+    def _handle_access_me(self):
+        """Any signed-in user: their own role + allowed tools. Drives nav/tile
+        filtering, so a page never offers a tool the person can't open."""
+        email = (self.headers.get("X-User-Email") or "").strip().lower()
+        import access_store
+        role = access_store.get_role(email)
+        if not role:
+            self._json(200, {"email": "", "role": None, "tools": [], "home": "/ops/"})
+            return
+        spec = access_store.ROLES[role]
+        self._json(200, {"email": email, "role": role, "label": spec["label"],
+                         "tools": spec["tools"], "home": spec["home"],
+                         "admin": role == "admin"})
+
+    def _handle_access_list(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        import access_store
+        self._json(200, {"people": access_store.everyone(),
+                         "roles": [{"key": k, "label": v["label"], "blurb": v["blurb"],
+                                    "home": v["home"]} for k, v in access_store.ROLES.items()]})
+
+    def _handle_access_set(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"}); return
+        import access_store
+        email, role = str(p.get("email", "")).strip().lower(), str(p.get("role", "")).strip()
+        if not email or role not in access_store.ROLES:
+            self._json(400, {"error": "need an email and a valid role"}); return
+        try:
+            access_store.set_role(email, role)
+        except ValueError as e:
+            self._json(400, {"error": str(e)}); return
+        ok, note = access_store.sync_nginx()
+        actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+        hub_event("access_change", f"{email} -> {role}", actor, app="key")
+        self._json(200, {"ok": True, "email": email, "role": role,
+                         "gate": note, "gate_ok": ok})
 
     # --- System files browser (admin, read-only, confined to FS_ROOT) --------
     def _handle_fs_list(self, query):
@@ -1907,6 +1958,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_order_create()
         elif path == "/orders/parse":
             self._handle_orders_parse()
+        elif path == "/access/set":
+            self._handle_access_set()
         elif path == "/shopify/product/ai-draft":
             self._handle_shopify_ai_draft()
         elif path == "/shopify/product/create":
