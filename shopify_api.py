@@ -209,6 +209,97 @@ def remove_media(product_id, media_id):
     return data["productDeleteMedia"]["deletedMediaIds"]
 
 
+# --------------------------------------------------------------- blog articles
+def list_blogs():
+    nodes = admin_graphql("{ blogs(first: 20) { nodes { id title handle } } }")["blogs"]["nodes"]
+    return [{"id": b["id"], "title": b["title"], "handle": b["handle"]} for b in nodes]
+
+
+def list_articles(blog_id=None, first=50):
+    """Articles, newest first. Shopify has no blogId filter on `articles`, so we
+    read the blog's own connection when one is named."""
+    if blog_id:
+        q = """query($id: ID!, $n: Int!) { blog(id: $id) { articles(first: $n, reverse: true) {
+                 nodes { id title handle isPublished publishedAt
+                         author { name } } } } }"""
+        blog = admin_graphql(q, {"id": blog_id, "n": first}).get("blog") or {}
+        nodes = (blog.get("articles") or {}).get("nodes") or []
+    else:
+        q = """query($n: Int!) { articles(first: $n, reverse: true) {
+                 nodes { id title handle isPublished publishedAt author { name } } } }"""
+        nodes = admin_graphql(q, {"n": first})["articles"]["nodes"]
+    return [{"id": a["id"], "title": a["title"], "handle": a.get("handle"),
+             "published": bool(a.get("isPublished")),
+             "published_at": a.get("publishedAt"),
+             "author": (a.get("author") or {}).get("name") or ""} for a in nodes]
+
+
+def get_article(article_id):
+    q = """query($id: ID!) { article(id: $id) {
+             id title handle body summary isPublished publishedAt tags
+             author { name } blog { id title } image { url } } }"""
+    a = admin_graphql(q, {"id": article_id}).get("article")
+    if not a:
+        raise ShopifyError("article not found")
+    return {"id": a["id"], "title": a["title"], "handle": a.get("handle"),
+            "body": a.get("body") or "", "summary": a.get("summary") or "",
+            "published": bool(a.get("isPublished")), "tags": a.get("tags") or [],
+            "author": (a.get("author") or {}).get("name") or "",
+            "blog_id": (a.get("blog") or {}).get("id"),
+            "blog_title": (a.get("blog") or {}).get("title"),
+            "image": (a.get("image") or {}).get("url")}
+
+
+def _article_payload(title=None, body=None, summary=None, tags=None,
+                     author=None, published=None, image_url=None):
+    p = {}
+    if title is not None:
+        p["title"] = str(title).strip()
+    if body is not None:
+        p["body"] = str(body)
+    if summary is not None:
+        p["summary"] = str(summary)
+    if tags is not None:
+        p["tags"] = [str(t).strip() for t in tags if str(t).strip()]
+    if author:
+        p["author"] = {"name": str(author).strip()}
+    if published is not None:
+        p["isPublished"] = bool(published)
+    if image_url:
+        p["image"] = {"url": str(image_url).strip()}
+    return p
+
+
+def create_article(blog_id, title, body="", summary="", tags=None,
+                   author="", published=False, image_url=""):
+    if not blog_id:
+        raise ShopifyError("pick a blog to publish into")
+    if not (title or "").strip():
+        raise ShopifyError("the post needs a title")
+    article = _article_payload(title, body, summary, tags, author, published, image_url)
+    article["blogId"] = blog_id
+    q = """mutation($article: ArticleCreateInput!) {
+      articleCreate(article: $article) {
+        article { id handle isPublished } userErrors { field message } } }"""
+    data = admin_graphql(q, {"article": article})["articleCreate"]
+    if data["userErrors"]:
+        raise ShopifyError(data["userErrors"][0]["message"])
+    return data["article"]
+
+
+def update_article(article_id, **fields):
+    article = _article_payload(**fields)
+    if not article:
+        return None
+    q = """mutation($id: ID!, $article: ArticleUpdateInput!) {
+      articleUpdate(id: $id, article: $article) {
+        article { id handle isPublished } userErrors { field message } } }"""
+    data = admin_graphql(q, {"id": article_id, "article": article})["articleUpdate"]
+    if data["userErrors"]:
+        raise ShopifyError(data["userErrors"][0]["message"])
+    return data["article"]
+
+
 # --------------------------------------------------------------- theme access
 def _admin_rest(method, path, body=None):
     """Minimal Admin REST call (used for the Asset API, which has no GraphQL

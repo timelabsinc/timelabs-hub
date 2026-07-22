@@ -706,6 +706,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json(200, shopify_api.theme_status() if shopify_api.configured()
                            else {"available": False, "reason": "Shopify isn't connected."})
             return
+        if path == "/shopify/blogs":
+            self._handle_shopify_blogs()
+            return
+        if path == "/shopify/articles":
+            self._handle_shopify_articles(query)
+            return
+        if path == "/shopify/article/detail":
+            self._handle_shopify_article_detail(query)
+            return
         if path == "/shopify/pages":
             self._handle_shopify_pages()
             return
@@ -1247,6 +1256,75 @@ class Handler(http.server.BaseHTTPRequestHandler):
         actor = (self.headers.get("X-User-Email") or "?").strip().lower()
         hub_event("theme_revert", f"reverted last change on {theme['name']}", actor, app="shopify")
         self._json(200, {"ok": True, "remaining": len(backups) - 1})
+
+    # --- Blog: write posts straight into the store ---------------------------
+    def _handle_shopify_blogs(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        import shopify_api
+        if not shopify_api.configured():
+            self._json(400, {"error": "Shopify isn't connected."}); return
+        try:
+            self._json(200, {"blogs": shopify_api.list_blogs()})
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)})
+
+    def _handle_shopify_articles(self, query):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        from urllib.parse import parse_qsl
+        blog = dict(parse_qsl(query)).get("blog") or None
+        import shopify_api
+        try:
+            self._json(200, {"articles": shopify_api.list_articles(blog)})
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)})
+
+    def _handle_shopify_article_detail(self, query):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        from urllib.parse import parse_qsl
+        aid = dict(parse_qsl(query)).get("id")
+        import shopify_api
+        if not aid:
+            self._json(400, {"error": "missing article"}); return
+        try:
+            self._json(200, shopify_api.get_article(aid))
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)})
+
+    def _handle_shopify_article_save(self):
+        """Create or update a post. `id` present = update, absent = create."""
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 1048576)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"}); return
+        import shopify_api
+        if not shopify_api.configured():
+            self._json(400, {"error": "Shopify isn't connected."}); return
+        tags = p.get("tags")
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+        common = dict(title=p.get("title"), body=p.get("body"),
+                      summary=p.get("summary"), tags=tags or [],
+                      author=p.get("author", ""), published=bool(p.get("published")),
+                      image_url=p.get("image", ""))
+        try:
+            if p.get("id"):
+                art = shopify_api.update_article(p["id"], **common)
+                action = "updated"
+            else:
+                art = shopify_api.create_article(p.get("blog_id"), **common)
+                action = "created"
+        except shopify_api.ShopifyError as e:
+            self._json(502, {"error": str(e)}); return
+        actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+        state = "published" if common["published"] else "draft"
+        hub_event("blog_post", f"{action} {state}: {str(p.get('title',''))[:60]}", actor, app="shopify")
+        self._json(200, {"ok": True, "action": action, "article": art})
 
     def _handle_shopify_pages(self):
         if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
@@ -1970,6 +2048,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_shopify_theme_apply()
         elif path == "/shopify/theme/revert":
             self._handle_shopify_theme_revert()
+        elif path == "/shopify/article/save":
+            self._handle_shopify_article_save()
         elif path == "/shopify/page/update":
             self._handle_shopify_page_update()
         elif path == "/shopify/products/bulk-content":

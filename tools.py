@@ -29,6 +29,7 @@ IC = {
     "map": '<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/>',
     "files": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
     "access": '<path d="M16 11a4 4 0 1 0-8 0"/><circle cx="12" cy="7" r="3"/><path d="M4 21v-1a6 6 0 0 1 6-6h1"/><rect x="14" y="14" width="7" height="6" rx="1.5"/><path d="M16 14v-2a2 2 0 0 1 4 0v2"/>',
+    "post": '<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h4"/><path d="M15 3l3 3"/>',
     "orders": '<path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/>',
     "order": '<path d="M6 2h9l3 3v17H6z"/><path d="M9 9h6M9 13h6M9 17h4"/>',
 }
@@ -44,7 +45,8 @@ TOOLS = [
         ("order", "Order form", "Log an order with a photo — syncs to the Orders sheet.", "/ops/order-form.html", "live"),
     ]),
     ("Content &amp; growth", [
-        ("blog", "Blog builder", "Your 27 queued topics → SEO drafts for the store.", "/ops/blog.html", "live"),
+        ("blog", "Blog builder", "Your 27 queued topics → the content plan.", "/ops/blog.html", "live"),
+        ("post", "Blog uploader", "Write a post and publish it to the store.", "/ops/blog-uploader.html", "live"),
         ("content", "Content updater", "Bulk-refresh product copy &amp; edit store pages in your voice.", "/ops/content-updater.html", "live"),
     ]),
     ("Shopify", [
