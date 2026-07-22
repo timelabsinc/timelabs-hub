@@ -65,6 +65,17 @@ If you're a fresh Claude Code session (or a developer) on a **second machine**, 
 - **Live token holds only `drive.file` + `drive.readonly` — and that is sufficient for Sheets**, because `drive.file` covers any file the app itself created and Labs OS created the Orders spreadsheet. Enabling the Sheets API in the Google Cloud project was the only thing needed; **no reconnect was required.**
 - `/gdrive/connect` now also requests `spreadsheets`, which only matters if you ever want to write to a spreadsheet a human created by hand — `drive.file` cannot touch those. That wider scope applies automatically the next time Google is reconnected for any reason.
 
+
+## Driving it from a terminal (and how Hermes acts)
+`labs` (/usr/local/bin/labs -> bin/labs) exposes the whole system to the shell and therefore to the agent. It imports the same shopify_api.py / google_api.py the web tools use, so it reuses the credentials already in .env — never issue new Shopify/Google keys.
+- Reads: `labs orders` (live storefront + logged, merged), `products`, `product <id>`, `pages`, `page <id>`, `blogs`, `articles`, `article <id>`, `theme [--filter]`, `costs`, `drive`, `search "green dial"` (Drop photos by content), `files`, `customers`, `events`, `access`, `topics`.
+- Writes: `product-create/update`, `page-update`, `article-create/update`, `theme-set key=value`. **Every write is a dry run that prints the plan until you add `--execute`**, and executed writes log to `hub_events`.
+- **Agent toolset is role-aware**: admins get `terminal` (so the agent can actually run `labs`), everyone else keeps the safe web-only set. `/send` is reachable by any signed-in user, so a blanket grant would let a restricted role run root commands; admins already hold root SSH so it adds no privilege for them. See `toolset_for()` in agent_chat_server.py.
+- `memory_facts` now also carries categories **`preference`** (how the owner wants work done, the writing voice, design taste, what is ruled out, safety rules) and **`business`** (price bands, landed cost, banking overhead, order channels). Read those before writing copy or building UI.
+
+## Tool access (roles)
+`access_store.py` + `/ops/access.html`. Roles: admin / full / orders / **intake** (order form only). Enforcement is layered — a generated nginx map (`/etc/nginx/conf.d/labs-access.conf`) bounces a restricted role off `/ops/` to its own landing page so the HTML is never served; `sync_nginx()` runs `nginx -t` and reverts on failure. Intake lands on `/intake/`, a nav-stripped copy of the order form.
+
 ## Known open items / roadmap
 1. Wire live orders/customers into Home (scopes now present; `generate.py` still on the metrics bridge). The Order form's `orders`/`customers` tables are now the richest source for this.
 2. WhatsApp bridge decrypt failing → order capture dark; needs a phone re-pair.
