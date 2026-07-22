@@ -633,8 +633,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "client_id": cid,
             "redirect_uri": GDRIVE_REDIRECT,
             "response_type": "code",
+            # spreadsheets added 2026-07-22 for the Order form's sheet mirror —
+            # tokens minted before that predate it, hence the reconnect prompt.
             "scope": ("https://www.googleapis.com/auth/drive.readonly "
-                      "https://www.googleapis.com/auth/drive.file"),
+                      "https://www.googleapis.com/auth/drive.file "
+                      "https://www.googleapis.com/auth/spreadsheets"),
             "access_type": "offline",
             "prompt": "consent",
         })

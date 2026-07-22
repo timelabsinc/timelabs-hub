@@ -17,3 +17,6 @@ __pycache__/
 # ad-hoc backups
 *.bak.*
 .shopify-oauth.json
+.gdrive-token.json
+.orders-sheet.json
+.taxonomy-cache.json

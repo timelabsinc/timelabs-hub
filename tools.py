@@ -28,6 +28,7 @@ IC = {
     "content": '<path d="M17 3l4 4L8 20l-5 1 1-5z"/><path d="M14 6l4 4"/>',
     "map": '<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/>',
     "files": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    "order": '<path d="M6 2h9l3 3v17H6z"/><path d="M9 9h6M9 13h6M9 17h4"/>',
 }
 
 # (key, name, description, href-or-None, status)  status: "live" | "soon" | "admin"
@@ -37,6 +38,7 @@ TOOLS = [
         ("drop", "Drop", "Files &amp; product video — upload, share, organize.", "/drop/", "live"),
         ("ledger", "Ledger", "Costs &amp; margins from your supplier invoices.", "/ops/ledger.html", "live"),
         ("chat", "Chat", "Ask the team (Hermes / Claude) with photos.", "/ops/agent/", "live"),
+        ("order", "Order form", "Log an order with a photo — syncs to the Orders sheet.", "/ops/order-form.html", "live"),
     ]),
     ("Content &amp; growth", [
         ("blog", "Blog builder", "Your 27 queued topics → SEO drafts for the store.", "/ops/blog.html", "live"),

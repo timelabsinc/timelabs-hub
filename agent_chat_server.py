@@ -19,6 +19,7 @@ import secrets
 import sqlite3
 import subprocess
 import threading
+import time
 import urllib.request
 
 HOST, PORT = "127.0.0.1", 8901
@@ -109,6 +110,31 @@ def hub_event(kind, detail, actor="?", app="key"):
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(THEME_BACKUPS, exist_ok=True)
+
+
+def _ensure_orders_schema():
+    """orders predates the Order form (it was WhatsApp-capture only); the form
+    adds the shipping fields staff paste in, plus Drive photo links."""
+    want = {"drive_link": "TEXT", "photo_links": "TEXT", "customer_email": "TEXT",
+            "address": "TEXT", "pincode": "TEXT", "city": "TEXT", "state": "TEXT",
+            "source": "TEXT", "case_style": "TEXT", "dial_colour": "TEXT",
+            "dial_style": "TEXT", "case_colour": "TEXT", "movement": "TEXT",
+            "watch_size": "TEXT"}
+    try:
+        conn = sqlite3.connect(DB, timeout=5)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
+        if cols:
+            for name, typ in want.items():
+                if name not in cols:
+                    conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {typ}")
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[orders] schema check: {e}", flush=True)
+
+
+_ensure_orders_schema()
+
 
 def _fs_resolve(p):
     """Resolve a client path, confined to FS_ROOT (blocks symlink escape/..)."""
@@ -644,6 +670,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/shopify/product/detail":
             self._handle_shopify_detail(query)
+            return
+        if path == "/orders/list":
+            self._handle_orders_list()
+            return
+        if path == "/orders/meta":
+            self._handle_orders_meta()
+            return
+        if path == "/customers/list":
+            self._handle_customers_list()
             return
         if path == "/fs/list":
             self._handle_fs_list(query)
@@ -1346,6 +1381,237 @@ class Handler(http.server.BaseHTTPRequestHandler):
                   + ("s" if len(images) != 1 else "") + ")", actor, app="shopify")
         self._json(200, {"ok": True, **out})
 
+    # ------------------------------------------------------------- order form
+    def _order_user(self):
+        """Any signed-in (allowlisted) user may log orders — access is managed
+        in Key, not here. An empty header means SSO didn't populate it."""
+        return (self.headers.get("X-User-Email") or "").strip().lower()
+
+    def _handle_order_create(self):
+        actor = self._order_user()
+        if not actor:
+            self._json(403, {"error": "sign in first"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 16384)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        customer = str(p.get("customer_name", "")).strip()[:120]
+        product = str(p.get("product", "")).strip()[:200]
+        if not customer or not product:
+            self._json(400, {"error": "customer name and product are both needed"})
+            return
+        phone = str(p.get("customer_phone", "")).strip()[:40]
+        email = str(p.get("customer_email", "")).strip()[:200]
+        address = str(p.get("address", "")).strip()[:600]
+        pincode = str(p.get("pincode", "")).strip()[:20]
+        notes = str(p.get("notes", "")).strip()[:1000]
+        status = str(p.get("status", "new")).strip()[:40] or "new"
+        source = str(p.get("source", "")).strip()[:40]
+
+        # City/state and product attributes come from the browser (where staff
+        # can correct them); recompute anything missing so an API caller or an
+        # untouched field still lands structured.
+        import india_places
+        import order_taxonomy
+        city = str(p.get("city", "")).strip()[:80]
+        state = str(p.get("state", "")).strip()[:80]
+        if address and not (city and state):
+            gc, gs = india_places.parse(address, pincode)
+            city = city or (gc or "")
+            state = state or (gs or "")
+        attrs = {k: str(p.get(k, "")).strip()[:60] for k in order_taxonomy.FIELDS}
+        if not any(attrs.values()):
+            attrs.update(order_taxonomy.extract(product + " " + notes))
+        try:
+            qty = max(1, int(p.get("quantity") or 1))
+        except (TypeError, ValueError):
+            qty = 1
+        try:
+            price = float(p.get("price_inr")) if str(p.get("price_inr", "")).strip() else None
+        except (TypeError, ValueError):
+            price = None
+
+        # Photos are whatever /upload just wrote — confine each to UPLOAD_DIR so a
+        # crafted path can't push an arbitrary server file to Drive.
+        raw_photos = p.get("photo_paths") or ([p["photo_path"]] if p.get("photo_path") else [])
+        photos = []
+        upload_root = os.path.realpath(UPLOAD_DIR) + os.sep
+        for cand in raw_photos[:10]:
+            rp = os.path.realpath(str(cand).strip())
+            if not rp.startswith(upload_root) or not os.path.isfile(rp):
+                self._json(400, {"error": "a photo upload expired — attach it again"})
+                return
+            photos.append(rp)
+
+        import google_api
+        access = google_api.access_token()
+        warnings = []
+        if not access:
+            warnings.append("Google isn't connected — photos and the sheet mirror were "
+                            "skipped. Open Drop and reconnect Google.")
+        links = []
+        if photos and access:
+            for i, fp in enumerate(photos):
+                try:
+                    links.append(google_api.upload_photo(
+                        access, f"order-{int(time.time())}-{i+1}-{os.path.basename(fp)}", fp))
+                except Exception as e:
+                    warnings.append(f"A photo didn't reach Drive: {e}")
+        drive_link = links[0] if links else None
+
+        conn = db()
+        cur = conn.execute(
+            "INSERT INTO orders (customer_name, customer_phone, customer_email, address, "
+            "pincode, city, state, source, product, price_inr, quantity, notes, status, "
+            "has_image, drive_link, photo_links, case_style, dial_colour, dial_style, "
+            "case_colour, movement, watch_size) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (customer, phone, email, address, pincode, city, state, source, product,
+             price, qty, notes, status, 1 if links else 0, drive_link,
+             json.dumps(links) if links else None,
+             attrs.get("case_style"), attrs.get("dial_colour"), attrs.get("dial_style"),
+             attrs.get("case_colour"), attrs.get("movement"), attrs.get("watch_size")))
+        oid = cur.lastrowid
+        row = conn.execute("SELECT received_at FROM orders WHERE id=?", (oid,)).fetchone()
+        conn.commit()
+        logged = row["received_at"] if row else ""
+
+        # Customer roll-up recomputes from orders, so it stays correct even if
+        # an order is later edited or removed.
+        import customers as customers_mod
+        cust = None
+        try:
+            cust = customers_mod.upsert_from_order(conn, {
+                "customer_name": customer, "customer_phone": phone,
+                "customer_email": email, "address": address, "pincode": pincode,
+                "city": city, "state": state, "source": source})
+        except Exception as e:
+            warnings.append(f"Customer list not updated: {e}")
+        conn.close()
+
+        # The DB is the source of truth; a failed mirror must never lose an order.
+        try:
+            if access:
+                google_api.append_order_row(access, [
+                    oid, logged, source, customer, phone, email, address, city, state,
+                    pincode, product, attrs.get("case_style"), attrs.get("dial_colour"),
+                    attrs.get("dial_style"), attrs.get("case_colour"),
+                    attrs.get("movement"), attrs.get("watch_size"), qty,
+                    "" if price is None else price, notes, status, "\n".join(links)])
+                if cust:
+                    google_api.upsert_customer_row(
+                        access, customers_mod.HEADERS, customers_mod.sheet_row(cust))
+        except Exception as e:
+            warnings.append(f"Sheet not updated: {e}")
+
+        hub_event("order_created", f"{product} ×{qty} for {customer}", actor, app="orders")
+        self._json(200, {"ok": True, "id": oid, "drive_link": drive_link,
+                         "attributes": {k: v for k, v in attrs.items() if v},
+                         "customer": {"orders": cust["orders_count"],
+                                      "tags": customers_mod.all_tags(cust)} if cust else None,
+                         "warnings": warnings})
+
+    def _handle_orders_list(self):
+        if not self._order_user():
+            self._json(403, {"error": "sign in first"})
+            return
+        conn = db()
+        try:
+            rows = conn.execute(
+                "SELECT id, received_at, customer_name, customer_phone, customer_email, "
+                "address, pincode, city, state, source, product, quantity, price_inr, "
+                "notes, status, drive_link, photo_links, case_style, dial_colour, "
+                "dial_style, case_colour, movement, watch_size FROM orders "
+                "ORDER BY id DESC LIMIT 100").fetchall()
+        except sqlite3.OperationalError as e:
+            conn.close()
+            self._json(500, {"error": str(e)})
+            return
+        conn.close()
+        import google_api
+        self._json(200, {"orders": [dict(r) for r in rows],
+                         "sheet_url": google_api.sheet_url()})
+
+    def _handle_orders_parse(self):
+        """Live helper for the form: address → city/state, product → attributes.
+        Keeps the vocabulary server-side so there's one implementation of it."""
+        if not self._order_user():
+            self._json(403, {"error": "sign in first"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 8192)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        import india_places
+        import order_taxonomy
+        city, state = india_places.parse(str(p.get("address", ""))[:600],
+                                         str(p.get("pincode", ""))[:20])
+        attrs = order_taxonomy.extract(
+            (str(p.get("product", "")) + " " + str(p.get("notes", "")))[:600])
+        self._json(200, {"city": city or "", "state": state or "", "attributes": attrs,
+                         "labels": order_taxonomy.FIELD_LABELS})
+
+    def _handle_orders_meta(self):
+        """Sources (defaults + whatever's been used) and the what's-selling
+        roll-up that makes the attribute columns worth filling."""
+        if not self._order_user():
+            self._json(403, {"error": "sign in first"})
+            return
+        import order_taxonomy
+        conn = db()
+        try:
+            used = [r[0] for r in conn.execute(
+                "SELECT DISTINCT source FROM orders WHERE source IS NOT NULL "
+                "AND source != '' ORDER BY source")]
+            sold = {}
+            for field in ("case_style", "dial_colour", "dial_style", "movement"):
+                sold[field] = [dict(r) for r in conn.execute(
+                    f"SELECT {field} AS name, COUNT(*) AS orders, "
+                    "SUM(COALESCE(quantity,1)) AS units FROM orders "
+                    f"WHERE {field} IS NOT NULL AND {field} != '' AND status != 'cancelled' "
+                    f"GROUP BY {field} ORDER BY units DESC LIMIT 8")]
+            totals = conn.execute(
+                "SELECT COUNT(*) n, COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) "
+                "revenue FROM orders WHERE status != 'cancelled'").fetchone()
+            ncust = conn.execute(
+                "SELECT COUNT(*) n FROM customers").fetchone()["n"] \
+                if conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                                "AND name='customers'").fetchone() else 0
+        except sqlite3.OperationalError as e:
+            conn.close()
+            self._json(500, {"error": str(e)})
+            return
+        conn.close()
+        defaults = ["CC", "TLC", "Offkicks"]
+        sources = defaults + [s for s in used if s not in defaults]
+        self._json(200, {"sources": sources, "selling": sold,
+                         "vocab": order_taxonomy.vocab(),
+                         "totals": {"orders": totals["n"], "revenue": totals["revenue"],
+                                    "customers": ncust}})
+
+    def _handle_customers_list(self):
+        if not self._order_user():
+            self._json(403, {"error": "sign in first"})
+            return
+        import customers as customers_mod
+        conn = db()
+        customers_mod.ensure_schema(conn)
+        rows = conn.execute(
+            "SELECT * FROM customers ORDER BY total_spent DESC, orders_count DESC "
+            "LIMIT 200").fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["tags"] = customers_mod.all_tags(d)
+            out.append(d)
+        self._json(200, {"customers": out})
+
     def _handle_ledger_import(self):
         """Preview (default) or commit new supplier invoices from Drop into
         suppliers.db. Review-gated: the UI shows the parse before committing."""
@@ -1637,6 +1903,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_allowlist_change("remove")
         elif path == "/ledger/import":
             self._handle_ledger_import()
+        elif path == "/orders/create":
+            self._handle_order_create()
+        elif path == "/orders/parse":
+            self._handle_orders_parse()
         elif path == "/shopify/product/ai-draft":
             self._handle_shopify_ai_draft()
         elif path == "/shopify/product/create":
