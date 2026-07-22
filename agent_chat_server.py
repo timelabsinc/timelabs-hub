@@ -307,6 +307,10 @@ PREAMBLE = (
     "Chat, plus a Tools launcher with a Blog builder, a Quick product updater, and "
     "a Product builder that pushes new products live to Shopify). You have a "
     "knowledge base about the OS itself in memory_facts (category 'labs_os') — "
+        "and you can ACT on the store yourself with the `labs` terminal command "
+        "(labs orders / products / costs / theme, and labs product-create, article-create, "
+        "theme-set … which dry-run unless you add --execute; run `labs --help`). It reuses "
+        "the existing credentials, so never ask for new Shopify or Google keys. "
     "consult it when asked how the system works or how to do a store task, and "
     "point the owner at the right tool URL. Team files live in Drop at "
     "/srv/timelabs-drop (browse it directly). Sourcing costs and margins are in "
@@ -515,14 +519,25 @@ def make_pdf(markdown, title):
 
 SAFE_WEB_TOOLSET = "web,memory,skills,session_search,context_engine,clarify,vision,image_gen,tts,todo"
 
+# Admins additionally get `terminal`, which is what lets the agent actually DO
+# things via the `labs` CLI instead of only describing them. Granted by role,
+# never globally: /send is reachable by any signed-in user, so a blanket grant
+# would let a restricted role (e.g. intake) ask the agent to run commands as
+# root. Admins already hold root SSH, so for them this adds no new privilege.
+ADMIN_TOOLSET = SAFE_WEB_TOOLSET + ",terminal"
 
-def run_hermes(prompt, model=None, provider=None):
+
+def toolset_for(email):
+    return ADMIN_TOOLSET if (email or "").strip().lower() in ADMIN_EMAILS else SAFE_WEB_TOOLSET
+
+
+def run_hermes(prompt, model=None, provider=None, toolset=None):
     cmd = ["hermes"]
     if model:
         cmd += ["-m", model]
     if provider:
         cmd += ["--provider", provider]
-    cmd += ["-t", SAFE_WEB_TOOLSET]
+    cmd += ["-t", toolset or SAFE_WEB_TOOLSET]
     cmd += ["-z", prompt]
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=HERMES_HARD_TIMEOUT,
@@ -1781,6 +1796,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, {"id": sid})
 
     def _handle_send(self):
+        # Shell access is granted per role, not to everyone who can chat.
+        tools_for_caller = toolset_for(self.headers.get("X-User-Email"))
         length = int(self.headers.get("Content-Length", 0))
         try:
             payload = json.loads(self.rfile.read(min(length, 32768)).decode())
@@ -1845,7 +1862,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     try:
                         print(f"[route] session={session_id} trying model={model or 'hermes-default'}"
                               + (f" ({note})" if note else ""), flush=True)
-                        reply = run_hermes(prompt, model, provider)
+                        reply = run_hermes(prompt, model, provider, tools_for_caller)
                         if note and "auto-switched" in note:
                             reply += f"\n\n*({note} — set `/model claude` to keep it, or `/model default`)*"
                         elif note and model != (pref_model or FAILOVER_CHAIN[0][0]):

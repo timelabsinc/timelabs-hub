@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""labs — the whole of Labs OS, callable from a terminal.
+
+Every tool the browser can drive, Hermes can now drive too, through this one
+command. It imports the exact same access layers the web tools use
+(shopify_api.py, google_api.py), so it rides on the SAME credentials already in
+.env — nothing new to issue, nothing extra to keep in sync or revoke.
+
+Safety follows the convention shopify_admin.py already established here:
+  * reads are free
+  * every write is a DRY RUN unless you pass --execute, and prints exactly what
+    it would change first
+  * executed writes land in hub_events, so anything Hermes does shows up in the
+    same activity feed as everything else
+
+  labs orders [--limit N]              live storefront + logged orders, merged
+  labs products [--query Q]            search the catalogue
+  labs product <id>                    one product in full
+  labs product-create --title T --price N [--type T --tags a,b --desc H --publish]
+  labs product-update <id> [--price N --status active|draft --title T --tags a,b --desc H]
+  labs pages | page <id> | page-update <id> [--title T --body H]
+  labs blogs | articles [--blog ID] | article <id>
+  labs article-create --blog ID --title T [--body H --summary S --tags a,b --publish]
+  labs article-update <id> [--title T --body H --publish/--unpublish]
+  labs theme                           live theme + its settings
+  labs theme-set key=value [key=value] change theme settings
+  labs costs                           landed cost per part, from the invoices
+  labs drive                           Google Drive/Sheets connection status
+"""
+import argparse
+import json
+import os
+import sqlite3
+import sys
+
+sys.path.insert(0, "/root/ops-dashboard")
+
+HDB = "/root/ops-dashboard/data/hermes.db"
+SDB = "/root/ops-dashboard/data/suppliers.db"
+
+
+def out(obj):
+    print(json.dumps(obj, indent=2, ensure_ascii=False, default=str))
+
+
+def die(msg, code=1):
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def event(kind, detail):
+    """Mirror the web tools: anything done here shows in the activity feed."""
+    try:
+        conn = sqlite3.connect(HDB)
+        conn.execute("""CREATE TABLE IF NOT EXISTS hub_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            app TEXT NOT NULL DEFAULT 'drop',
+            kind TEXT NOT NULL, actor TEXT, detail TEXT)""")
+        conn.execute("INSERT INTO hub_events (app, kind, actor, detail) VALUES (?,?,?,?)",
+                     ("shopify", kind, "hermes (cli)", detail))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def api():
+    import shopify_api
+    if not shopify_api.configured():
+        die("Shopify isn't connected. Add SHOPIFY_SHOP and SHOPIFY_ADMIN_TOKEN to "
+            "/root/ops-dashboard/.env, or reconnect at "
+            "https://ops.timelabsco.in/ops/agent/api/shopify/connect")
+    return shopify_api
+
+
+def confirm(plan, args):
+    """Print the plan; return True only when --execute was given."""
+    print("PLAN:" if not args.execute else "EXECUTING:")
+    for line in plan:
+        print("  " + line)
+    if not args.execute:
+        print("\n(dry run — nothing changed. Re-run with --execute to apply.)")
+        return False
+    return True
+
+
+def split_tags(v):
+    return [t.strip() for t in (v or "").split(",") if t.strip()] or None
+
+
+# ------------------------------------------------------------------ reads
+def cmd_orders(args):
+    s = api()
+    live = []
+    try:
+        q = """query($n: Int!) { orders(first: $n, sortKey: CREATED_AT, reverse: true) {
+                 nodes { name createdAt displayFinancialStatus
+                         totalPriceSet { shopMoney { amount currencyCode } }
+                         customer { displayName }
+                         lineItems(first: 5) { nodes { title quantity } } } } }"""
+        for n in s.admin_graphql(q, {"n": args.limit})["orders"]["nodes"]:
+            li = (n.get("lineItems") or {}).get("nodes") or []
+            live.append({
+                "source": "website", "ref": n.get("name"),
+                "when": (n.get("createdAt") or "")[:16].replace("T", " "),
+                "customer": (n.get("customer") or {}).get("displayName") or "",
+                "items": [f'{x["title"]} x{x["quantity"]}' for x in li],
+                "amount": (n.get("totalPriceSet") or {}).get("shopMoney", {}).get("amount"),
+                "status": n.get("displayFinancialStatus"),
+            })
+    except Exception as e:
+        live = [{"error": str(e)}]
+    logged = []
+    try:
+        conn = sqlite3.connect(HDB)
+        conn.row_factory = sqlite3.Row
+        for r in conn.execute(
+                "SELECT received_at, customer_name, product, price_inr, quantity, status, "
+                "source, sender_number FROM orders ORDER BY id DESC LIMIT ?", (args.limit,)):
+            logged.append({
+                "source": (r["source"] or ("whatsapp" if r["sender_number"] else "form")),
+                "when": (r["received_at"] or "")[:16], "customer": r["customer_name"],
+                "items": [f'{r["product"]} x{r["quantity"] or 1}'],
+                "amount": r["price_inr"], "status": r["status"]})
+        conn.close()
+    except Exception as e:
+        logged = [{"error": str(e)}]
+    out({"live_storefront": live, "logged_in_labs": logged})
+
+
+def cmd_products(args):
+    out(api().list_products(search=args.query or "", first=args.limit))
+
+
+def cmd_product(args):
+    out(api().get_detail(args.id))
+
+
+def cmd_pages(args):
+    out({"pages": api().list_pages()})
+
+
+def cmd_page(args):
+    out(api().get_page(args.id))
+
+
+def cmd_blogs(args):
+    out({"blogs": api().list_blogs()})
+
+
+def cmd_articles(args):
+    out({"articles": api().list_articles(args.blog)})
+
+
+def cmd_article(args):
+    out(api().get_article(args.id))
+
+
+def cmd_theme(args):
+    s = api()
+    theme, _raw, data = s.get_settings_data()
+    flat = s.flatten_theme_settings(data["current"])
+    if args.filter:
+        f = args.filter.lower()
+        flat = {k: v for k, v in flat.items() if f in k.lower()}
+    out({"theme": theme["name"], "settings_count": len(flat), "settings": flat})
+
+
+def cmd_costs(args):
+    try:
+        conn = sqlite3.connect(SDB)
+        conn.row_factory = sqlite3.Row
+        rows = [dict(r) for r in conn.execute(
+            "SELECT part_category, model_compat, total_qty, avg_unit_inr, total_spend_inr "
+            "FROM v_part_costs WHERE part_category IS NOT NULL "
+            "ORDER BY total_spend_inr DESC LIMIT ?", (args.limit,))]
+        tot = conn.execute("SELECT COUNT(*), SUM(COALESCE(total_inr,0)), AVG(COALESCE(exchange_rate,0)) "
+                           "FROM invoices").fetchone()
+        conn.close()
+        out({"invoices": tot[0], "total_paid_inr": tot[1], "effective_rate_inr_per_usd": tot[2],
+             "cost_per_part": rows})
+    except Exception as e:
+        die(str(e))
+
+
+def cmd_drive(args):
+    try:
+        import google_api as g
+        out({"configured": g.configured(), "connected": g.connected(),
+             "note": "reconnect at /drop/api/gdrive/connect if Sheets/export calls fail"})
+    except Exception as e:
+        die(str(e))
+
+
+# ------------------------------------------------------------------ writes
+def cmd_product_create(args):
+    s = api()
+    plan = [f"create product {args.title!r}",
+            f"  price={args.price} type={args.type or '-'} tags={args.tags or '-'}",
+            f"  status={'ACTIVE (live)' if args.publish else 'DRAFT (hidden)'}"]
+    if not confirm(plan, args):
+        return
+    r = s.create_product(title=args.title, description=args.desc or "",
+                         product_type=args.type or "", tags=split_tags(args.tags) or [],
+                         status="ACTIVE" if args.publish else "DRAFT",
+                         price=args.price)
+    event("product_create", f"{args.title} via CLI")
+    out(r)
+
+
+def cmd_product_update(args):
+    s = api()
+    before = s.get_detail(args.id)
+    plan = [f"update {before['title']!r}"]
+    if args.price:
+        plan.append(f"  price {before.get('price')} -> {args.price}")
+    if args.status:
+        plan.append(f"  status {before.get('status')} -> {args.status.upper()}")
+    for f in ("title", "tags", "desc"):
+        if getattr(args, f):
+            plan.append(f"  {f} -> {str(getattr(args, f))[:60]}")
+    if len(plan) == 1:
+        die("nothing to change — pass at least one of --price/--status/--title/--tags/--desc")
+    if not confirm(plan, args):
+        return
+    if args.status:
+        s.set_status(args.id, args.status.upper())
+    if args.price and before.get("variant_id"):
+        s.set_price(args.id, before["variant_id"], f"{float(args.price):.2f}")
+    fields = {}
+    if args.title:
+        fields["title"] = args.title
+    if args.desc:
+        fields["descriptionHtml"] = args.desc
+    if args.tags:
+        fields["tags"] = split_tags(args.tags)
+    if fields:
+        s.update_fields(args.id, fields)
+    event("product_update", f"{before['title']} via CLI")
+    out({"ok": True, "id": args.id})
+
+
+def cmd_page_update(args):
+    s = api()
+    before = s.get_page(args.id)
+    plan = [f"update page {before['title']!r}"]
+    if args.title:
+        plan.append(f"  title -> {args.title}")
+    if args.body:
+        plan.append(f"  body -> {len(args.body)} chars (replaces {len(before['body'])})")
+    if len(plan) == 1:
+        die("nothing to change — pass --title and/or --body")
+    if not confirm(plan, args):
+        return
+    s.update_page(args.id, title=args.title, body=args.body)
+    event("page_update", f"{before['title']} via CLI")
+    out({"ok": True})
+
+
+def cmd_article_create(args):
+    s = api()
+    plan = [f"create post {args.title!r} in blog {args.blog}",
+            f"  {'PUBLISH LIVE' if args.publish else 'save as draft'}",
+            f"  body {len(args.body or '')} chars"]
+    if not confirm(plan, args):
+        return
+    r = s.create_article(args.blog, args.title, body=args.body or "",
+                         summary=args.summary or "", tags=split_tags(args.tags) or [],
+                         author=args.author or "", published=bool(args.publish))
+    event("blog_post", f"created {'published' if args.publish else 'draft'}: {args.title}")
+    out(r)
+
+
+def cmd_article_update(args):
+    s = api()
+    before = s.get_article(args.id)
+    plan = [f"update post {before['title']!r}"]
+    if args.title:
+        plan.append(f"  title -> {args.title}")
+    if args.body:
+        plan.append(f"  body -> {len(args.body)} chars")
+    if args.publish:
+        plan.append("  PUBLISH LIVE")
+    if args.unpublish:
+        plan.append("  unpublish (back to draft)")
+    if len(plan) == 1:
+        die("nothing to change")
+    if not confirm(plan, args):
+        return
+    pub = True if args.publish else (False if args.unpublish else None)
+    s.update_article(args.id, title=args.title, body=args.body, published=pub)
+    event("blog_post", f"updated: {before['title']}")
+    out({"ok": True})
+
+
+def cmd_theme_set(args):
+    s = api()
+    patch = {}
+    for kv in args.pairs:
+        if "=" not in kv:
+            die(f"expected key=value, got {kv!r}")
+        k, v = kv.split("=", 1)
+        patch[k.strip()] = v.strip()
+    theme, raw, data = s.get_settings_data()
+    new_current, applied, skipped = s.apply_theme_patch(data["current"], patch)
+    if not applied:
+        die(f"nothing matched. skipped: {skipped}. Run `labs theme --filter colour` to see real keys.")
+    plan = [f"theme {theme['name']!r}"] + [
+        f"  {k}: {v['old']} -> {v['new']}" for k, v in applied.items()]
+    if skipped:
+        plan.append(f"  (ignored unknown keys: {', '.join(skipped)})")
+    if not confirm(plan, args):
+        return
+    import time
+    bdir = "/root/ops-dashboard/theme-backups"
+    os.makedirs(bdir, exist_ok=True)
+    with open(os.path.join(bdir, f"{theme['id']}-{int(time.time())}.json"), "w") as f:
+        f.write(raw)                        # so the web tool's Undo still works
+    data["current"] = new_current
+    s.put_settings_data(theme["id"], json.dumps(data, ensure_ascii=False))
+    event("theme_update", f"{len(applied)} setting(s) via CLI")
+    out({"ok": True, "applied": len(applied)})
+
+
+def main():
+    p = argparse.ArgumentParser(prog="labs", description="Labs OS from the terminal",
+                                formatter_class=argparse.RawDescriptionHelpFormatter,
+                                epilog=__doc__)
+    p.add_argument("--execute", action="store_true", help="actually apply writes")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def add(name, fn, **kw):
+        sp = sub.add_parser(name, **kw)
+        sp.set_defaults(fn=fn)
+        return sp
+
+    sp = add("orders", cmd_orders); sp.add_argument("--limit", type=int, default=15)
+    sp = add("products", cmd_products)
+    sp.add_argument("--query", default=""); sp.add_argument("--limit", type=int, default=25)
+    sp = add("product", cmd_product); sp.add_argument("id")
+    add("pages", cmd_pages)
+    sp = add("page", cmd_page); sp.add_argument("id")
+    add("blogs", cmd_blogs)
+    sp = add("articles", cmd_articles); sp.add_argument("--blog", default=None)
+    sp = add("article", cmd_article); sp.add_argument("id")
+    sp = add("theme", cmd_theme); sp.add_argument("--filter", default="")
+    sp = add("costs", cmd_costs); sp.add_argument("--limit", type=int, default=20)
+    add("drive", cmd_drive)
+
+    sp = add("product-create", cmd_product_create)
+    sp.add_argument("--title", required=True); sp.add_argument("--price", default=None)
+    sp.add_argument("--type", default=""); sp.add_argument("--tags", default="")
+    sp.add_argument("--desc", default=""); sp.add_argument("--publish", action="store_true")
+
+    sp = add("product-update", cmd_product_update); sp.add_argument("id")
+    sp.add_argument("--price", default=None); sp.add_argument("--status", default=None)
+    sp.add_argument("--title", default=None); sp.add_argument("--tags", default=None)
+    sp.add_argument("--desc", default=None)
+
+    sp = add("page-update", cmd_page_update); sp.add_argument("id")
+    sp.add_argument("--title", default=None); sp.add_argument("--body", default=None)
+
+    sp = add("article-create", cmd_article_create)
+    sp.add_argument("--blog", required=True); sp.add_argument("--title", required=True)
+    sp.add_argument("--body", default=""); sp.add_argument("--summary", default="")
+    sp.add_argument("--tags", default=""); sp.add_argument("--author", default="")
+    sp.add_argument("--publish", action="store_true")
+
+    sp = add("article-update", cmd_article_update); sp.add_argument("id")
+    sp.add_argument("--title", default=None); sp.add_argument("--body", default=None)
+    sp.add_argument("--publish", action="store_true"); sp.add_argument("--unpublish", action="store_true")
+
+    sp = add("theme-set", cmd_theme_set); sp.add_argument("pairs", nargs="+")
+
+    args = p.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()
