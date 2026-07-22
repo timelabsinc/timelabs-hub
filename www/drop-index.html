@@ -73,6 +73,8 @@
   .btn.primary{background:var(--ink);border-color:var(--ink);color:var(--bg);}
 
   .searchrow{padding:0 0 12px;}
+  .srch-meta{font-size:12px;color:var(--muted);padding:6px 2px 0;}
+  #srchresults .card{cursor:pointer;}
   #q{font-family:var(--sans);font-size:14px;border:1px solid var(--border);border-radius:var(--r-s);
     background:var(--card);color:var(--ink);padding:9px 12px;width:100%;}
   #q:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
@@ -354,8 +356,10 @@
   </div>
 
   <div class="searchrow" id="searchrow" style="display:none">
-    <input id="q" type="search" placeholder="Filter files in this folder…" aria-label="Filter files">
+    <input id="q" type="search" placeholder="Search everything — &ldquo;black watches&rdquo;, &ldquo;green dial&rdquo;&hellip;" aria-label="Search all files">
+    <div id="srchmeta" class="srch-meta"></div>
   </div>
+  <div id="srchresults"></div>
 
   <div class="catbar" id="catbar"></div>
   <div class="folders" id="folders"></div>
@@ -1003,7 +1007,55 @@ $('searchBtn').onclick = () => {
   $('searchBtn').classList.toggle('on', show);
   if(show) $('q').focus(); else { $('q').value = ''; state.filter = ''; render(); }
 };
-$('q').addEventListener('input', () => { state.filter = $('q').value.trim(); render(); });
+/* ---- global search: filename + folder + AI photo descriptions ---- */
+let srchT = null;
+$('q').addEventListener('input', () => {
+  const q = $('q').value.trim();
+  clearTimeout(srchT);
+  if(!q){ $('srchresults').innerHTML=''; $('srchmeta').innerHTML=''; state.filter=''; render(); return; }
+  srchT = setTimeout(() => runSearch(q), 300);
+});
+async function runSearch(q){
+  try {
+    const d = await api('/search?q=' + encodeURIComponent(q));
+    const grid = $('srchresults');
+    if(!d.results.length){
+      grid.innerHTML = '<p class="empty" style="padding:18px">Nothing matched &ldquo;' + esc(q) + '&rdquo;.' +
+        (d.unindexed ? ' ' + d.unindexed + ' photo' + (d.unindexed===1?'':'s') + " haven't been described yet — index them to search by what's in the picture." : '') + '</p>';
+    } else {
+      grid.innerHTML = '<div class="grid">' + d.results.map(r => {
+        const thumb = r.kind === 'image' || r.kind === 'video'
+          ? '<img loading="lazy" src="' + API + '/thumb?path=' + encodeURIComponent(r.path) + '" alt="">'
+          : '<div class="ph">' + (ICONS[r.kind] || ICONS.file) + '</div>';
+        return '<div class="card" data-p="' + esc(r.path) + '" data-d="' + esc(r.dir) + '">' +
+          '<div class="thumb">' + thumb + '</div>' +
+          '<div class="cap"><b>' + esc(r.name) + '</b><small>' + esc(r.dir || 'Drop') +
+          (r.why === 'described' ? ' · matched by photo' : '') + '</small></div></div>';
+      }).join('') + '</div>';
+      grid.querySelectorAll('.card').forEach(c => {
+        c.onclick = () => { nav(c.dataset.d || ''); $('q').value=''; $('srchresults').innerHTML=''; $('srchmeta').innerHTML=''; };
+      });
+    }
+    $('srchmeta').innerHTML = d.results.length + ' result' + (d.results.length===1?'':'s') +
+      ' · ' + d.indexed + ' photo' + (d.indexed===1?'':'s') + ' described' +
+      (d.unindexed ? ' · <a id="doidx" style="color:var(--accent);cursor:pointer">describe ' + d.unindexed + ' more</a>' : '');
+    const b = document.getElementById('doidx');
+    if(b) b.onclick = indexMore;
+  } catch(e){ toast(e.message); }
+}
+async function indexMore(){
+  const m = $('srchmeta');
+  m.innerHTML = 'Looking at your photos… this runs once per photo, then search is instant.';
+  try {
+    for(let i=0;i<20;i++){
+      const d = await api('/search/index', {method:'POST', body: JSON.stringify({batch:6})});
+      m.innerHTML = 'Described ' + d.indexed + ' photo' + (d.indexed===1?'':'s') + '… ' + d.remaining + ' to go.';
+      if(d.done || !d.added) break;
+    }
+    toast('Photo index updated');
+    runSearch($('q').value.trim());
+  } catch(e){ toast(e.message); }
+}
 async function newFolder(){
   const name = prompt('Folder name:');
   if(!name) return;

@@ -207,6 +207,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._list(params.get("path", ""))
         elif path == "/share/info":
             self._share_info(params.get("path", ""), params.get("name", ""))
+        elif path == "/search":
+            self._search(params)
         elif path == "/info":
             self._info(params.get("path", ""), params.get("name", ""))
         elif path == "/thumb":
@@ -288,6 +290,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._organize_apply()
         elif path == "/gdrive/import":
             self._gdrive_import()
+        elif path == "/search/index":
+            self._search_index()
         elif path == "/gdrive/export":
             self._gdrive_export()
         elif path == "/share":
@@ -809,6 +813,141 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     out["token"] = tok          # back-compat: prefer the full link
                     out["url"] = entry["url"]
         self._json(200, out)
+
+    # ------------------------------------------------------------- search
+    # Text first (instant, free), AI second. The AI pass describes each photo
+    # once and caches it, so "black watches" or "galaxy burst" keeps working
+    # for files nobody ever named properly — and only costs a call the first time.
+    SEARCH_INDEX = os.path.join(ROOT, ".search-index.json")
+
+    @classmethod
+    def _sidx_load(cls):
+        try:
+            with open(cls.SEARCH_INDEX) as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    @classmethod
+    def _sidx_save(cls, idx):
+        tmp = cls.SEARCH_INDEX + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(idx, f)
+        os.replace(tmp, cls.SEARCH_INDEX)
+
+    @staticmethod
+    def _walk_files():
+        """Every visible file as (rel_path, abs_path, kind)."""
+        out = []
+        for base, dirs, files in os.walk(ROOT):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for fn in files:
+                if fn.startswith("."):
+                    continue
+                fp = os.path.join(base, fn)
+                rel = os.path.relpath(fp, ROOT)
+                out.append((rel, fp, kind_of(fn)))
+        return out
+
+    def _search(self, params):
+        q = (params.get("q") or "").strip().lower()
+        if not q:
+            self._json(200, {"results": [], "query": "", "unindexed": 0})
+            return
+        terms = [t for t in re.split(r"\s+", q) if t]
+        idx = self._sidx_load()
+        results, unindexed = [], 0
+        for rel, fp, kind in self._walk_files():
+            meta = idx.get(rel) or {}
+            if kind == "image" and not meta:
+                unindexed += 1
+            haystack = " ".join([
+                rel.replace("/", " ").replace("_", " ").replace("-", " ").lower(),
+                (meta.get("desc") or "").lower(),
+                " ".join(meta.get("tags") or []).lower(),
+            ])
+            hits = sum(1 for t in terms if t in haystack)
+            if hits:
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                results.append({
+                    "name": os.path.basename(rel), "path": rel,
+                    "dir": os.path.dirname(rel), "kind": kind,
+                    "size": st.st_size, "mtime": int(st.st_mtime),
+                    "score": hits + (1 if all(t in haystack for t in terms) else 0),
+                    "why": "described" if (meta.get("desc") and hits) else "name",
+                })
+        results.sort(key=lambda r: (-r["score"], -r["mtime"]))
+        self._json(200, {"results": results[:120], "query": q,
+                         "unindexed": unindexed, "indexed": len(idx)})
+
+    def _search_index(self):
+        """Describe a batch of not-yet-indexed photos with Claude vision and
+        cache the result. Batched and bounded so the request stays responsive;
+        the UI calls it repeatedly until unindexed hits zero."""
+        p = self._body_json() or {}
+        try:
+            batch = max(1, min(int(p.get("batch", 6)), 12))
+        except (TypeError, ValueError):
+            batch = 6
+        idx = self._sidx_load()
+        todo = [(rel, fp) for rel, fp, kind in self._walk_files()
+                if kind == "image" and rel not in idx][:batch]
+        if not todo:
+            self._json(200, {"done": True, "indexed": len(idx), "added": 0, "remaining": 0})
+            return
+        listing = "\n".join(f'{i + 1}. {os.path.basename(r)}  (path: {r})  file: {f}'
+                            for i, (r, f) in enumerate(todo))
+        prompt = (
+            "You are indexing product photos for a Seiko watch-mod business so they can be "
+            "searched by description later.\n\n" + listing +
+            "\n\nLook at each image file above with your vision tool. Reply with ONLY a JSON "
+            "object mapping each item's number (as a string) to "
+            '{"desc": "...", "tags": ["...", ...]}.\n'
+            '- desc: one short factual sentence — what the item is, its colour, dial/case style, strap.\n'
+            '- tags: 4-8 lowercase keywords someone might search '
+            '(e.g. "black", "green dial", "royal oak", "chronograph", "rose gold", "bracelet").\n'
+            "No text outside the JSON object."
+        )
+        reply = ""
+        for model, provider in (("claude-sonnet-4-6", "anthropic"), (None, None)):
+            try:
+                cmd = ["hermes"]
+                if model:
+                    cmd += ["-m", model, "--provider", provider]
+                cmd += ["-t", "vision,files", "-z", prompt]
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                reply = (r.stdout or "").strip()
+                if reply:
+                    break
+            except Exception:
+                continue
+        data = None
+        if reply:
+            m = re.search(r"\{[\s\S]*\}", reply)
+            if m:
+                try:
+                    data = json.loads(m.group(0))
+                except json.JSONDecodeError:
+                    data = None
+        added = 0
+        if isinstance(data, dict):
+            for i, (rel, _fp) in enumerate(todo, 1):
+                got = data.get(str(i)) or data.get(os.path.basename(rel))
+                if isinstance(got, dict) and (got.get("desc") or got.get("tags")):
+                    idx[rel] = {"desc": str(got.get("desc", ""))[:300],
+                                "tags": [str(t).lower()[:30] for t in (got.get("tags") or [])][:10]}
+                    added += 1
+        if added:
+            self._sidx_save(idx)
+            hub_event("search_index", f"described {added} photo(s)", self._user())
+        remaining = sum(1 for rel, _f, k in self._walk_files()
+                        if k == "image" and rel not in idx)
+        self._json(200, {"done": remaining == 0, "indexed": len(idx),
+                         "added": added, "remaining": remaining,
+                         "error": None if added else "model returned nothing usable"})
 
     def _info(self, rel_dir, name):
         """Rich metadata for a file/folder: size, kind, image dimensions, dates,
