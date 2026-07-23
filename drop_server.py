@@ -849,6 +849,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 out.append((rel, fp, kind_of(fn)))
         return out
 
+    # A term this common in the library describes the library, not the query.
+    COMMON = 0.55        # matches >55% of files -> background noise
+    NOISE_WEIGHT = 0.15  # still counts toward rank, never qualifies alone
+    MIN_RESULTS = 3      # below this, relax rather than show an empty page
+
     def _search(self, params):
         q = (params.get("q") or "").strip().lower()
         if not q:
@@ -856,32 +861,61 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         terms = [t for t in re.split(r"\s+", q) if t]
         idx = self._sidx_load()
-        results, unindexed = [], 0
+
+        docs, unindexed = [], 0
         for rel, fp, kind in self._walk_files():
             meta = idx.get(rel) or {}
             if kind == "image" and not meta:
                 unindexed += 1
-            haystack = " ".join([
+            docs.append((rel, fp, kind, meta, " ".join([
                 rel.replace("/", " ").replace("_", " ").replace("-", " ").lower(),
                 (meta.get("desc") or "").lower(),
                 " ".join(meta.get("tags") or []).lower(),
-            ])
-            hits = sum(1 for t in terms if t in haystack)
-            if hits:
-                try:
-                    st = os.stat(fp)
-                except OSError:
-                    continue
-                results.append({
-                    "name": os.path.basename(rel), "path": rel,
-                    "dir": os.path.dirname(rel), "kind": kind,
-                    "size": st.st_size, "mtime": int(st.st_mtime),
-                    "score": hits + (1 if all(t in haystack for t in terms) else 0),
-                    "why": "described" if (meta.get("desc") and hits) else "name",
-                })
-        results.sort(key=lambda r: (-r["score"], -r["mtime"]))
+            ])))
+
+        # Weight each term by how rare it is here. Nearly every photo in this
+        # drop is described as a "watch" with a "dial", so those words select
+        # nothing; "green", "invoice" or "packaging" actually narrow the set.
+        n = len(docs) or 1
+        df = {t: sum(1 for d in docs if t in d[4]) for t in terms}
+        weight = {t: (self.NOISE_WEIGHT if df[t] > self.COMMON * n else 1.0) for t in terms}
+        strong = [t for t in terms if weight[t] == 1.0]
+
+        exact, partial = [], []
+        for rel, fp, kind, meta, hay in docs:
+            matched = [t for t in terms if t in hay]
+            if not matched:
+                continue
+            try:
+                st = os.stat(fp)
+            except OSError:
+                continue
+            score = sum(weight[t] for t in matched)
+            if len(matched) == len(terms):
+                score += 0.5          # whole query present beats a subset
+            row = {
+                "name": os.path.basename(rel), "path": rel,
+                "dir": os.path.dirname(rel), "kind": kind,
+                "size": st.st_size, "mtime": int(st.st_mtime),
+                "score": round(score, 2),
+                "why": "described" if (meta.get("desc") and matched) else "name",
+            }
+            # Every meaningful term must be present to count as a real hit.
+            # A query of nothing but common words has no strong terms, so it
+            # falls back to ranking instead of filtering everything out.
+            if strong and all(t in hay for t in strong):
+                exact.append(row)
+            else:
+                partial.append(row)
+
+        exact.sort(key=lambda r: (-r["score"], -r["mtime"]))
+        partial.sort(key=lambda r: (-r["score"], -r["mtime"]))
+        results = exact
+        if len(results) < self.MIN_RESULTS:
+            results = results + partial[: self.MIN_RESULTS * 4]
         self._json(200, {"results": results[:120], "query": q,
-                         "unindexed": unindexed, "indexed": len(idx)})
+                         "unindexed": unindexed, "indexed": len(idx),
+                         "exact": len(exact)})
 
     def _search_index(self):
         """Describe a batch of not-yet-indexed photos with Claude vision and
