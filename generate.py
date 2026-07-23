@@ -318,19 +318,29 @@ def order_source_pill(src):
             f'{html.escape(SOURCE_LABEL.get(src, src.title() or "Other"))}</span>')
 
 
-def product_analytics(orders, top=8):
+def product_analytics(top=8):
     """What's selling and what isn't — units + revenue per product, across
-    every source, so it reflects the whole business not just the storefront."""
-    agg = {}
-    for o in orders:
-        name = (o.get("product") or "—").split(" +")[0].strip()
-        if not name or name == "—":
-            continue
-        a = agg.setdefault(name, {"units": 0, "revenue": 0.0, "orders": 0})
-        a["units"] += o.get("qty") or 1
-        a["revenue"] += o.get("amount") or 0.0
-        a["orders"] += 1
-    ranked = sorted(agg.items(), key=lambda kv: (-kv[1]["units"], -kv[1]["revenue"]))
+    every channel. Reads order_items directly (kept current by the Shopify
+    sync and every order-form save) instead of re-deriving totals from a
+    fetched order list, so Home, the order form's own What's Selling tab and
+    `labs sales` can never disagree about the same number."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT COALESCE(NULLIF(oi.canonical_product,''), oi.product) AS name, "
+            "SUM(oi.quantity) AS units, SUM(oi.line_total) AS revenue, "
+            "COUNT(DISTINCT oi.order_id) AS orders "
+            "FROM order_items oi JOIN orders o ON o.id = oi.order_id "
+            "WHERE o.status != 'cancelled' AND (o.financial_status IS NULL "
+            "OR o.financial_status NOT IN ('refunded','voided')) "
+            "GROUP BY 1 ORDER BY units DESC").fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"[product-analytics] {e}", file=sys.stderr)
+        return [], []
+    ranked = [(r[0], {"units": r[1] or 0, "revenue": r[2] or 0.0, "orders": r[3] or 0})
+              for r in rows]
     return ranked[:top], ranked[-top:][::-1] if len(ranked) > top else []
 
 
@@ -541,7 +551,7 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
             f'<td>{html.escape(o["status"] or "new")}</td></tr>'
             for o in orders
         )
-        top, slow = product_analytics(orders)
+        top, slow = product_analytics()
         max_units = max((v["units"] for _, v in top), default=1) or 1
         sell_rows = "".join(
             f'<div class="sell-row"><span class="sell-nm">{html.escape(n)}</span>'

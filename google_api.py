@@ -26,13 +26,30 @@ STATE_PATH = "/root/ops-dashboard/.orders-sheet.json"
 
 ORDER_FOLDER_NAME = "Labs OS Order Photos"
 ORDER_SHEET_NAME = "Labs OS — Orders"
-# Column A is the orders.id — the join key a future sheet→db sync needs.
+# Column A is the orders.id — the join key the Shopify sync and any future
+# sheet→db read both rely on.
 ORDERS_TAB = "Orders"
 CUSTOMERS_TAB = "Customers"
-SHEET_HEADERS = ["Order ID", "Logged", "Source", "Customer", "Phone", "Email",
-                 "Address", "City", "State", "Pincode", "Product", "Case style",
-                 "Dial colour", "Dial style", "Case colour", "Movement", "Size",
-                 "Qty", "Price (INR)", "Notes", "Status", "Photos"]
+# Status and Source sit right after Logged (not buried near the end) because
+# those are what a pivot table would filter or group by first.
+SHEET_HEADERS = ["Order #", "Logged", "Status", "Source", "Customer", "Phone",
+                 "Email", "Address", "City", "State", "Pincode", "Product",
+                 "Case style", "Dial colour", "Dial style", "Case colour",
+                 "Movement", "Size", "Qty", "Price (INR)", "Line total (INR)",
+                 "Notes", "Photos"]
+
+
+def row_for(headers, data):
+    """Map a {header: value} dict onto a plain row in `headers` order.
+
+    Every sheet-writing call site builds a dict and goes through this instead
+    of hand-writing a positional list — a positional list silently misaligns
+    the instant SHEET_HEADERS gains, loses or reorders a column, and nothing
+    would catch it (the row would just land in the wrong cells). Any header
+    with no matching key just writes blank, so old and new callers can pass
+    a partial dict safely.
+    """
+    return [data.get(h, "") for h in headers]
 
 RECONNECT_HINT = ("Google isn't connected with permission to write Sheets. "
                   "Open Drop, tap the cloud, and reconnect Google.")
@@ -313,3 +330,120 @@ def upsert_customer_row(access, headers, row):
               "?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS",
               access, "POST", {"values": [_clean(row)]})
     return sid
+
+
+# ------------------------------------------------------------- sheet reshape
+BACKUP_DIR = "/root/ops-dashboard/.sheet-backups"
+
+
+def _tab_id(access, sid, title):
+    for s in _meta(access, sid).get("sheets", []):
+        if s["properties"]["title"] == title:
+            return s["properties"]["sheetId"]
+    return None
+
+
+def _format_tab(access, sid, tab_id, headers, currency_cols=(), date_cols=()):
+    """Freeze the header (+ first column), bold the header, add a filter over
+    the whole range, and typed number formats — cosmetic only, so a failure
+    here never loses data that's already been written."""
+    if tab_id is None:
+        return
+    reqs = [
+        {"updateSheetProperties": {"properties": {"sheetId": tab_id, "gridProperties": {
+            "frozenRowCount": 1, "frozenColumnCount": 1}},
+            "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}},
+        {"repeatCell": {"range": {"sheetId": tab_id, "startRowIndex": 0, "endRowIndex": 1},
+            "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+            "fields": "userEnteredFormat.textFormat.bold"}},
+        {"setBasicFilter": {"filter": {"range": {"sheetId": tab_id, "startRowIndex": 0,
+            "endColumnIndex": len(headers)}}}},
+    ]
+    for name in currency_cols:
+        if name not in headers:
+            continue
+        c = headers.index(name)
+        reqs.append({"repeatCell": {"range": {"sheetId": tab_id, "startColumnIndex": c,
+            "endColumnIndex": c + 1, "startRowIndex": 1},
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "CURRENCY",
+                     "pattern": "₹#,##0.00"}}},
+            "fields": "userEnteredFormat.numberFormat"}})
+    for name in date_cols:
+        if name not in headers:
+            continue
+        c = headers.index(name)
+        reqs.append({"repeatCell": {"range": {"sheetId": tab_id, "startColumnIndex": c,
+            "endColumnIndex": c + 1, "startRowIndex": 1},
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "DATE_TIME",
+                     "pattern": "yyyy-mm-dd hh:mm"}}},
+            "fields": "userEnteredFormat.numberFormat"}})
+    try:
+        _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}:batchUpdate", access,
+              "POST", {"requests": reqs})
+    except GoogleError as e:
+        print(f"[sheets] formatting skipped: {e}", flush=True)
+
+
+def _reshape_tab(access, sid, title, new_headers, id_aliases=None):
+    """Remap every existing row from whatever headers the tab currently has
+    onto new_headers, matched by NAME not position — the only safe way to
+    reorder/add columns on a tab that already has real rows in it (a plain
+    header rewrite would leave the data misaligned under the new labels,
+    which is exactly the corruption ensure_tab() already refuses to risk).
+
+    Backs up the pre-reshape values to a local JSON file first, on top of
+    whatever version history Sheets itself keeps, and is a no-op (besides
+    formatting) if the tab already has the current headers — safe to call on
+    every deploy, not just once.
+    """
+    tab_id = _tab_id(access, sid, title)
+    values = _values(access, sid, f"{title}!A1:ZZ100000")
+    if not values:
+        ensure_tab(access, sid, title, new_headers)
+        return 0
+    old_headers, old_rows = values[0], values[1:]
+    if old_headers == new_headers:
+        return len(old_rows)
+
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    stamp = int(time.time())
+    with open(f"{BACKUP_DIR}/{title.lower()}-{stamp}.json", "w") as f:
+        json.dump({"headers": old_headers, "rows": old_rows}, f)
+
+    remapped = []
+    for row in old_rows:
+        d = {old_headers[i]: (row[i] if i < len(row) else "")
+             for i in range(len(old_headers))}
+        for old_name, new_name in (id_aliases or {}).items():
+            if old_name in d and not d.get(new_name):
+                d[new_name] = d[old_name]
+        remapped.append(row_for(new_headers, d))
+
+    _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
+          + urllib.parse.quote(f"{title}!A1:ZZ100000") + ":clear", access, "POST", {})
+    _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
+          + urllib.parse.quote(f"{title}!A1") + "?valueInputOption=USER_ENTERED",
+          access, "PUT", {"values": [new_headers] + remapped})
+    return len(remapped)
+
+
+def migrate_orders_tab(access):
+    """Reorder/reformat the Orders tab into the current SHEET_HEADERS. Safe
+    to run any time, including on a tab that predates this shipping."""
+    sid = ensure_order_sheet(access)
+    n = _reshape_tab(access, sid, ORDERS_TAB, SHEET_HEADERS,
+                     id_aliases={"Order ID": "Order #"})
+    _format_tab(access, sid, _tab_id(access, sid, ORDERS_TAB), SHEET_HEADERS,
+               currency_cols=("Price (INR)", "Line total (INR)"), date_cols=("Logged",))
+    return {"rows": n}
+
+
+def migrate_customers_tab(access):
+    """Reorder/reformat the Customers tab into customers.HEADERS."""
+    import customers as customers_mod
+    sid = ensure_order_sheet(access)
+    n = _reshape_tab(access, sid, CUSTOMERS_TAB, customers_mod.HEADERS)
+    _format_tab(access, sid, _tab_id(access, sid, CUSTOMERS_TAB), customers_mod.HEADERS,
+               currency_cols=("Total spent", "Avg order value"),
+               date_cols=("First order", "Last order"))
+    return {"rows": n}

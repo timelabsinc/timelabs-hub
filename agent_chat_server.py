@@ -119,7 +119,13 @@ def _ensure_orders_schema():
             "address": "TEXT", "pincode": "TEXT", "city": "TEXT", "state": "TEXT",
             "source": "TEXT", "case_style": "TEXT", "dial_colour": "TEXT",
             "dial_style": "TEXT", "case_colour": "TEXT", "movement": "TEXT",
-            "watch_size": "TEXT"}
+            "watch_size": "TEXT",
+            # Shopify linkage — lets a storefront order sync into this same
+            # table (see shopify_order_sync.py) instead of only living in a
+            # live API call, so it gets one unified order number like every
+            # other channel and shows up in the same lists, totals and sheet.
+            "shopify_order_id": "TEXT", "shopify_name": "TEXT",
+            "financial_status": "TEXT"}
     try:
         conn = sqlite3.connect(DB, timeout=5)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
@@ -127,13 +133,67 @@ def _ensure_orders_schema():
             for name, typ in want.items():
                 if name not in cols:
                     conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {typ}")
+            # NULLs never collide in a UNIQUE index, so form/WhatsApp orders
+            # (no Shopify id) are unaffected — this only guards against
+            # double-inserting the same storefront order.
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_shopify_id "
+                        "ON orders(shopify_order_id)")
             conn.commit()
         conn.close()
     except Exception as e:
         print(f"[orders] schema check: {e}", flush=True)
 
 
+def _ensure_order_items_schema():
+    """One row per product line, across every channel — the SQL a sortable,
+    editable 'what's selling' and Hermes' `labs sales` both read. A logged
+    order (order form / WhatsApp) has exactly one line, mirroring its single
+    product/quantity/price fields; a Shopify order gets one line per line
+    item, so a two-watch order attributes units correctly instead of both
+    landing on whichever title happened to print first.
+
+    canonical_product starts NULL (falls back to the raw product text) and is
+    only set when someone renames a line from the What's Selling tab — that
+    rename is retroactive for every row sharing the old text, which is the
+    whole point: messy free-typed names ("dj arabic lightblue") converge on
+    one clean product name without touching history.
+    """
+    try:
+        conn = sqlite3.connect(DB, timeout=5)
+        conn.execute("""CREATE TABLE IF NOT EXISTS order_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL REFERENCES orders(id),
+            product TEXT NOT NULL,
+            canonical_product TEXT,
+            quantity INTEGER DEFAULT 1,
+            price_inr REAL,
+            line_total REAL,
+            updated_at TEXT DEFAULT (datetime('now')))""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_order_items_order "
+                     "ON order_items(order_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_order_items_product "
+                     "ON order_items(product)")
+        # Self-healing backfill: any order (the pre-existing WhatsApp capture,
+        # or one saved while this code was mid-deploy) that has no line yet
+        # gets one synthesized from its own product/quantity/price — so
+        # analytics never silently drops an order because the write path
+        # missed it.
+        conn.execute("""
+            INSERT INTO order_items (order_id, product, quantity, price_inr, line_total)
+            SELECT id, product, COALESCE(quantity,1), price_inr,
+                   COALESCE(price_inr,0) * COALESCE(quantity,1)
+            FROM orders
+            WHERE product IS NOT NULL AND TRIM(product) != ''
+              AND id NOT IN (SELECT DISTINCT order_id FROM order_items)
+        """)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[order_items] schema check: {e}", flush=True)
+
+
 _ensure_orders_schema()
+_ensure_order_items_schema()
 
 
 def _fs_resolve(p):
@@ -316,12 +376,18 @@ PREAMBLE = (
     "/srv/timelabs-drop (browse it directly). Sourcing costs and margins are in "
     "/root/ops-dashboard/data/suppliers.db, surfaced at /ops/ledger.html. "
     "When a conversation surfaces something durable, save it to memory_facts. "
-    "ORDERS LIVE IN TWO PLACES and getting this wrong gives badly wrong answers: "
-    "the hermes.db orders table holds ONLY order-form and WhatsApp orders, while the "
-    "storefront's own sales live in Shopify and never appear in that table. Querying "
-    "sqlite alone silently misses most revenue. For ANY question about orders, sales, "
-    "totals or best-sellers, run `labs orders` (or `labs orders --query <product>`), "
-    "which merges both channels. "
+    "ORDERS NOW LIVE IN ONE PLACE — this changed recently, don't fall back on the old "
+    "assumption that sqlite misses the storefront: hermes.db's orders + order_items "
+    "tables hold every channel (order form, WhatsApp, AND the storefront), because "
+    "Shopify orders now sync in automatically every 5 minutes (shopify_order_sync.py, "
+    "ops-order-sync.timer). Querying sqlite directly is correct and fast — for sales, "
+    "revenue or best-seller questions run `labs sales` (reads order_items, the exact "
+    "table the order form's What's Selling tab uses, so your answer and what the "
+    "owner sees on screen always match) or query hermes.db directly with SQL. For "
+    "finding one specific order use `labs orders --query <text>`, which also checks "
+    "Shopify live — useful because a storefront order can be up to ~5 minutes old "
+    "before the local sync picks it up, so for anything from the last few minutes "
+    "prefer that live path over sqlite. "
     "HOW TO OPERATE — you are an operator, not a narrator. For anything that touches "
     "live data or the store: (1) work out the few steps, (2) actually RUN them with the "
     "`labs` command and your terminal, (3) check the result rather than assuming it "
@@ -707,6 +773,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/orders/meta":
             self._handle_orders_meta()
+            return
+        if path == "/orders/products":
+            self._handle_orders_products()
             return
         if path == "/customers/list":
             self._handle_customers_list()
@@ -1640,6 +1709,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
              attrs.get("case_style"), attrs.get("dial_colour"), attrs.get("dial_style"),
              attrs.get("case_colour"), attrs.get("movement"), attrs.get("watch_size")))
         oid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO order_items (order_id, product, quantity, price_inr, line_total) "
+            "VALUES (?,?,?,?,?)",
+            (oid, product, qty, price, (price or 0) * qty))
         row = conn.execute("SELECT received_at FROM orders WHERE id=?", (oid,)).fetchone()
         conn.commit()
         logged = row["received_at"] if row else ""
@@ -1660,12 +1733,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # The DB is the source of truth; a failed mirror must never lose an order.
         try:
             if access:
-                google_api.append_order_row(access, [
-                    oid, logged, source, customer, phone, email, address, city, state,
-                    pincode, product, attrs.get("case_style"), attrs.get("dial_colour"),
-                    attrs.get("dial_style"), attrs.get("case_colour"),
-                    attrs.get("movement"), attrs.get("watch_size"), qty,
-                    "" if price is None else price, notes, status, "\n".join(links)])
+                line_total = (price or 0) * qty
+                google_api.append_order_row(access, google_api.row_for(google_api.SHEET_HEADERS, {
+                    "Order #": oid, "Logged": logged, "Status": status, "Source": source,
+                    "Customer": customer, "Phone": phone, "Email": email, "Address": address,
+                    "City": city, "State": state, "Pincode": pincode, "Product": product,
+                    "Case style": attrs.get("case_style"), "Dial colour": attrs.get("dial_colour"),
+                    "Dial style": attrs.get("dial_style"), "Case colour": attrs.get("case_colour"),
+                    "Movement": attrs.get("movement"), "Size": attrs.get("watch_size"),
+                    "Qty": qty, "Price (INR)": "" if price is None else price,
+                    "Line total (INR)": "" if price is None else line_total,
+                    "Notes": notes, "Photos": "\n".join(links)}))
                 if cust:
                     google_api.upsert_customer_row(
                         access, customers_mod.HEADERS, customers_mod.sheet_row(cust))
@@ -1689,7 +1767,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "SELECT id, received_at, customer_name, customer_phone, customer_email, "
                 "address, pincode, city, state, source, product, quantity, price_inr, "
                 "notes, status, drive_link, photo_links, case_style, dial_colour, "
-                "dial_style, case_colour, movement, watch_size FROM orders "
+                "dial_style, case_colour, movement, watch_size, shopify_name FROM orders "
                 "ORDER BY id DESC LIMIT 100").fetchall()
         except sqlite3.OperationalError as e:
             conn.close()
@@ -1721,9 +1799,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, {"city": city or "", "state": state or "", "attributes": attrs,
                          "labels": order_taxonomy.FIELD_LABELS})
 
+    # order_items.line_total inherits the parent order's exclusions (cancelled,
+    # refunded, voided) via this join — every analytics query below reuses it
+    # so "what sells" and "what we banked" can never quietly disagree about
+    # which orders count.
+    _LIVE_ITEMS_JOIN = (
+        "FROM order_items oi JOIN orders o ON o.id = oi.order_id "
+        "WHERE o.status != 'cancelled' "
+        "AND (o.financial_status IS NULL OR o.financial_status NOT IN ('refunded','voided'))")
+
     def _handle_orders_meta(self):
-        """Sources (defaults + whatever's been used) and the what's-selling
-        roll-up that makes the attribute columns worth filling."""
+        """Sources, the what's-selling roll-up, and per-product analytics —
+        all local SQL now that Shopify orders sync into order_items instead
+        of being re-fetched live on every page load. Same tables `labs sales`
+        and Hermes query directly, so the dashboard, the form and chat can
+        never show three different numbers for the same question."""
         if not self._order_user():
             self._json(403, {"error": "sign in first"})
             return
@@ -1742,56 +1832,142 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     f"GROUP BY {field} ORDER BY units DESC LIMIT 8")]
             totals = conn.execute(
                 "SELECT COUNT(*) n, COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) "
-                "revenue FROM orders WHERE status != 'cancelled'").fetchone()
-            ncust = conn.execute(
-                "SELECT COUNT(*) n FROM customers").fetchone()["n"] \
-                if conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
-                                "AND name='customers'").fetchone() else 0
-            # product units from logged orders, to merge with the storefront below
-            prod = {}
-            for r in conn.execute("SELECT product, COALESCE(quantity,1) q FROM orders "
-                                  "WHERE status != 'cancelled'"):
-                nm = (r["product"] or "").strip()
-                if nm:
-                    prod[nm] = prod.get(nm, 0) + int(r["q"] or 1)
+                "revenue, SUM(CASE WHEN source='website' THEN 1 ELSE 0 END) website FROM orders "
+                "WHERE status != 'cancelled' AND (financial_status IS NULL "
+                "OR financial_status NOT IN ('refunded','voided'))").fetchone()
+            ncust = conn.execute("SELECT COUNT(*) n FROM customers").fetchone()["n"]
+            top_products = [dict(r) for r in conn.execute(
+                "SELECT COALESCE(NULLIF(oi.canonical_product,''), oi.product) AS name, "
+                "SUM(oi.quantity) AS units, COUNT(DISTINCT oi.order_id) AS orders, "
+                "ROUND(SUM(oi.line_total), 2) AS revenue, MAX(o.received_at) AS last_sold "
+                + self._LIVE_ITEMS_JOIN +
+                " GROUP BY 1 ORDER BY units DESC LIMIT 30")]
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
             return
         conn.close()
-        # Merge the storefront so totals reflect the whole business, not just
-        # what was typed into this form (fails soft so the tool still loads).
-        sh_count, sh_rev = 0, 0.0
+        defaults = ["CC", "TLC", "Offkicks"]
+        sources = defaults + [s for s in used if s not in defaults]
+        website = totals["website"] or 0
+        self._json(200, {"sources": sources, "selling": sold,
+                         "vocab": order_taxonomy.vocab(), "top_products": top_products,
+                         "channels": {"logged": totals["n"] - website, "website": website},
+                         "totals": {"orders": totals["n"], "revenue": totals["revenue"] or 0,
+                                    "customers": ncust}})
+
+    def _handle_orders_update(self):
+        """Patch an existing order. Built mainly so a status can move past
+        'new' at all — there was no write path for that before this — but
+        takes any of the same descriptive fields /orders/create does, so a
+        typo doesn't require re-entering the whole record. Deliberately
+        excludes product/quantity/price: those are the receipt of what was
+        actually ordered and charged, and shouldn't shift under a general
+        PATCH — renaming a product for analytics goes through
+        /orders/items/relabel instead, which is retroactive and explicit."""
+        actor = self._order_user()
+        if not actor:
+            self._json(403, {"error": "sign in first"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 8192)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            oid = int(p.get("id"))
+        except (TypeError, ValueError):
+            self._json(400, {"error": "missing order id"})
+            return
+        updatable = {"status": 40, "notes": 1000, "customer_name": 120,
+                     "customer_phone": 40, "customer_email": 200, "address": 600,
+                     "city": 80, "state": 80, "pincode": 20, "case_style": 60,
+                     "dial_colour": 60, "dial_style": 60, "case_colour": 60,
+                     "movement": 60, "watch_size": 60}
+        sets, vals = [], []
+        for k, maxlen in updatable.items():
+            if k in p:
+                sets.append(f"{k}=?")
+                vals.append(str(p[k]).strip()[:maxlen])
+        if not sets:
+            self._json(400, {"error": "nothing to update"})
+            return
+        conn = db()
+        if not conn.execute("SELECT 1 FROM orders WHERE id=?", (oid,)).fetchone():
+            conn.close()
+            self._json(404, {"error": "no such order"})
+            return
+        vals.append(oid)
+        conn.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id=?", vals)
+        conn.commit()
+        conn.close()
+        hub_event("order_updated", f"#{oid}: " + ", ".join(k for k in updatable if k in p),
+                 actor, app="orders")
+        self._json(200, {"ok": True, "id": oid})
+
+    def _handle_order_items_relabel(self):
+        """Rename a product for analytics — retroactive across every order
+        that used the old text, so a messy free-typed name only needs fixing
+        once. Never touches the order itself or what it says was charged,
+        only the label What's Selling groups by."""
+        actor = self._order_user()
+        if not actor:
+            self._json(403, {"error": "sign in first"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        old = str(p.get("old", "")).strip()[:200]
+        new = str(p.get("new", "")).strip()[:200]
+        if not old or not new:
+            self._json(400, {"error": "both the current and new name are needed"})
+            return
+        conn = db()
+        cur = conn.execute(
+            "UPDATE order_items SET canonical_product=?, updated_at=datetime('now') "
+            "WHERE COALESCE(NULLIF(canonical_product,''), product) = ?", (new, old))
+        n = cur.rowcount
+        conn.commit()
+        conn.close()
+        hub_event("product_relabelled",
+                 f'"{old}" -> "{new}" ({n} line item{"s" if n != 1 else ""})',
+                 actor, app="orders")
+        self._json(200, {"ok": True, "updated": n})
+
+    def _handle_orders_products(self):
+        """Names for the product field's type-ahead: everything already sold
+        (logged or synced) plus the live Shopify catalogue, merged once per
+        page load rather than queried per keystroke — the list is small
+        enough that client-side filtering is instant and this keeps the
+        combobox usable even if Shopify is briefly unreachable."""
+        if not self._order_user():
+            self._json(403, {"error": "sign in first"})
+            return
+        conn = db()
+        try:
+            names = [r[0] for r in conn.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(canonical_product,''), product) "
+                "FROM order_items WHERE product IS NOT NULL AND product != ''")]
+        except sqlite3.OperationalError as e:
+            conn.close()
+            self._json(500, {"error": str(e)})
+            return
+        conn.close()
+        catalog = []
         try:
             import shopify_api
             if shopify_api.configured():
-                q = ("query { orders(first: 100, sortKey: CREATED_AT, reverse: true) { nodes { "
-                     "totalPriceSet { shopMoney { amount } } displayFinancialStatus "
-                     "lineItems(first: 5) { nodes { title quantity } } } } }")
-                for n in shopify_api.admin_graphql(q)["orders"]["nodes"]:
-                    if (n.get("displayFinancialStatus") or "").upper() in ("REFUNDED", "VOIDED"):
-                        continue
-                    sh_count += 1
-                    try:
-                        sh_rev += float((n.get("totalPriceSet") or {}).get("shopMoney", {}).get("amount") or 0)
-                    except (TypeError, ValueError):
-                        pass
-                    for li in (n.get("lineItems") or {}).get("nodes") or []:
-                        nm = (li.get("title") or "").strip().split(" +")[0]
-                        if nm:
-                            prod[nm] = prod.get(nm, 0) + int(li.get("quantity") or 1)
+                catalog = [pr["title"] for pr in
+                          shopify_api.list_products(first=100)["products"] if pr.get("title")]
         except Exception as e:
-            print(f"[orders-meta] shopify merge skipped: {e}", flush=True)
-        top_products = [{"name": k, "units": v} for k, v in
-                        sorted(prod.items(), key=lambda kv: -kv[1])[:8]]
-        defaults = ["CC", "TLC", "Offkicks"]
-        sources = defaults + [s for s in used if s not in defaults]
-        self._json(200, {"sources": sources, "selling": sold,
-                         "vocab": order_taxonomy.vocab(), "top_products": top_products,
-                         "channels": {"logged": totals["n"], "website": sh_count},
-                         "totals": {"orders": totals["n"] + sh_count,
-                                    "revenue": (totals["revenue"] or 0) + sh_rev,
-                                    "customers": ncust}})
+            print(f"[orders-products] shopify catalog skipped: {e}", flush=True)
+        merged = sorted({n.strip() for n in (names + catalog) if n and n.strip()},
+                        key=str.lower)
+        self._json(200, {"products": merged})
 
     def _handle_customers_list(self):
         if not self._order_user():
@@ -2108,6 +2284,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_order_create()
         elif path == "/orders/parse":
             self._handle_orders_parse()
+        elif path == "/orders/update":
+            self._handle_orders_update()
+        elif path == "/orders/items/relabel":
+            self._handle_order_items_relabel()
         elif path == "/access/set":
             self._handle_access_set()
         elif path == "/shopify/product/ai-draft":

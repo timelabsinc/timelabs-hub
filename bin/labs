@@ -14,6 +14,7 @@ Safety follows the convention shopify_admin.py already established here:
     same activity feed as everything else
 
   labs orders [--limit N]              live storefront + logged orders, merged
+  labs sales [--top N --days N]        best-selling products, from local SQL
   labs products [--query Q]            search the catalogue
   labs product <id>                    one product in full
   labs product-create --title T --price N [--type T --tags a,b --desc H --publish]
@@ -29,6 +30,7 @@ Safety follows the convention shopify_admin.py already established here:
   labs search "black watches"          find photos by what is IN them
   labs files [--path folder]           browse Drop
   labs customers | events | access | topics
+  labs sheets-format [--execute]       reorder/reformat the Orders+Customers sheet
 """
 import argparse
 import json
@@ -137,6 +139,25 @@ def cmd_orders(args):
         logged = [o for o in logged if ql in json.dumps(o).lower()]
     out({"query": args.query or None, "live_storefront": live, "logged_in_labs": logged,
          "note": "both channels searched - a product can appear in either"})
+
+
+def cmd_sales(args):
+    """Best-selling products straight from local SQL — order_items, the same
+    table What's Selling on the order form reads, kept current by
+    shopify_order_sync.py so this needs no live Shopify call."""
+    conn = sqlite3.connect(HDB)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT COALESCE(NULLIF(oi.canonical_product,''), oi.product) AS product, "
+        "SUM(oi.quantity) AS units, COUNT(DISTINCT oi.order_id) AS orders, "
+        "ROUND(SUM(oi.line_total), 2) AS revenue, MAX(o.received_at) AS last_sold "
+        "FROM order_items oi JOIN orders o ON o.id = oi.order_id "
+        "WHERE o.status != 'cancelled' AND (o.financial_status IS NULL "
+        "OR o.financial_status NOT IN ('refunded','voided')) "
+        f"AND o.received_at >= datetime('now', '-{int(args.days)} days') "
+        "GROUP BY 1 ORDER BY units DESC LIMIT ?", (args.top,)).fetchall()
+    conn.close()
+    out({"window_days": args.days, "products": [dict(r) for r in rows]})
 
 
 def cmd_products(args):
@@ -400,6 +421,25 @@ def cmd_theme_set(args):
     out({"ok": True, "applied": len(applied)})
 
 
+def cmd_sheets_format(args):
+    import google_api
+    access = google_api.access_token()
+    if not access:
+        die("Google isn't connected on this machine. Open Drop, tap the cloud, and "
+            "reconnect Google — a one-time browser step, not a new key.")
+    plan = ["reshape the Orders tab into the current column order (Status/Source move "
+            "up front, adds Line total), matching existing rows by header NAME so "
+            "nothing misaligns, then reformat: freeze header + first column, bold "
+            "header, currency + date number formats, a filter view",
+            "reshape the Customers tab the same way (Name/Tags/value metrics lead)"]
+    if not confirm(plan, args):
+        return
+    r1 = google_api.migrate_orders_tab(access)
+    r2 = google_api.migrate_customers_tab(access)
+    event("sheets_format", f"Orders {r1['rows']} rows, Customers {r2['rows']} rows reshaped via CLI")
+    out({"orders": r1, "customers": r2, "sheet_url": google_api.sheet_url()})
+
+
 def main():
     p = argparse.ArgumentParser(prog="labs", description="Labs OS from the terminal",
                                 formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -414,6 +454,8 @@ def main():
 
     sp = add("orders", cmd_orders); sp.add_argument("--limit", type=int, default=15)
     sp.add_argument("--query", default="", help="filter BOTH channels by product/customer text")
+    sp = add("sales", cmd_sales); sp.add_argument("--top", type=int, default=10)
+    sp.add_argument("--days", type=int, default=90, help="lookback window")
     sp = add("products", cmd_products)
     sp.add_argument("--query", default=""); sp.add_argument("--limit", type=int, default=25)
     sp = add("product", cmd_product); sp.add_argument("id")
@@ -456,6 +498,8 @@ def main():
     sp.add_argument("--publish", action="store_true"); sp.add_argument("--unpublish", action="store_true")
 
     sp = add("theme-set", cmd_theme_set); sp.add_argument("pairs", nargs="+")
+
+    add("sheets-format", cmd_sheets_format)
 
     args = p.parse_args()
     args.fn(args)

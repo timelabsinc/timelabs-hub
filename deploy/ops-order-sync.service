@@ -1,0 +1,8 @@
+[Unit]
+Description=Sync new Shopify orders into hermes.db (orders + order_items)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/ops-dashboard
+ExecStart=/usr/bin/python3 /root/ops-dashboard/shopify_order_sync.py

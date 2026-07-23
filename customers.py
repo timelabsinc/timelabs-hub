@@ -118,15 +118,25 @@ def all_tags(row):
 
 
 def sheet_row(c):
-    """Row shape for the Customers tab — column A is the id, the join key."""
-    return [c["id"], c.get("name") or "", c.get("phone") or "", c.get("email") or "",
-            c.get("address") or "", c.get("city") or "", c.get("state") or "",
-            c.get("pincode") or "", c.get("orders_count") or 0,
-            c.get("total_spent") or 0, c.get("avg_order_value") or 0,
-            (c.get("first_order_at") or "")[:16], (c.get("last_order_at") or "")[:16],
-            c.get("first_source") or "", all_tags(c)]
+    """Row shape for the Customers tab — column A is the id, the join key.
+    Built as a name-keyed dict through row_for() rather than a positional
+    list, so HEADERS can be reordered without this silently drifting out of
+    alignment with it."""
+    import google_api
+    return google_api.row_for(HEADERS, {
+        "Customer ID": c["id"], "Name": c.get("name") or "", "Tags": all_tags(c),
+        "Orders": c.get("orders_count") or 0, "Total spent": c.get("total_spent") or 0,
+        "Avg order value": c.get("avg_order_value") or 0, "Phone": c.get("phone") or "",
+        "Email": c.get("email") or "", "Address": c.get("address") or "",
+        "City": c.get("city") or "", "State": c.get("state") or "",
+        "Pincode": c.get("pincode") or "",
+        "First order": (c.get("first_order_at") or "")[:16],
+        "Last order": (c.get("last_order_at") or "")[:16],
+        "First source": c.get("first_source") or ""})
 
 
-HEADERS = ["Customer ID", "Name", "Phone", "Email", "Address", "City", "State",
-           "Pincode", "Orders", "Total spent", "Avg order value", "First order",
-           "Last order", "First source", "Tags"]
+# Name/Tags/the three value metrics lead — that's what you scan the list for
+# — then contact details, then location, then dates.
+HEADERS = ["Customer ID", "Name", "Tags", "Orders", "Total spent", "Avg order value",
+           "Phone", "Email", "Address", "City", "State", "Pincode", "First order",
+           "Last order", "First source"]

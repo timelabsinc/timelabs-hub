@@ -203,6 +203,39 @@ OF_CSS = r"""
   .bar .tr{background:var(--card-2);border-radius:5px;height:9px;overflow:hidden;}
   .bar .fl{height:100%;background:var(--accent);border-radius:5px;}
   .bar .vl{font-size:12.5px;color:var(--muted);text-align:right;}
+
+  /* product combobox — a suggestion overlay, never a locked-in enum */
+  .combo-wrap{position:relative;}
+  .combo-list{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;
+    background:var(--card);border:1px solid var(--border-2);border-radius:var(--r-s);
+    box-shadow:var(--shadow-lg);max-height:230px;overflow-y:auto;padding:5px;}
+  .combo-opt{padding:9px 11px;font-size:14px;color:var(--ink);border-radius:6px;
+    cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .combo-opt.hi{background:var(--accent-bg);color:var(--accent);}
+
+  /* editable status pill */
+  select.pill-select{border:none;cursor:pointer;font:inherit;font-size:10.5px;font-weight:650;
+    text-transform:uppercase;letter-spacing:.04em;padding:3px 20px 3px 8px;border-radius:6px;
+    color:var(--muted);background-color:var(--card-2);-webkit-appearance:none;appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 5px center;background-size:10px;}
+  select.pill-select.new{color:var(--accent);background-color:var(--accent-bg);}
+  select.pill-select.delivered{color:var(--good);background-color:var(--good-bg);}
+  select.pill-select.cancelled{opacity:.6;}
+  select.pill-select[disabled]{opacity:.5;cursor:wait;}
+
+  /* what's selling — sortable table */
+  .sellhead{display:flex;align-items:baseline;gap:8px;margin:22px 0 10px;}
+  .sellhead h3{font-size:12.5px;font-weight:650;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.05em;margin:0;}
+  table.dt th.sortable{cursor:pointer;user-select:none;}
+  table.dt th.sortable:hover{color:var(--ink);}
+  table.dt th.sortable .arr{opacity:.4;margin-left:3px;}
+  table.dt th.sortable.on .arr{opacity:1;color:var(--accent);}
+  .pname{cursor:text;border-bottom:1px dashed var(--border-2);}
+  .pname:hover{border-color:var(--accent);}
+  .pname input{font:inherit;font-size:13.5px;font-weight:650;color:var(--ink);border:1px solid var(--accent);
+    border-radius:5px;padding:3px 6px;width:100%;background:var(--bg);}
 """
 
 OF_JS = r"""
@@ -356,6 +389,46 @@ function drawAttrs(){
   });
 }
 
+/* ---------------- product combobox ----------------
+   A filter-as-you-type overlay, not a locked-in list — picking a suggestion
+   just fills the field, and anything typed that matches nothing is saved
+   exactly as typed, same as before this existed. */
+var PRODUCTS=[], comboHi=-1, comboItems=[];
+function comboFilter(q){
+  q=q.trim().toLowerCase();
+  if(!q)return [];
+  return PRODUCTS.filter(function(p){return p.toLowerCase().indexOf(q)>=0;}).slice(0,8);
+}
+function comboRender(items){
+  comboItems=items;comboHi=-1;
+  var list=$('prod-list');
+  if(!items.length){list.hidden=true;$('f-product').setAttribute('aria-expanded','false');return;}
+  list.innerHTML=items.map(function(p,i){return '<div class="combo-opt" data-i="'+i+'">'+esc(p)+'</div>';}).join('');
+  list.hidden=false;
+  $('f-product').setAttribute('aria-expanded','true');
+  list.querySelectorAll('.combo-opt').forEach(function(el){
+    el.onmousedown=function(e){e.preventDefault();comboPick(items[+el.dataset.i]);};
+  });
+}
+function comboHighlight(i){
+  comboHi=i;
+  $('prod-list').querySelectorAll('.combo-opt').forEach(function(el,j){el.classList.toggle('hi',j===i);});
+}
+function comboPick(v){
+  $('f-product').value=v;
+  comboRender([]);
+  canSave();enrich();
+}
+$('f-product').addEventListener('input',function(){comboRender(comboFilter(this.value));});
+$('f-product').addEventListener('keydown',function(e){
+  if($('prod-list').hidden)return;
+  if(e.key==='ArrowDown'){e.preventDefault();comboHighlight(Math.min(comboHi+1,comboItems.length-1));}
+  else if(e.key==='ArrowUp'){e.preventDefault();comboHighlight(Math.max(comboHi-1,0));}
+  else if(e.key==='Enter'&&comboHi>=0){e.preventDefault();comboPick(comboItems[comboHi]);}
+  else if(e.key==='Escape'){comboRender([]);}
+});
+$('f-product').addEventListener('blur',function(){setTimeout(function(){comboRender([]);},120);});
+
 /* ---------------- source ---------------- */
 var source='';
 function drawSources(list){
@@ -506,6 +579,7 @@ function specOf(o){
   return ['case_style','dial_colour','dial_style','case_colour','movement','watch_size']
     .map(function(k){return o[k];}).filter(Boolean).join(' · ');
 }
+function stClass(s){return String(s||'').replace(/[^a-z]/gi,'');}
 async function loadOrders(){
   try{
     var d=await api('/orders/list');
@@ -520,7 +594,8 @@ async function loadOrders(){
         return '<tr>'+
           '<td data-l="Order" class="o-num">#'+o.id+'</td>'+
           '<td data-l="Logged" class="o-when">'+esc(when(o.received_at))+'</td>'+
-          '<td data-l="Source">'+(o.source?'<span class="pill">'+esc(o.source)+'</span>':'')+'</td>'+
+          '<td data-l="Source">'+(o.source?'<span class="pill">'+esc(o.source)+'</span>':'')+
+            (o.shopify_name?'<div class="o-sub">'+esc(o.shopify_name)+'</div>':'')+'</td>'+
           '<td data-l="Customer"><div class="o-strong">'+esc(o.customer_name||'')+'</div>'+
             (o.customer_phone?'<div class="o-sub">'+esc(o.customer_phone)+'</div>':'')+
             (o.customer_email?'<div class="o-sub">'+esc(o.customer_email)+'</div>':'')+'</td>'+
@@ -532,10 +607,25 @@ async function loadOrders(){
             (o.notes?'<div class="o-sub">'+esc(o.notes)+'</div>':'')+'</td>'+
           '<td data-l="Qty" class="o-num">'+(o.quantity||1)+'</td>'+
           '<td data-l="Price" class="o-num">'+esc(money(o.price_inr))+'</td>'+
-          '<td data-l="Status"><span class="pill '+esc(st.replace(/[^a-z]/gi,''))+'">'+esc(st)+'</span></td>'+
+          '<td data-l="Status"><select class="pill-select '+stClass(st)+'" data-id="'+o.id+'">'+
+            STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(s)+'</option>';}).join('')+
+            '</select></td>'+
           '<td data-l="Photos">'+photoCell(o)+'</td>'+
         '</tr>';
       }).join('')+'</tbody></table>';
+    $('list').querySelectorAll('.pill-select').forEach(function(sel){
+      sel.onchange=async function(){
+        var id=sel.dataset.id, was=sel.dataset.was||sel.value, next=sel.value;
+        sel.disabled=true;
+        try{
+          await jpost('/orders/update',{id:+id,status:next});
+          sel.className='pill-select '+stClass(next);
+          sel.dataset.was=next;
+          toast('Order #'+id+' → '+next);
+        }catch(e){sel.value=was;toast(e.message);}
+        sel.disabled=false;
+      };
+    });
   }catch(e){$('list').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
 }
 
@@ -578,6 +668,71 @@ function barBlock(title,rows){
       '<span class="vl">'+r.units+'</span></div>';
   }).join('')+'</div>';
 }
+var sellData=[], sellSort={key:'units',dir:-1};
+var SELL_COLS=[
+  {key:'name',label:'Product'},{key:'units',label:'Units'},
+  {key:'orders',label:'Orders'},{key:'revenue',label:'Revenue'},
+  {key:'last_sold',label:'Last sold'}
+];
+function sellSorted(){
+  var k=sellSort.key,dir=sellSort.dir;
+  return sellData.slice().sort(function(a,b){
+    var av=a[k]||(k==='name'||k==='last_sold'?'':0), bv=b[k]||(k==='name'||k==='last_sold'?'':0);
+    if(k==='name'||k==='last_sold')return dir*String(av).localeCompare(String(bv));
+    return dir*(av-bv);
+  });
+}
+function renderProductsTable(){
+  var box=$('prod-table');
+  if(!sellData.length){
+    box.innerHTML='<div class="empty">No orders yet. This fills in from the storefront and the order form together.</div>';
+    return;
+  }
+  var rows=sellSorted();
+  box.innerHTML='<div class="tbl-wrap"><table class="dt"><thead><tr>'+
+    SELL_COLS.map(function(c){
+      var on=c.key===sellSort.key, arr=on?(sellSort.dir===1?'&#8593;':'&#8595;'):'&#8597;';
+      return '<th class="sortable'+(on?' on':'')+'" data-k="'+c.key+'">'+esc(c.label)+' <span class="arr">'+arr+'</span></th>';
+    }).join('')+'</tr></thead><tbody>'+
+    rows.map(function(r){
+      return '<tr>'+
+        '<td data-l="Product"><span class="pname" data-name="'+esc(r.name)+'" title="Click to rename">'+esc(r.name)+'</span></td>'+
+        '<td data-l="Units" class="o-num">'+(r.units||0)+'</td>'+
+        '<td data-l="Orders" class="o-num">'+(r.orders||0)+'</td>'+
+        '<td data-l="Revenue" class="o-num">'+esc(money(r.revenue||0))+'</td>'+
+        '<td data-l="Last sold" class="o-when">'+esc(when(r.last_sold))+'</td>'+
+      '</tr>';
+    }).join('')+'</tbody></table></div>';
+  box.querySelectorAll('th.sortable').forEach(function(th){
+    th.onclick=function(){
+      var k=th.dataset.k;
+      if(sellSort.key===k)sellSort.dir=-sellSort.dir; else sellSort={key:k,dir:(k==='name'?1:-1)};
+      renderProductsTable();
+    };
+  });
+  box.querySelectorAll('.pname').forEach(function(el){
+    el.onclick=function(){
+      var old=el.dataset.name;
+      el.innerHTML='<input type="text" value="'+esc(old)+'">';
+      var inp=el.querySelector('input');inp.focus();inp.select();
+      var done=false;
+      function commit(){
+        if(done)return;done=true;
+        var val=inp.value.trim();
+        if(!val||val===old){renderProductsTable();return;}
+        jpost('/orders/items/relabel',{old:old,new:val}).then(function(r){
+          toast('Renamed — '+r.updated+' line item'+(r.updated!==1?'s':'')+' updated');
+          loadSelling();
+        }).catch(function(e){toast(e.message);renderProductsTable();});
+      }
+      inp.addEventListener('blur',commit);
+      inp.addEventListener('keydown',function(e){
+        if(e.key==='Enter')commit();
+        else if(e.key==='Escape'){done=true;renderProductsTable();}
+      });
+    };
+  });
+}
 async function loadSelling(){
   try{
     var d=await api('/orders/meta');
@@ -587,19 +742,22 @@ async function loadSelling(){
       '<div class="kpi"><span>Orders</span><b>'+(t.orders||0)+'</b>'+mix+'</div>'+
       '<div class="kpi"><span>Revenue</span><b>'+esc(money(t.revenue||0))+'</b></div>'+
       '<div class="kpi"><span>Customers</span><b>'+(t.customers||0)+'</b></div>';
-    var tp=(d.top_products||[]).map(function(p){return {name:p.name,units:p.units};});
+    sellData=d.top_products||[];
+    var top6=sellData.slice(0,6).map(function(p){return {name:p.name,units:p.units};});
     var s=d.selling||{};
-    var html=barBlock('Top products — all channels',tp)+
-             barBlock('Case style · logged orders',s.case_style)+
+    var attrHtml=barBlock('Case style · logged orders',s.case_style)+
              barBlock('Dial colour · logged orders',s.dial_colour)+
              barBlock('Dial style · logged orders',s.dial_style)+
              barBlock('Movement · logged orders',s.movement);
-    $('selling').innerHTML=html||'<div class="empty">No orders yet. Top products span the storefront and '+
-      'the order form; the attribute breakdowns fill in from what you log here.</div>';
+    $('selling').innerHTML=(top6.length?barBlock('Top movers',top6):'')+
+      '<div class="sellhead"><h3>Every product &middot; click a name to rename it, click a column to sort</h3></div>'+
+      '<div id="prod-table"></div>'+attrHtml;
+    renderProductsTable();
   }catch(e){$('selling').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
 }
 
 /* ---------------- boot ---------------- */
+var STATUSES_LIST=Array.prototype.map.call($('f-status').options,function(o){return o.value;});
 (async function(){
   drawShots();drawAttrs();
   try{
@@ -607,6 +765,10 @@ async function loadSelling(){
     drawSources(m.sources||[]);
     attrLabels=(m.vocab&&m.vocab.labels)||{};
   }catch(e){drawSources([]);}
+  try{
+    var pd=await api('/orders/products');
+    PRODUCTS=pd.products||[];
+  }catch(e){}
 })();
 """
 
@@ -650,6 +812,18 @@ def build():
 
       <div class="of-card">
         <div id="warn"></div>
+        <div class="of-legend">Reference photos</div>
+        <div class="of-field">
+          <div class="shots" id="shots"></div>
+          <div class="dz" id="dz">
+            <div class="dz-t">Add photos</div>
+            <div class="dz-s">Tap to use the camera roll &middot; drag them here &middot; or press <span class="kbd">&#8984;V</span></div>
+            <div class="dz-btns"><button type="button" class="btn sm" id="paste-img"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg>Paste image from clipboard</button></div>
+          </div>
+          <input type="file" id="ph-file" accept="image/jpeg,image/png,image/webp" multiple>
+        </div>
+
+        <div class="of-sep"></div>
         <div class="of-legend">Customer</div>
         <div class="of-row">
           <div class="of-field"><label>Name <span class="req">*</span></label>
@@ -674,10 +848,11 @@ def build():
         <div class="of-legend">Order</div>
         <div class="of-field"><label>Where did it come from?</label>
           <div class="srcs" id="srcs"></div></div>
-        <div class="of-field"><label>Product <span class="req">*</span></label>
-          <input id="f-product" class="pin" placeholder="e.g. datejust arabic light blue dial 36mm NH35" autocomplete="off">
+        <div class="of-field combo-wrap"><label>Product <span class="req">*</span></label>
+          <input id="f-product" class="pin" placeholder="e.g. datejust arabic light blue dial 36mm NH35" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false">
+          <div class="combo-list" id="prod-list" hidden></div>
           <div class="attrs" id="attrs"></div>
-          <div class="attr-hint" id="attr-hint">Case style, dial colour, movement and size are picked out of what you type — they drive the What's selling tab.</div></div>
+          <div class="attr-hint" id="attr-hint">Case style, dial colour, movement and size are picked out of what you type — they drive the What's selling tab. Start typing to see what's sold before.</div></div>
         <div class="of-row3">
           <div class="of-field"><label>Qty</label>
             <input id="f-qty" class="pin" type="number" min="1" step="1" value="1"></div>
@@ -688,18 +863,6 @@ def build():
         </div>
         <div class="of-field"><label>Notes</label>
           <textarea id="f-notes" class="pin" placeholder="Sizing, deadline, anything to remember…"></textarea></div>
-
-        <div class="of-sep"></div>
-        <div class="of-legend">Reference photos</div>
-        <div class="of-field">
-          <div class="shots" id="shots"></div>
-          <div class="dz" id="dz">
-            <div class="dz-t">Add photos</div>
-            <div class="dz-s">Tap to use the camera roll &middot; drag them here &middot; or press <span class="kbd">&#8984;V</span></div>
-            <div class="dz-btns"><button type="button" class="btn sm" id="paste-img"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg>Paste image from clipboard</button></div>
-          </div>
-          <input type="file" id="ph-file" accept="image/jpeg,image/png,image/webp" multiple>
-        </div>
 
         <button class="btn primary" id="save" disabled>Save order</button>
         <div class="savehint">or press <span class="kbd">&#8984;</span> + <span class="kbd">Enter</span></div>
