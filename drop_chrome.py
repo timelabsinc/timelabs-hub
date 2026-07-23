@@ -30,6 +30,18 @@ TARGET = "/var/www/drop/index.html"
 BEGIN = "<!--labs:chrome-->"
 END = "<!--/labs:chrome-->"
 
+# Drop carries its own stylesheet rather than HUB_STYLE, so the shared
+# touch-input floor has to be injected here too. Same reason as in
+# hub_shell.py: Drop's search box is 14px, and iOS zooms the page on focus
+# for anything under 16 and never zooms back — which is exactly what tapping
+# Drop's search button did.
+MOBILE_FIX = """<style id="labs-mobile-fix">
+@media (pointer:coarse){
+  input:not([type=button]):not([type=submit]):not([type=reset]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),
+  textarea, select{font-size:16px !important;}
+}
+</style>"""
+
 # Drop's own toolbar controls. The SPA's JS binds to these ids, so they must
 # survive the header being regenerated — that's what hub_header(actions=...)
 # is for.
@@ -74,6 +86,9 @@ def build():
             print("[drop-chrome] no header/nav found — left untouched", file=sys.stderr)
             return
         out = html[:m.start()] + new + html[m.end():]
+
+    if 'id="labs-mobile-fix"' not in out:
+        out = out.replace("</head>", MOBILE_FIX + "\n</head>", 1)
 
     if out == html:
         print("chrome already current")

@@ -265,6 +265,18 @@ HUB_STYLE = r"""
   #q::placeholder{color:var(--muted);}
   #q:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
 
+  /* iOS Safari force-zooms the whole page when a focused text field is under
+     16px, and then does not zoom back out — that "tapping search zooms the
+     page and traps me" bug. Nearly every field in the OS was 13-14px, so this
+     sets a floor on touch devices only (desktop keeps the tighter sizes).
+     !important is deliberate: it has to beat per-component rules and id
+     selectors like #q, and there is no design intent it can wrongly override
+     — a zoomed, stuck page is never what any of them wanted. */
+  @media (pointer:coarse){
+    input:not([type=button]):not([type=submit]):not([type=reset]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),
+    textarea, select{font-size:16px !important;}
+  }
+
   .tabpanel{display:none;}
   .tabpanel.active{display:block;animation:fadeup .22s var(--ease);}
   @keyframes fadeup{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}

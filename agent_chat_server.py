@@ -135,6 +135,9 @@ def _ensure_orders_schema():
             # dumping every historical order on day one; every new order
             # (either write path) turns this on for itself at creation.
             "supplier_visible": "INTEGER DEFAULT 0",
+            # Courier/tracking reference, entered by whoever has it — usually
+            # the supplier once a build ships.
+            "tracking_code": "TEXT",
             # Photos used to survive ONLY as Google Drive URLs, so with Google
             # disconnected an attached photo was written to the temp upload
             # dir and then referenced by nothing — silently lost. They now
@@ -832,6 +835,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/supplier/photo":
             self._handle_supplier_photo(query)
+            return
+        if path == "/supplier/card":
+            self._handle_supplier_card(query)
             return
         if path == "/orders/photo":
             self._handle_order_photo(query)
@@ -2254,7 +2260,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             rows = conn.execute(
                 "SELECT id, received_at, product, quantity, status, notes, "
                 "case_style, dial_colour, dial_style, case_colour, movement, "
-                "watch_size, local_photos FROM orders "
+                "watch_size, local_photos, tracking_code FROM orders "
                 "WHERE supplier_visible=1 AND status != 'cancelled' "
                 "ORDER BY id ASC").fetchall()
             events = {}
@@ -2326,6 +2332,111 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
         hub_event("order_updated", f"#{oid}: status -> {status}", actor, app="orders")
         self._json(200, {"ok": True, "id": oid, "status": status})
+
+    def _handle_supplier_tracking(self):
+        """Courier reference for a build. Lives on the order rather than in a
+        note so it can be shown as a copyable field and, later, looked up —
+        a tracking number buried in free text is findable by a human and by
+        nothing else."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 2048)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            oid = int(p.get("id"))
+        except (TypeError, ValueError):
+            self._json(400, {"error": "missing order id"})
+            return
+        code = str(p.get("tracking_code", "")).strip()[:80]
+        conn = db()
+        row = conn.execute("SELECT tracking_code FROM orders WHERE id=? AND supplier_visible=1",
+                          (oid,)).fetchone()
+        if not row:
+            conn.close()
+            self._json(404, {"error": "no such order"})
+            return
+        was = row["tracking_code"] or ""
+        conn.execute("UPDATE orders SET tracking_code=? WHERE id=?", (code or None, oid))
+        if code != was:
+            order_event(conn, oid, "tracking",
+                       (f"tracking {code}" if code else "tracking cleared"), actor)
+        conn.commit()
+        conn.close()
+        hub_event("order_tracking", f"#{oid}: {code or 'cleared'}", actor, app="orders")
+        self._json(200, {"ok": True, "id": oid, "tracking_code": code})
+
+    def _status_card(self, conn, oid):
+        """The shareable summary of one build. Same shape whether it ends up
+        as copied text, a WhatsApp message or a PDF, so the three can't drift
+        into saying different things about the same order."""
+        o = conn.execute(
+            "SELECT id, received_at, product, quantity, status, tracking_code, "
+            "case_style, dial_colour, dial_style, case_colour, movement, watch_size "
+            "FROM orders WHERE id=? AND supplier_visible=1", (oid,)).fetchone()
+        if not o:
+            return None, None
+        spec = " · ".join(str(o[k]) for k in
+                          ("case_style", "dial_colour", "dial_style", "case_colour",
+                           "movement", "watch_size") if o[k])
+        events = conn.execute(
+            "SELECT created_at, kind, detail FROM order_events "
+            "WHERE order_id=? ORDER BY id ASC", (oid,)).fetchall()
+        lines = [f"Order #{o['id']} — {o['product'] or ''}"]
+        if o["quantity"] and o["quantity"] > 1:
+            lines.append(f"Quantity: {o['quantity']}")
+        if spec:
+            lines.append(f"Spec: {spec}")
+        lines.append(f"Status: {o['status']}")
+        if o["tracking_code"]:
+            lines.append(f"Tracking: {o['tracking_code']}")
+        hist = [f"  {e['created_at'][:16]} — " +
+                (e["detail"] if e["kind"] != "note" else f"note: {e['detail']}")
+                for e in events]
+        if hist:
+            lines.append("History:")
+            lines.extend(hist)
+        return dict(o), "\n".join(lines)
+
+    def _handle_supplier_card(self, query):
+        """text=1 returns the summary as plain text (for copy / a wa.me link);
+        otherwise a PDF, using the same generator the agent's exports use."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+        try:
+            oid = int(params.get("id", ""))
+        except ValueError:
+            self._json(400, {"error": "bad request"})
+            return
+        conn = db()
+        o, text = self._status_card(conn, oid)
+        conn.close()
+        if not o:
+            self._json(404, {"error": "no such order"})
+            return
+        if params.get("text") == "1":
+            self._json(200, {"id": oid, "text": text})
+            return
+        md = text.replace("\n", "\n\n").replace("History:\n\n", "### History\n\n")
+        try:
+            pdf = make_pdf(md, f"Order #{oid} — status")
+        except Exception as e:
+            self._json(500, {"error": f"couldn't build the PDF: {e}"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Disposition",
+                        f'attachment; filename="order-{oid}-status.pdf"')
+        self.send_header("Content-Length", str(len(pdf)))
+        self.end_headers()
+        self.wfile.write(pdf)
 
     def _handle_supplier_note(self):
         """Let the supplier say something back — 'dial is out of stock', 'sent
@@ -2695,6 +2806,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_status()
         elif path == "/supplier/note":
             self._handle_supplier_note()
+        elif path == "/supplier/tracking":
+            self._handle_supplier_tracking()
         elif path == "/orders/delete":
             self._handle_orders_delete()
         elif path == "/access/set":

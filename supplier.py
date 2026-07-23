@@ -37,8 +37,14 @@ OUT = "/var/www/ops/supplier.html"
 SUP_CSS = r"""
   :root{ --tap:46px; }
   body{ -webkit-tap-highlight-color:transparent; }
-  .swrap{max-width:760px;margin:0 auto;padding:0 16px env(safe-area-inset-bottom) 16px;}
+  .swrap{max-width:1240px;margin:0 auto;padding:0 16px env(safe-area-inset-bottom) 16px;}
   @media(max-width:520px){ .swrap{padding-left:12px;padding-right:12px;} }
+
+  /* Column-based once there's room. One build per card, several cards per
+     row on a laptop — the queue is scanned far more often than it's read. */
+  .ogrid{display:grid;gap:12px;grid-template-columns:1fr;}
+  @media(min-width:660px){ .ogrid{grid-template-columns:repeat(2,minmax(0,1fr));} }
+  @media(min-width:1040px){ .ogrid{grid-template-columns:repeat(3,minmax(0,1fr));} }
 
   /* header — sticky, compact, with the counts that matter */
   .stop{position:sticky;top:0;z-index:40;background:var(--bg);
@@ -55,19 +61,41 @@ SUP_CSS = r"""
   .sync{font-size:11.5px;color:var(--muted);}
   .sync.err{color:var(--bad);}
 
-  .schips{display:flex;gap:7px;margin-top:11px;overflow-x:auto;scrollbar-width:none;
-    -webkit-overflow-scrolling:touch;padding-bottom:2px;}
-  .schips::-webkit-scrollbar{display:none;}
-  .schip{flex:none;border:1px solid var(--border);background:var(--card);color:var(--muted);
-    border-radius:999px;padding:7px 13px;font-size:12.5px;font-weight:650;cursor:pointer;
-    white-space:nowrap;min-height:34px;}
-  .schip.on{background:var(--ink);color:var(--bg);border-color:var(--ink);}
-  .schip b{font-weight:800;}
-
-  .ssearch{width:100%;font-size:16px;border:1px solid var(--border);border-radius:var(--r-s);
-    background:var(--card);color:var(--ink);padding:11px 13px;margin-top:10px;
+  /* Filters collapse behind a button so they never eat the space the queue
+     itself needs — but the active count stays visible on the button, so a
+     filtered view can't be mistaken for an empty one. */
+  .fbar{display:flex;gap:8px;align-items:center;margin-top:10px;}
+  .fbtn{flex:none;display:inline-flex;align-items:center;gap:7px;min-height:40px;
+    border:1px solid var(--border);background:var(--card);color:var(--ink);
+    border-radius:var(--r-s);padding:0 13px;font:inherit;font-size:13.5px;font-weight:650;
+    cursor:pointer;}
+  .fbtn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-bg);}
+  .fbtn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round;transition:transform .18s var(--ease);}
+  .fbtn.open svg.chev{transform:rotate(180deg);}
+  .fbtn .cnt{background:var(--accent);color:#fff;border-radius:999px;font-size:10.5px;
+    font-weight:800;padding:1px 6px;}
+  .ssearch{flex:1;min-width:0;font-size:16px;border:1px solid var(--border);
+    border-radius:var(--r-s);background:var(--card);color:var(--ink);padding:10px 13px;
     -webkit-appearance:none;appearance:none;}
   .ssearch:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
+
+  .fpanel{display:none;margin-top:10px;padding:13px;background:var(--card);
+    border:1px solid var(--border);border-radius:var(--r);}
+  .fpanel.on{display:block;animation:fdown .16s var(--ease);}
+  @keyframes fdown{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
+  @media (prefers-reduced-motion:reduce){ .fpanel.on{animation:none;} }
+  .flab{font-size:10.5px;font-weight:750;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.06em;margin:0 0 7px;}
+  .frow{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:13px;}
+  .frow:last-child{margin-bottom:0;}
+  .schip{flex:none;border:1px solid var(--border);background:var(--bg);color:var(--muted);
+    border-radius:999px;padding:8px 13px;font-size:13px;font-weight:650;cursor:pointer;
+    white-space:nowrap;min-height:38px;}
+  .schip.on{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+  .schip b{font-weight:800;}
+  .fclear{border:none;background:none;color:var(--accent);font:inherit;font-size:13px;
+    font-weight:650;cursor:pointer;padding:8px 4px;min-height:38px;}
 
   /* section heads */
   .shead{display:flex;align-items:center;gap:8px;margin:20px 2px 10px;}
@@ -81,16 +109,32 @@ SUP_CSS = r"""
 
   /* the card */
   .ocard{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
-    box-shadow:var(--shadow);margin-bottom:12px;overflow:hidden;}
+    box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;
+    transition:border-color .15s,box-shadow .15s;}
+  .ocard:hover{box-shadow:var(--shadow-lg);}
   .ocard.attn{border-color:var(--accent);}
-  .otop{display:flex;gap:12px;padding:14px;}
+  .otop{display:flex;gap:12px;padding:13px;flex:1;}
   .oshot{width:74px;height:74px;border-radius:10px;flex:none;background:var(--card-2);
-    border:1px solid var(--border);overflow:hidden;position:relative;cursor:zoom-in;}
-  .oshot img{width:100%;height:100%;object-fit:cover;display:block;}
+    border:1px solid var(--border);overflow:hidden;position:relative;cursor:zoom-in;
+    touch-action:manipulation;}
+  .oshot img{width:100%;height:100%;object-fit:cover;display:block;
+    transition:transform .18s var(--ease);}
+  .oshot:hover img{transform:scale(1.06);}
   .oshot .more{position:absolute;right:3px;bottom:3px;background:rgba(0,0,0,.68);color:#fff;
     font-size:10.5px;font-weight:700;border-radius:5px;padding:1px 5px;}
   .oshot.none{display:flex;align-items:center;justify-content:center;cursor:default;}
   .oshot.none svg{width:24px;height:24px;stroke:var(--muted);fill:none;stroke-width:1.6;opacity:.5;}
+
+  /* Hover (mouse) or press-and-hold (touch) to enlarge without leaving the
+     list — checking "is this the right dial" shouldn't cost a full-screen
+     view and a trip back. */
+  .peek{position:fixed;z-index:250;pointer-events:none;opacity:0;transform:scale(.94);
+    transition:opacity .13s var(--ease),transform .13s var(--ease);
+    border-radius:12px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.42);
+    border:1px solid rgba(255,255,255,.14);background:var(--card);}
+  .peek.on{opacity:1;transform:none;}
+  .peek img{display:block;width:300px;height:300px;object-fit:cover;}
+  @media (prefers-reduced-motion:reduce){ .peek{transition:none;} }
   .omid{flex:1;min-width:0;}
   .onum{font-size:11.5px;font-weight:800;color:var(--accent);letter-spacing:.03em;}
   .oprod{font-size:15px;font-weight:700;color:var(--ink);line-height:1.32;margin:2px 0 0;
@@ -102,6 +146,23 @@ SUP_CSS = r"""
     padding:2px 7px;}
   .onote{font-size:12.5px;color:var(--muted);line-height:1.5;margin-top:7px;
     padding-left:9px;border-left:2px solid var(--border-2);}
+
+  /* tracking — a chip once set, a quiet "add" link until then */
+  .otrk{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;}
+  .otrk .chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:650;
+    color:var(--ink);background:var(--card-2);border-radius:6px;padding:3px 8px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;}
+  .otrk .chip svg{width:12px;height:12px;stroke:var(--muted);fill:none;stroke-width:2;flex:none;}
+  .otrk button{border:none;background:none;color:var(--accent);font:inherit;font-size:12px;
+    font-weight:650;cursor:pointer;padding:4px 2px;min-height:30px;}
+  .trkform{display:flex;gap:6px;margin-top:8px;}
+  .trkform input{flex:1;min-width:0;font-size:16px;border:1px solid var(--border);
+    border-radius:var(--r-s);background:var(--bg);color:var(--ink);padding:8px 10px;
+    -webkit-appearance:none;appearance:none;}
+  .trkform input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
+  .trkform button{min-height:38px;padding:0 12px;border:1px solid var(--border);
+    background:var(--card);color:var(--ink);border-radius:var(--r-s);font:inherit;
+    font-size:13px;font-weight:650;cursor:pointer;}
 
   /* status + actions */
   .obar{display:flex;align-items:center;gap:9px;padding:0 14px 12px;flex-wrap:wrap;}
@@ -210,7 +271,7 @@ function ago(s){
 }
 function cls(s){return String(s||'').replace(/[^a-z]/gi,'');}
 
-var STATUSES=[], ORDERS=[], filter='attn', q='', openDetail={};
+var STATUSES=[], ORDERS=[], filter='attn', q='', openDetail={}, sort='oldest', onlyPhotos=false;
 /* Everything before "shipped" still wants something from them; the tail end
    is history. This split is what makes the queue a to-do list. */
 var DONE=['shipped','delivered'];
@@ -227,9 +288,26 @@ function bucket(o){
   return 'wip';
 }
 function matches(o){
+  if(onlyPhotos&&!o.photos)return false;
   if(!q)return true;
-  var hay=('#'+o.id+' '+(o.product||'')+' '+(o.notes||'')).toLowerCase();
+  var hay=('#'+o.id+' '+(o.product||'')+' '+(o.notes||'')+' '+(o.tracking_code||'')+' '+
+    ['case_style','dial_colour','dial_style','case_colour','movement','watch_size']
+      .map(function(k){return o[k]||'';}).join(' ')).toLowerCase();
   return hay.indexOf(q)>=0;
+}
+function activeFilters(){
+  var n=0;
+  if(onlyPhotos)n++;
+  if(sort!=='oldest')n++;
+  if(q)n++;
+  return n;
+}
+function sortOrders(list){
+  var c=list.slice();
+  if(sort==='newest')c.reverse();
+  else if(sort==='stage')c.sort(function(a,b){
+    return STATUSES.indexOf(a.status)-STATUSES.indexOf(b.status)||a.id-b.id;});
+  return c;
 }
 
 function photoEl(o){
@@ -263,6 +341,15 @@ function timelineEl(o){
   }).join('')+'</ul>';
 }
 
+function trackEl(o){
+  if(o.tracking_code){
+    return '<div class="otrk"><span class="chip">'+
+      '<svg viewBox="0 0 24 24"><path d="M3 7h13v10H3zM16 10h4l1 3v4h-5z"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/></svg>'+
+      esc(o.tracking_code)+'</span>'+
+      '<button data-trk="'+o.id+'">Change</button></div>';
+  }
+  return '<div class="otrk"><button data-trk="'+o.id+'">+ Add tracking number</button></div>';
+}
 function cardEl(o){
   var nxt=nextOf(o.status), le=lastEvent(o), attn=bucket(o)==='attn';
   return '<article class="ocard'+(attn?' attn':'')+'" data-id="'+o.id+'">'+
@@ -273,6 +360,7 @@ function cardEl(o){
           (o.quantity>1?'<span class="oqty">x'+o.quantity+'</span>':'')+'</h3>'+
         specEl(o)+
         (o.notes?'<div class="onote">'+esc(o.notes)+'</div>':'')+
+        trackEl(o)+
       '</div>'+
     '</div>'+
     '<div class="obar">'+
@@ -284,6 +372,8 @@ function cardEl(o){
         '<svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>Mark '+esc(nxt)+'</button>'
        :'<button class="obtn" data-sheet="'+o.id+'">Change status</button>')+
       (nxt?'<button class="obtn ghost" data-sheet="'+o.id+'" aria-label="Other status">&#8943;</button>':'')+
+      '<button class="obtn ghost" data-share="'+o.id+'" aria-label="Share status">'+
+        '<svg viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="M12 15V3M8 7l4-4 4 4"/></svg></button>'+
       '<button class="obtn ghost" data-det="'+o.id+'" aria-label="Details">&#9432;</button>'+
     '</div>'+
     '<div class="odet'+(openDetail[o.id]?' on':'')+'" id="det-'+o.id+'">'+
@@ -304,26 +394,34 @@ function render(){
   var titles={attn:'Needs acknowledging',wip:'In progress',done:'Done'};
   var html='';
   show.forEach(function(k){
-    var list=groups[k];
+    var list=sortOrders(groups[k]);
     if(!list.length)return;
     html+='<div class="shead"><h2>'+titles[k]+'</h2><span class="n">'+list.length+'</span></div>'+
-      list.map(cardEl).join('');
+      '<div class="ogrid">'+list.map(cardEl).join('')+'</div>';
   });
   if(!html){
     html='<div class="sempty"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg><div>'+
-      (q?'Nothing matches &ldquo;'+esc(q)+'&rdquo;.'
+      (q||onlyPhotos?'Nothing matches the current filters.'
         :filter==='attn'?'Nothing waiting on you. Everything here has been acknowledged.'
         :'Nothing in the queue yet. New builds appear here as soon as they&rsquo;re shared.')+
       '</div></div>';
   }
   $('list').innerHTML=html;
   var counts={attn:groups.attn.length,wip:groups.wip.length,done:groups.done.length};
-  document.querySelectorAll('.schip').forEach(function(c){
+  document.querySelectorAll('.schip[data-f]').forEach(function(c){
     var k=c.dataset.f;
     c.classList.toggle('on',k===filter);
     var n=c.querySelector('b');
     if(n)n.textContent = k==='all'?vis.length:counts[k];
   });
+  document.querySelectorAll('.schip[data-sort]').forEach(function(c){
+    c.classList.toggle('on',c.dataset.sort===sort);
+  });
+  var pc=$('f-photos'); if(pc)pc.classList.toggle('on',onlyPhotos);
+  var n=activeFilters(), badge=$('fcount');
+  badge.textContent=n?String(n):'';
+  badge.style.display=n?'':'none';
+  $('fbtn').classList.toggle('on',n>0);
   wire();
 }
 
@@ -343,7 +441,43 @@ function wire(){
     };
   });
   L.querySelectorAll('[data-lb]').forEach(function(el){
-    el.onclick=function(){ openLb(+el.dataset.lb, +el.dataset.n); };
+    var id=+el.dataset.lb, n=+el.dataset.n;
+    el.onclick=function(){ if(!heldOpen) openLb(id,n); heldOpen=false; };
+    /* mouse: peek on hover. touch: peek on press-and-hold, and swallow the
+       click that follows so holding doesn't also open the lightbox. */
+    el.addEventListener('mouseenter',function(){ showPeek(id,el); });
+    el.addEventListener('mouseleave',hidePeek);
+    el.addEventListener('touchstart',function(){
+      clearTimeout(holdT);
+      holdT=setTimeout(function(){ heldOpen=true; showPeek(id,el); },350);
+    },{passive:true});
+    ['touchend','touchmove','touchcancel'].forEach(function(ev){
+      el.addEventListener(ev,function(){ clearTimeout(holdT); hidePeek(); },{passive:true});
+    });
+  });
+  L.querySelectorAll('[data-share]').forEach(function(b){
+    b.onclick=function(){ openShare(+b.dataset.share); };
+  });
+  L.querySelectorAll('[data-trk]').forEach(function(b){
+    b.onclick=function(){
+      var id=+b.dataset.trk, o=byId(id);
+      var host=b.closest('.otrk');
+      host.outerHTML='<form class="trkform" data-trkf="'+id+'">'+
+        '<input type="text" value="'+esc(o.tracking_code||'')+'" placeholder="Courier / tracking number" aria-label="Tracking number">'+
+        '<button type="submit">Save</button></form>';
+      var f=L.querySelector('[data-trkf="'+id+'"]');
+      var inp=f.querySelector('input'); inp.focus(); inp.select();
+      f.onsubmit=function(e){
+        e.preventDefault();
+        var v=inp.value.trim();
+        inp.disabled=true;
+        jpost('/supplier/tracking',{id:id,tracking_code:v}).then(function(){
+          o.tracking_code=v;
+          toast(v?'Tracking saved':'Tracking cleared');
+          render();
+        }).catch(function(err){ inp.disabled=false; toast(err.message); });
+      };
+    };
   });
   L.querySelectorAll('[data-note]').forEach(function(f){
     f.onsubmit=function(e){
@@ -381,6 +515,60 @@ async function setStatus(id,to,btn){
     if(o.timeline)o.timeline.pop();
     render();
     toast(e.message);
+  }
+}
+
+/* ---- peek: hover on a mouse, press-and-hold on a touchscreen ---- */
+var holdT=null, heldOpen=false;
+function byId(id){ return ORDERS.filter(function(x){return x.id===id;})[0]; }
+function showPeek(id,anchor){
+  var p=$('peek'), img=$('peek-img');
+  if(img.dataset.for!==String(id)){ img.src=API+'/supplier/photo?id='+id+'&n=0'; img.dataset.for=String(id); }
+  p.classList.add('on');
+  /* place it beside the thumb, then nudge back inside the viewport */
+  var r=anchor.getBoundingClientRect(), w=300, h=300, m=10;
+  var left=r.right+m, top=r.top+r.height/2-h/2;
+  if(left+w>innerWidth-m) left=Math.max(m,r.left-w-m);
+  if(left<m) left=Math.max(m,(innerWidth-w)/2);
+  top=Math.min(Math.max(m,top),innerHeight-h-m);
+  p.style.left=left+'px'; p.style.top=top+'px';
+}
+function hidePeek(){ $('peek').classList.remove('on'); }
+window.addEventListener('scroll',hidePeek,{passive:true});
+
+/* ---- share a status: copy, WhatsApp, or PDF ---- */
+var shareFor=null;
+async function openShare(id){
+  shareFor=id;
+  $('sheet-title').textContent='Share order #'+id;
+  $('sheet-opts').innerHTML=
+    '<button class="opt" data-a="copy"><i></i>Copy status as text</button>'+
+    '<button class="opt" data-a="wa"><i></i>Send on WhatsApp</button>'+
+    '<button class="opt" data-a="pdf"><i></i>Download PDF</button>';
+  $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
+    b.onclick=function(){ closeSheet(); doShare(id,b.dataset.a); };
+  });
+  $('sheet').classList.add('on');
+}
+async function doShare(id,how){
+  if(how==='pdf'){ window.open(API+'/supplier/card?id='+id,'_blank'); return; }
+  var d;
+  try{ d=await api('/supplier/card?id='+id+'&text=1'); }
+  catch(e){ toast(e.message); return; }
+  if(how==='wa'){
+    /* wa.me carries text only — a file can't be attached from a link, so the
+       PDF stays a separate download. Text is what actually gets read anyway. */
+    window.open('https://wa.me/?text='+encodeURIComponent(d.text),'_blank');
+    return;
+  }
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(d.text);
+      toast('Status copied');
+    }else{ throw new Error('no clipboard'); }
+  }catch(e){
+    /* older mobile browsers: show it so it can be selected by hand */
+    prompt('Copy the status:',d.text);
   }
 }
 
@@ -425,9 +613,21 @@ document.addEventListener('keydown',function(e){
 });
 
 /* filters + search */
-document.querySelectorAll('.schip').forEach(function(c){
+document.querySelectorAll('.schip[data-f]').forEach(function(c){
   c.onclick=function(){ filter=c.dataset.f; render(); window.scrollTo({top:0,behavior:'smooth'}); };
 });
+document.querySelectorAll('.schip[data-sort]').forEach(function(c){
+  c.onclick=function(){ sort=c.dataset.sort; render(); };
+});
+$('f-photos').onclick=function(){ onlyPhotos=!onlyPhotos; render(); };
+$('fbtn').onclick=function(){
+  var open=$('fpanel').classList.toggle('on');
+  $('fbtn').classList.toggle('open',open);
+  $('fbtn').setAttribute('aria-expanded',open?'true':'false');
+};
+$('fclear').onclick=function(){
+  q='';onlyPhotos=false;sort='oldest';$('q').value='';render();
+};
 var qT;
 $('q').addEventListener('input',function(){
   clearTimeout(qT);
@@ -485,20 +685,43 @@ def build():
       <span class="sp"></span>
       <span class="swho" id="who"></span>
     </div>
-    <div class="schips">
-      <button class="schip on" data-f="attn">Needs you <b>0</b></button>
-      <button class="schip" data-f="wip">In progress <b>0</b></button>
-      <button class="schip" data-f="done">Done <b>0</b></button>
-      <button class="schip" data-f="all">All <b>0</b></button>
+    <div class="fbar">
+      <input id="q" class="ssearch" type="search" placeholder="Search number, product, spec, tracking"
+             aria-label="Search the queue" autocomplete="off">
+      <button class="fbtn" id="fbtn" aria-expanded="false" aria-controls="fpanel">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+        Filters<span class="cnt" id="fcount" style="display:none"></span>
+        <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
     </div>
-    <input id="q" class="ssearch" type="search" placeholder="Search order number or product"
-           aria-label="Search the queue" autocomplete="off">
+    <div class="fpanel" id="fpanel">
+      <p class="flab">Show</p>
+      <div class="frow">
+        <button class="schip on" data-f="attn">Needs you <b>0</b></button>
+        <button class="schip" data-f="wip">In progress <b>0</b></button>
+        <button class="schip" data-f="done">Done <b>0</b></button>
+        <button class="schip" data-f="all">Everything <b>0</b></button>
+      </div>
+      <p class="flab">Order by</p>
+      <div class="frow">
+        <button class="schip on" data-sort="oldest">Oldest first</button>
+        <button class="schip" data-sort="newest">Newest first</button>
+        <button class="schip" data-sort="stage">Stage</button>
+      </div>
+      <p class="flab">Only</p>
+      <div class="frow">
+        <button class="schip" id="f-photos">With a photo</button>
+        <button class="fclear" id="fclear">Reset filters</button>
+      </div>
+    </div>
     <div style="margin-top:8px"><span class="sync" id="sync">Loading&hellip;</span></div>
   </div>
 
   <main id="list"><div class="sempty">Loading&hellip;</div></main>
   <p class="sfoot">Timelabs Co &middot; build queue</p>
 </div>
+
+<div class="peek" id="peek" aria-hidden="true"><img id="peek-img" alt=""></div>
 
 <div class="sheet" id="sheet" role="dialog" aria-modal="true">
   <div class="sheet-bg" id="sheet-bg"></div>

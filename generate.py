@@ -6,6 +6,7 @@ shows as "not connected" on the page instead of crashing the whole run.
 Run manually for an on-demand refresh, or via the daily systemd timer.
 """
 import datetime
+import glob
 import html
 import json
 import os
@@ -15,6 +16,7 @@ import time
 import urllib.request
 import urllib.error
 
+BASE = "/root/ops-dashboard"
 sys.path.insert(0, "/root/ops-dashboard")
 from hub_shell import (  # the Hub/Face "Meridian" shell + chart engine
     page, source_chip, _refund_pct, kpi_card, stat_pill, svg_revenue_chart,
@@ -873,13 +875,39 @@ def main():
         print(f"[ledger] {e}", file=sys.stderr)
     # drop_chrome doesn't render a page — it re-syncs Drop's header/nav from
     # hub_shell so the hand-written SPA can't drift out of step with the rest.
-    for mod in ("tools", "blog", "product_updater", "product_builder",
-                "content_updater", "theme_editor", "files", "order_form", "supplier",
-                "drop_chrome"):
+    generators = ("tools", "blog", "product_updater", "product_builder",
+                  "content_updater", "theme_editor", "files", "order_form",
+                  "supplier", "access", "architecture", "blog_uploader",
+                  "drop_chrome")
+    for mod in generators:
         try:
             __import__(mod).build()
         except Exception as e:
             print(f"[{mod}] {e}", file=sys.stderr)
+
+    # This list is hand-maintained, and it has already drifted once: access,
+    # architecture and blog_uploader silently fell out of it and went ~17
+    # hours without a rebuild, so they missed shared-shell fixes everything
+    # else got. Shout about any generator that isn't covered rather than
+    # letting the next one rot quietly.
+    # ledger is built explicitly further up (it needs the invoice DB), so it
+    # is covered despite not being in the loop.
+    handled = set(generators) | {"generate", "ledger"}
+    missed = []
+    for path in glob.glob(os.path.join(BASE, "*.py")):
+        name = os.path.basename(path)[:-3]
+        if name in handled:
+            continue
+        try:
+            with open(path) as f:
+                src = f.read()
+        except OSError:
+            continue
+        if 'OUT = "/var/www/' in src and "\ndef build(" in src:
+            missed.append(name)
+    if missed:
+        print(f"[refresh] WARNING: generator(s) not in the refresh loop, so their "
+              f"pages will go stale: {', '.join(sorted(missed))}", file=sys.stderr)
 
 
 if __name__ == "__main__":
