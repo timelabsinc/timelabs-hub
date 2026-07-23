@@ -1725,8 +1725,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         customer = str(p.get("customer_name", "")).strip()[:120]
         product = str(p.get("product", "")).strip()[:200]
-        if not customer or not product:
-            self._json(400, {"error": "customer name and product are both needed"})
+        # Customer is optional: a build can be queued to the supplier before
+        # it's sold (that's what bulk intake creates), and the buyer gets
+        # attached later. Product is the one thing an order can't lack.
+        if not product:
+            self._json(400, {"error": "a product is needed"})
             return
         phone = str(p.get("customer_phone", "")).strip()[:40]
         email = str(p.get("customer_email", "")).strip()[:200]
@@ -1844,13 +1847,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # an order is later edited or removed.
         import customers as customers_mod
         cust = None
-        try:
-            cust = customers_mod.upsert_from_order(conn, {
-                "customer_name": customer, "customer_phone": phone,
-                "customer_email": email, "address": address, "pincode": pincode,
-                "city": city, "state": state, "source": source})
-        except Exception as e:
-            warnings.append(f"Customer list not updated: {e}")
+        # An unsold build has nobody to roll up. Without this guard every
+        # customer-less order would collide on the same empty key and appear
+        # as one phantom buyer accumulating all of their spend.
+        if customer or phone or email:
+            try:
+                cust = customers_mod.upsert_from_order(conn, {
+                    "customer_name": customer, "customer_phone": phone,
+                    "customer_email": email, "address": address, "pincode": pincode,
+                    "city": city, "state": state, "source": source})
+            except Exception as e:
+                warnings.append(f"Customer list not updated: {e}")
         conn.close()
 
         # The DB is the source of truth; a failed mirror must never lose an order.
@@ -2005,24 +2012,53 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             self._json(400, {"error": "missing order id"})
             return
-        updatable = {"status": 40, "notes": 1000, "customer_name": 120,
-                     "customer_phone": 40, "customer_email": 200, "address": 600,
-                     "city": 80, "state": 80, "pincode": 20, "case_style": 60,
-                     "dial_colour": 60, "dial_style": 60, "case_colour": 60,
-                     "movement": 60, "watch_size": 60}
+        # Always editable: moving an order along, recording what happened, and
+        # correcting a courier reference are things you do *because* it's in
+        # flight, so locking them would be backwards.
+        always = {"status": 40, "notes": 1000, "tracking_code": 80}
+        # Everything describing what gets built and who it's for. Frozen once
+        # the supplier has been paid: from that point they've committed money
+        # to parts, and a spec that changes underneath them silently is how
+        # the wrong watch gets built.
+        lockable = {"customer_name": 120, "customer_phone": 40, "customer_email": 200,
+                    "address": 600, "city": 80, "state": 80, "pincode": 20,
+                    "product": 200, "case_style": 60, "dial_colour": 60,
+                    "dial_style": 60, "case_colour": 60, "movement": 60,
+                    "watch_size": 60}
+        conn = db()
+        before = conn.execute("SELECT status FROM orders WHERE id=?", (oid,)).fetchone()
+        if not before:
+            conn.close()
+            self._json(404, {"error": "no such order"})
+            return
+        from order_form import STATUSES
+        cur_status = before["status"] or "new"
+        try:
+            locked = STATUSES.index(cur_status) >= STATUSES.index("paid")
+        except ValueError:
+            locked = False          # unknown status: don't block on a guess
+        if locked:
+            blocked = [k for k in lockable if k in p]
+            if blocked:
+                conn.close()
+                self._json(409, {
+                    "error": f"This order is already \"{cur_status}\" — the supplier has "
+                             f"been paid and may have bought parts, so the build details "
+                             f"are locked. You can still change its status, notes and "
+                             f"tracking.",
+                    "locked_fields": blocked})
+                return
+        updatable = dict(always)
+        if not locked:
+            updatable.update(lockable)
         sets, vals = [], []
         for k, maxlen in updatable.items():
             if k in p:
                 sets.append(f"{k}=?")
                 vals.append(str(p[k]).strip()[:maxlen])
         if not sets:
-            self._json(400, {"error": "nothing to update"})
-            return
-        conn = db()
-        before = conn.execute("SELECT status FROM orders WHERE id=?", (oid,)).fetchone()
-        if not before:
             conn.close()
-            self._json(404, {"error": "no such order"})
+            self._json(400, {"error": "nothing to update"})
             return
         vals.append(oid)
         conn.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id=?", vals)
@@ -2036,6 +2072,98 @@ class Handler(http.server.BaseHTTPRequestHandler):
         hub_event("order_updated", f"#{oid}: " + ", ".join(k for k in updatable if k in p),
                  actor, app="orders")
         self._json(200, {"ok": True, "id": oid})
+
+    def _handle_orders_bulk(self):
+        """One build per screenshot. Send a batch of watch photos and each
+        becomes its own order on the supplier queue — no customer yet, that
+        gets attached when it sells.
+
+        Each photo is filed against its own order id, so the queue shows the
+        right reference against the right build rather than a shared album
+        nobody can match up. Partial success is reported rather than rolled
+        back: if the seventh photo is corrupt, the first six are still real
+        orders and should not be thrown away."""
+        actor = self._order_user()
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 65536)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        items = p.get("items") or []
+        if not isinstance(items, list) or not items:
+            self._json(400, {"error": "nothing to create"})
+            return
+        source = str(p.get("source", "")).strip()[:40]
+        import order_taxonomy
+        upload_root = os.path.realpath(UPLOAD_DIR) + os.sep
+
+        conn = db()
+        created, failed = [], []
+        for i, it in enumerate(items[:60]):
+            try:
+                product = str((it or {}).get("product", "")).strip()[:200]
+                photo = str((it or {}).get("photo_path", "")).strip()
+                if not product:
+                    failed.append({"i": i, "error": "no product name"})
+                    continue
+                rp = os.path.realpath(photo) if photo else ""
+                if photo and (not rp.startswith(upload_root) or not os.path.isfile(rp)):
+                    failed.append({"i": i, "error": "photo upload expired"})
+                    continue
+                notes = str((it or {}).get("notes", "")).strip()[:1000]
+                try:
+                    qty = max(1, int((it or {}).get("quantity") or 1))
+                except (TypeError, ValueError):
+                    qty = 1
+                try:
+                    price = (float(it["price_inr"])
+                             if str((it or {}).get("price_inr", "")).strip() else None)
+                except (TypeError, ValueError):
+                    price = None
+                attrs = order_taxonomy.extract(product + " " + notes)
+                cur = conn.execute(
+                    "INSERT INTO orders (customer_name, source, product, price_inr, "
+                    "quantity, notes, status, has_image, case_style, dial_colour, "
+                    "dial_style, case_colour, movement, watch_size, supplier_visible) "
+                    "VALUES ('',?,?,?,?,?,'new',?,?,?,?,?,?,?,1)",
+                    (source, product, price, qty, notes, 1 if rp else 0,
+                     attrs.get("case_style"), attrs.get("dial_colour"),
+                     attrs.get("dial_style"), attrs.get("case_colour"),
+                     attrs.get("movement"), attrs.get("watch_size")))
+                oid = cur.lastrowid
+                if rp:
+                    dest = os.path.join(ORDER_PHOTOS, str(oid))
+                    os.makedirs(dest, exist_ok=True)
+                    fn = "1" + os.path.splitext(rp)[1].lower()
+                    try:
+                        os.replace(rp, os.path.join(dest, fn))
+                    except OSError:
+                        with open(rp, "rb") as s, open(os.path.join(dest, fn), "wb") as d:
+                            d.write(s.read())
+                        try:
+                            os.remove(rp)
+                        except OSError:
+                            pass
+                    conn.execute("UPDATE orders SET local_photos=? WHERE id=?",
+                                (json.dumps([fn]), oid))
+                conn.execute(
+                    "INSERT INTO order_items (order_id, product, quantity, price_inr, "
+                    "line_total) VALUES (?,?,?,?,?)",
+                    (oid, product, qty, price, (price or 0) * qty))
+                order_event(conn, oid, "created", "added in a bulk batch", actor)
+                conn.commit()
+                created.append({"id": oid, "product": product})
+            except Exception as e:
+                failed.append({"i": i, "error": str(e)[:120]})
+        conn.close()
+        if created:
+            hub_event("orders_bulk", f"{len(created)} build(s) queued from a photo batch",
+                     actor, app="orders")
+        self._json(200, {"ok": True, "created": created, "failed": failed})
 
     def _handle_orders_delete(self):
         """Remove an order completely — the row, its line items, its timeline
@@ -2886,6 +3014,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_whatsapp()
         elif path == "/orders/delete":
             self._handle_orders_delete()
+        elif path == "/orders/bulk":
+            self._handle_orders_bulk()
         elif path == "/access/set":
             self._handle_access_set()
         elif path == "/shopify/product/ai-draft":
