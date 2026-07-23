@@ -898,8 +898,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not todo:
             self._json(200, {"done": True, "indexed": len(idx), "added": 0, "remaining": 0})
             return
-        listing = "\n".join(f'{i + 1}. {os.path.basename(r)}  (path: {r})  file: {f}'
-                            for i, (r, f) in enumerate(todo))
+        # Feed the model a JPEG thumbnail, not the raw file — so HEIC/HEIF/AVIF
+        # (iPhone photos) index as reliably as JPEG. make_thumb rides on
+        # pillow-heif, which is registered. Falls back to the original if the
+        # thumbnail can't be made.
+        idx_dir = os.path.join(UPLOADS, ".idx")
+        os.makedirs(idx_dir, exist_ok=True)
+        tmp_thumbs, model_files = [], []
+        for rel, fp in todo:
+            tp = os.path.join(idx_dir, hashlib.sha1(rel.encode()).hexdigest() + ".jpg")
+            try:
+                if make_thumb(fp, tp, px=768):
+                    model_files.append(tp)
+                    tmp_thumbs.append(tp)
+                else:
+                    model_files.append(fp)
+            except Exception:
+                model_files.append(fp)
+        listing = "\n".join(f'{i + 1}. {os.path.basename(r)}  (path: {r})  file: {mf}'
+                            for i, ((r, _f), mf) in enumerate(zip(todo, model_files)))
         prompt = (
             "You are indexing product photos for a Seiko watch-mod business so they can be "
             "searched by description later.\n\n" + listing +
@@ -912,18 +929,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "No text outside the JSON object."
         )
         reply = ""
-        for model, provider in (("claude-sonnet-4-6", "anthropic"), (None, None)):
-            try:
-                cmd = ["hermes"]
-                if model:
-                    cmd += ["-m", model, "--provider", provider]
-                cmd += ["-t", "vision,files", "-z", prompt]
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                reply = (r.stdout or "").strip()
-                if reply:
-                    break
-            except Exception:
-                continue
+        try:
+            for model, provider in (("claude-sonnet-4-6", "anthropic"), (None, None)):
+                try:
+                    cmd = ["hermes"]
+                    if model:
+                        cmd += ["-m", model, "--provider", provider]
+                    cmd += ["-t", "vision,files", "-z", prompt]
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                    reply = (r.stdout or "").strip()
+                    if reply:
+                        break
+                except Exception:
+                    continue
+        finally:
+            for tp in tmp_thumbs:            # don't leave index thumbnails around
+                try:
+                    os.remove(tp)
+                except OSError:
+                    pass
         data = None
         if reply:
             m = re.search(r"\{[\s\S]*\}", reply)
