@@ -31,7 +31,6 @@ IC = {
     "access": '<path d="M16 11a4 4 0 1 0-8 0"/><circle cx="12" cy="7" r="3"/><path d="M4 21v-1a6 6 0 0 1 6-6h1"/><rect x="14" y="14" width="7" height="6" rx="1.5"/><path d="M16 14v-2a2 2 0 0 1 4 0v2"/>',
     "post": '<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h4"/><path d="M15 3l3 3"/>',
     "orders": '<path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/>',
-    "order": '<path d="M6 2h9l3 3v17H6z"/><path d="M9 9h6M9 13h6M9 17h4"/>',
 }
 
 # (key, name, description, href-or-None, status)  status: "live" | "soon" | "admin"
@@ -41,8 +40,7 @@ TOOLS = [
         ("drop", "Drop", "Files &amp; product video — upload, share, organize.", "/drop/", "live"),
         ("ledger", "Ledger", "Costs &amp; margins from your supplier invoices.", "/ops/ledger.html", "live"),
         ("chat", "Chat", "Ask the team (Hermes / Claude) with photos.", "/ops/agent/", "live"),
-        ("orders", "Order form", "Log an order in seconds — orders, customers &amp; what&#39;s selling.", "/ops/order-form.html", "live"),
-        ("order", "Order form", "Log an order with a photo — syncs to the Orders sheet.", "/ops/order-form.html", "live"),
+        ("orders", "Order form", "Log an order in seconds — with a photo; syncs to Orders &amp; Customers.", "/ops/order-form.html", "live"),
     ]),
     ("Content &amp; growth", [
         ("blog", "Blog builder", "Your 27 queued topics → the content plan.", "/ops/blog.html", "live"),
@@ -55,7 +53,7 @@ TOOLS = [
         ("product", "Product builder", "Spin up a new product from parts, photos &amp; a spec.", "/ops/product-builder.html", "live"),
     ]),
     ("Admin", [
-        ("key", "Key", "Who can sign in to Hub — invite &amp; remove people.", "/ops/#key", "admin"),
+        ("key", "Key", "Who can sign in to Labs OS — invite &amp; remove people.", "/ops/#key", "admin"),
         ("access", "Tool access", "Who may use which tools — roles &amp; restricted logins.", "/ops/access.html", "admin"),
         ("files", "System files", "Browse the Hermes server files — read-only, hidden-file toggle.", "/ops/files.html", "admin"),
         ("map", "System map", "How the whole OS fits together — services, health, roadmap.", "/ops/architecture.html", "admin"),
@@ -106,6 +104,10 @@ def build():
   .t-badge.soon{{color:var(--accent);background:var(--accent-bg);}}
   .t-badge.admin{{color:var(--muted);background:var(--card-2);}}
   .t-badge.locked{{color:var(--accent);background:var(--accent-bg);}}
+  .tsearch{{width:100%;max-width:420px;font-size:14px;border:1px solid var(--border);border-radius:var(--r-s);
+    background:var(--card);color:var(--ink);padding:10px 13px;margin-bottom:6px;}}
+  .tsearch:focus{{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}}
+  .tempty{{color:var(--muted);font-size:14px;padding:14px 2px;}}
 </style></head>
 <body>
 <div class="wrap">
@@ -113,13 +115,37 @@ def build():
   <main>
     <div class="page-head">
       <h1 class="page-title">All tools</h1>
-      <p class="page-sub">Everything in Hub. The ones you use daily are pinned in the bar above; the rest live here — including what we're still building.</p>
+      <p class="page-sub">Everything in Labs OS. Your daily tools are pinned in the nav bar; the rest live here.</p>
     </div>
+    <input id="tsearch" class="tsearch" type="search" placeholder="Search tools…" aria-label="Search tools" autocomplete="off">
     {groups}
+    <p class="tempty" id="tempty" hidden>No tools match.</p>
     {hub_footer()}
   </main>
 </div>
-<script>{WHOAMI_JS}</script>
+<script>
+(function(){{
+  var q=document.getElementById('tsearch'); if(!q) return;
+  var cards=[].slice.call(document.querySelectorAll('.tcard'));
+  var secs=[].slice.call(document.querySelectorAll('main section'));
+  var empty=document.getElementById('tempty');
+  q.addEventListener('input', function(){{
+    var t=q.value.trim().toLowerCase(), any=false;
+    cards.forEach(function(c){{
+      var hit=!t||c.textContent.toLowerCase().indexOf(t)>=0;
+      c.style.display=hit?'':'none'; if(hit) any=true;
+    }});
+    secs.forEach(function(s){{
+      var vis=s.querySelectorAll('.tcard:not([style*="none"])').length;
+      s.style.display=vis?'':'none';
+    }});
+    if(empty) empty.hidden=any;
+  }});
+  q.addEventListener('keydown', function(e){{
+    if(e.key==='Enter'){{ var first=cards.filter(function(c){{return c.style.display!=='none'&&c.tagName==='A';}})[0]; if(first) location.href=first.getAttribute('href'); }}
+  }});
+}})();
+{WHOAMI_JS}</script>
 </body></html>"""
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:
