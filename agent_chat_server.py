@@ -1742,16 +1742,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "SELECT COUNT(*) n FROM customers").fetchone()["n"] \
                 if conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
                                 "AND name='customers'").fetchone() else 0
+            # product units from logged orders, to merge with the storefront below
+            prod = {}
+            for r in conn.execute("SELECT product, COALESCE(quantity,1) q FROM orders "
+                                  "WHERE status != 'cancelled'"):
+                nm = (r["product"] or "").strip()
+                if nm:
+                    prod[nm] = prod.get(nm, 0) + int(r["q"] or 1)
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
             return
         conn.close()
+        # Merge the storefront so totals reflect the whole business, not just
+        # what was typed into this form (fails soft so the tool still loads).
+        sh_count, sh_rev = 0, 0.0
+        try:
+            import shopify_api
+            if shopify_api.configured():
+                q = ("query { orders(first: 100, sortKey: CREATED_AT, reverse: true) { nodes { "
+                     "totalPriceSet { shopMoney { amount } } displayFinancialStatus "
+                     "lineItems(first: 5) { nodes { title quantity } } } } }")
+                for n in shopify_api.admin_graphql(q)["orders"]["nodes"]:
+                    if (n.get("displayFinancialStatus") or "").upper() in ("REFUNDED", "VOIDED"):
+                        continue
+                    sh_count += 1
+                    try:
+                        sh_rev += float((n.get("totalPriceSet") or {}).get("shopMoney", {}).get("amount") or 0)
+                    except (TypeError, ValueError):
+                        pass
+                    for li in (n.get("lineItems") or {}).get("nodes") or []:
+                        nm = (li.get("title") or "").strip().split(" +")[0]
+                        if nm:
+                            prod[nm] = prod.get(nm, 0) + int(li.get("quantity") or 1)
+        except Exception as e:
+            print(f"[orders-meta] shopify merge skipped: {e}", flush=True)
+        top_products = [{"name": k, "units": v} for k, v in
+                        sorted(prod.items(), key=lambda kv: -kv[1])[:8]]
         defaults = ["CC", "TLC", "Offkicks"]
         sources = defaults + [s for s in used if s not in defaults]
         self._json(200, {"sources": sources, "selling": sold,
-                         "vocab": order_taxonomy.vocab(),
-                         "totals": {"orders": totals["n"], "revenue": totals["revenue"],
+                         "vocab": order_taxonomy.vocab(), "top_products": top_products,
+                         "channels": {"logged": totals["n"], "website": sh_count},
+                         "totals": {"orders": totals["n"] + sh_count,
+                                    "revenue": (totals["revenue"] or 0) + sh_rev,
                                     "customers": ncust}})
 
     def _handle_customers_list(self):

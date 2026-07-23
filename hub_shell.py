@@ -775,6 +775,7 @@ _ICONS = {
     "chat": '<svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg>',
     "key": '<svg viewBox="0 0 24 24"><circle cx="8" cy="14" r="4"/><path d="M11 11l8-8M17 4l3 3M14 7l2 2"/></svg>',
     "tools": '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg>',
+    "orders": '<svg viewBox="0 0 24 24"><path d="M6 2h9l4 4v16H6z"/><path d="M15 2v4h4M9 12h6M9 16h4"/></svg>',
 }
 
 
@@ -784,7 +785,7 @@ def _appnav(active="face", drop_ready=False):
     items = [
         ("face", 'href="/ops/#overview"', "Home", ""),
         ("drop", drop_attr, "Drop", ""),
-        ("ledger", 'href="/ops/ledger.html"', "Ledger", ""),
+        ("orders", 'href="/ops/order-form.html"', "Orders", ""),
         ("chat", 'href="/ops/agent/"', "Chat", ""),
         ("tools", 'href="/ops/tools.html"', "Tools", ""),
     ]
@@ -799,7 +800,7 @@ def _appnav(active="face", drop_ready=False):
 # Labs Drop, Labs Ledger, Labs Chat, Labs Tools — like Google Drive/Docs. The
 # collective name is "Labs OS" (shown in the footer). One header for every page.
 SECTION_LABEL = {"face": "Home", "drop": "Drop", "ledger": "Ledger",
-                 "chat": "Chat", "tools": "Tools"}
+                 "chat": "Chat", "tools": "Tools", "orders": "Orders"}
 
 
 def hub_header(active):

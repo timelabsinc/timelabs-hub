@@ -581,16 +581,21 @@ function barBlock(title,rows){
 async function loadSelling(){
   try{
     var d=await api('/orders/meta');
-    var t=d.totals||{};
+    var t=d.totals||{}, ch=d.channels||{};
+    var mix=(ch.website!=null)?' <small style="opacity:.6;font-weight:400">('+(ch.website||0)+' web · '+(ch.logged||0)+' logged)</small>':'';
     $('kpis').innerHTML=
-      '<div class="kpi"><span>Orders</span><b>'+(t.orders||0)+'</b></div>'+
+      '<div class="kpi"><span>Orders</span><b>'+(t.orders||0)+'</b>'+mix+'</div>'+
       '<div class="kpi"><span>Revenue</span><b>'+esc(money(t.revenue||0))+'</b></div>'+
       '<div class="kpi"><span>Customers</span><b>'+(t.customers||0)+'</b></div>';
+    var tp=(d.top_products||[]).map(function(p){return {name:p.name,units:p.units};});
     var s=d.selling||{};
-    var html=barBlock('Case style',s.case_style)+barBlock('Dial colour',s.dial_colour)+
-             barBlock('Dial style',s.dial_style)+barBlock('Movement',s.movement);
-    $('selling').innerHTML=html||'<div class="empty">Not enough orders yet. Attributes are pulled '+
-      'from the product text as you log orders — the more you log, the more this fills in.</div>';
+    var html=barBlock('Top products — all channels',tp)+
+             barBlock('Case style · logged orders',s.case_style)+
+             barBlock('Dial colour · logged orders',s.dial_colour)+
+             barBlock('Dial style · logged orders',s.dial_style)+
+             barBlock('Movement · logged orders',s.movement);
+    $('selling').innerHTML=html||'<div class="empty">No orders yet. Top products span the storefront and '+
+      'the order form; the attribute breakdowns fill in from what you log here.</div>';
   }catch(e){$('selling').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
 }
 
@@ -616,7 +621,7 @@ def build():
 <style>{HUB_STYLE}{OF_CSS}</style></head>
 <body>
 <div class="wrap">
-  {hub_header("tools")}
+  {hub_header("orders")}
   <main>
     <div class="page-head">
       <h1 class="page-title">Order form</h1>
