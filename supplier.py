@@ -542,8 +542,10 @@ async function openShare(id){
   shareFor=id;
   $('sheet-title').textContent='Share order #'+id;
   $('sheet-opts').innerHTML=
+    '<button class="opt" data-a="post"><i></i>Post to the team WhatsApp</button>'+
+    '<button class="opt" data-a="postpdf"><i></i>Post to WhatsApp with PDF</button>'+
     '<button class="opt" data-a="copy"><i></i>Copy status as text</button>'+
-    '<button class="opt" data-a="wa"><i></i>Send on WhatsApp</button>'+
+    '<button class="opt" data-a="wa"><i></i>Open WhatsApp to pick a chat</button>'+
     '<button class="opt" data-a="pdf"><i></i>Download PDF</button>';
   $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
     b.onclick=function(){ closeSheet(); doShare(id,b.dataset.a); };
@@ -552,6 +554,18 @@ async function openShare(id){
 }
 async function doShare(id,how){
   if(how==='pdf'){ window.open(API+'/supplier/card?id='+id,'_blank'); return; }
+  if(how==='post'||how==='postpdf'){
+    /* Straight into the team's WhatsApp from here — no app switch, and it
+       lands where the team already looks rather than in a file someone has
+       to be told about. */
+    toast('Sending…');
+    try{
+      await jpost('/supplier/whatsapp',{id:id,with_pdf:how==='postpdf'});
+      toast('Posted to WhatsApp');
+      load(true);
+    }catch(e){ toast(e.message); }
+    return;
+  }
   var d;
   try{ d=await api('/supplier/card?id='+id+'&text=1'); }
   catch(e){ toast(e.message); return; }

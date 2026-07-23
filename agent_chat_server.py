@@ -2438,6 +2438,80 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(pdf)
 
+    def _handle_supplier_whatsapp(self):
+        """Post a build's status straight into WhatsApp from the button, using
+        the gateway Hermes already has paired — so the supplier never leaves
+        the queue, and the update lands where the team already looks.
+
+        `hermes send` can carry an attachment via MEDIA:<path>, so the PDF
+        goes with the text rather than the text pointing at a file nobody
+        opens. Target lives in .env (WHATSAPP_ORDER_TARGET) rather than being
+        hardcoded: a group id is not something to bury in source, and it
+        changes if the group is ever remade."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 2048)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            oid = int(p.get("id"))
+        except (TypeError, ValueError):
+            self._json(400, {"error": "missing order id"})
+            return
+
+        target = ""
+        try:
+            with open("/root/ops-dashboard/.env") as f:
+                for line in f:
+                    if line.startswith("WHATSAPP_ORDER_TARGET="):
+                        target = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+        except OSError:
+            pass
+        if not target:
+            self._json(400, {"error": "No WhatsApp destination is set up yet — an admin "
+                                      "needs to add WHATSAPP_ORDER_TARGET to .env."})
+            return
+
+        conn = db()
+        o, text = self._status_card(conn, oid)
+        conn.close()
+        if not o:
+            self._json(404, {"error": "no such order"})
+            return
+
+        body = text
+        if p.get("with_pdf"):
+            try:
+                pdf = make_pdf(text.replace("\n", "\n\n"), f"Order #{oid} — status")
+                path = os.path.join(UPLOAD_DIR, f"order-{oid}-status.pdf")
+                with open(path, "wb") as f:
+                    f.write(pdf)
+                body = f"MEDIA:{path}\n{text}"
+            except Exception as e:
+                print(f"[whatsapp] PDF skipped: {e}", flush=True)
+
+        try:
+            r = subprocess.run(["hermes", "send", "--to", target, "--quiet", body],
+                              capture_output=True, text=True, timeout=60)
+        except Exception as e:
+            self._json(502, {"error": f"couldn't reach WhatsApp: {e}"})
+            return
+        if r.returncode != 0:
+            self._json(502, {"error": (r.stderr or r.stdout or "send failed").strip()[:200]})
+            return
+        conn = db()
+        order_event(conn, oid, "shared", f"status sent to WhatsApp ({target})", actor)
+        conn.commit()
+        conn.close()
+        hub_event("order_shared", f"#{oid} status -> WhatsApp", actor, app="orders")
+        self._json(200, {"ok": True, "id": oid, "target": target})
+
     def _handle_supplier_note(self):
         """Let the supplier say something back — 'dial is out of stock', 'sent
         today'. WhatsApp had this and a status dropdown alone doesn't; without
@@ -2808,6 +2882,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_note()
         elif path == "/supplier/tracking":
             self._handle_supplier_tracking()
+        elif path == "/supplier/whatsapp":
+            self._handle_supplier_whatsapp()
         elif path == "/orders/delete":
             self._handle_orders_delete()
         elif path == "/access/set":
