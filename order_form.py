@@ -229,6 +229,22 @@ OF_CSS = r"""
   select.pill-select.cancelled{opacity:.6;}
   select.pill-select[disabled]{opacity:.5;cursor:wait;}
 
+  /* photo thumbnails — real images now that photos live on our own disk */
+  a.thumb{position:relative;display:block;width:46px;height:46px;border-radius:7px;
+    overflow:hidden;border:1px solid var(--border);background:var(--card-2);}
+  a.thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  a.thumb .tn{position:absolute;right:2px;bottom:2px;background:rgba(0,0,0,.68);color:#fff;
+    font-size:9.5px;font-weight:700;border-radius:4px;padding:0 4px;}
+
+  /* delete — quiet until you're on the row, never a primary action */
+  .rowdel{border:1px solid transparent;background:none;color:var(--muted);border-radius:6px;
+    width:28px;height:28px;font-size:17px;line-height:1;cursor:pointer;opacity:.45;
+    transition:opacity .12s,color .12s,border-color .12s;}
+  tr:hover .rowdel{opacity:1;}
+  .rowdel:hover{color:var(--bad);border-color:var(--bad);}
+  .rowdel[disabled]{opacity:.3;cursor:wait;}
+  @media(max-width:720px){ .rowdel{opacity:1;} }
+
   /* what's selling — sortable table */
   .sellhead{display:flex;align-items:baseline;gap:8px;margin:22px 0 10px;}
   .sellhead h3{font-size:12.5px;font-weight:650;color:var(--muted);text-transform:uppercase;
@@ -572,7 +588,17 @@ function showWarnings(w){
 /* ---------------- orders ---------------- */
 function when(s){return s?String(s).replace('T',' ').slice(0,16):'';}
 function money(n){return (n===null||n===undefined||n==='')?'':('₹'+Number(n).toLocaleString('en-IN'));}
+/* Photos live on our own disk now and stream through a role-checked endpoint,
+   so we can show the actual thumbnail instead of a "View" link off to Drive.
+   Drive links stay as the fallback for orders logged before that change. */
 function photoCell(o){
+  var local=[];
+  try{local=o.local_photos?JSON.parse(o.local_photos):[];}catch(e){local=[];}
+  if(local.length){
+    return '<a class="thumb" href="'+API+'/orders/photo?id='+o.id+'&n=0" target="_blank" rel="noopener">'+
+      '<img src="'+API+'/orders/photo?id='+o.id+'&n=0" alt="" loading="lazy">'+
+      (local.length>1?'<span class="tn">+'+(local.length-1)+'</span>':'')+'</a>';
+  }
   var links=[];
   try{links=o.photo_links?JSON.parse(o.photo_links):(o.drive_link?[o.drive_link]:[]);}
   catch(e){links=o.drive_link?[o.drive_link]:[];}
@@ -593,7 +619,7 @@ async function loadOrders(){
     if(!rows.length){$('list').innerHTML='<div class="empty">No orders yet — the first one you save shows up here.</div>';return;}
     $('list').innerHTML='<table class="dt"><thead><tr>'+
       '<th>#</th><th>Logged</th><th>Source</th><th>Customer</th><th>Ship to</th><th>Product</th>'+
-      '<th>Qty</th><th>Price</th><th>Status</th><th>Photos</th></tr></thead><tbody>'+
+      '<th>Qty</th><th>Price</th><th>Status</th><th>Photos</th><th></th></tr></thead><tbody>'+
       rows.map(function(o){
         var st=String(o.status||'new'), spec=specOf(o);
         return '<tr>'+
@@ -616,8 +642,28 @@ async function loadOrders(){
             STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(s)+'</option>';}).join('')+
             '</select></td>'+
           '<td data-l="Photos">'+photoCell(o)+'</td>'+
+          '<td data-l=""><button class="rowdel" data-del="'+o.id+'" title="Delete order #'+o.id+'" aria-label="Delete order '+o.id+'">&times;</button></td>'+
         '</tr>';
       }).join('')+'</tbody></table>';
+    $('list').querySelectorAll('.rowdel').forEach(function(b){
+      b.onclick=async function(){
+        var id=b.dataset.del;
+        var row=b.closest('tr');
+        var who=row.querySelector('.o-strong');
+        if(!confirm('Delete order #'+id+(who?' ('+who.textContent+')':'')+
+                    '?\n\nThis removes the order, its photos and its history for good, '+
+                    'and updates that customer\'s totals. It can\'t be undone.'))return;
+        b.disabled=true;
+        try{
+          var d=await jpost('/orders/delete',{id:+id});
+          row.style.transition='opacity .18s';row.style.opacity='0';
+          setTimeout(function(){row.remove();},180);
+          toast('Order #'+id+' deleted'+
+            (d.customer_orders_left===0?' — that customer had no other orders, so they were removed too':''));
+          loaded={};
+        }catch(e){b.disabled=false;toast(e.message);}
+      };
+    });
     $('list').querySelectorAll('.pill-select').forEach(function(sel){
       sel.onchange=async function(){
         var id=sel.dataset.id, was=sel.dataset.was||sel.value, next=sel.value;

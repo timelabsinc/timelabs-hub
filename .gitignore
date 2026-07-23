@@ -22,3 +22,4 @@ __pycache__/
 .taxonomy-cache.json
 .shopify-order-sync.json
 .sheet-backups/
+access.json

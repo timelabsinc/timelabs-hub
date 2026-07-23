@@ -25,6 +25,10 @@ import urllib.request
 HOST, PORT = "127.0.0.1", 8901
 DB = "/root/ops-dashboard/data/hermes.db"
 UPLOAD_DIR = "/root/ops-dashboard/data/uploads"
+# Where an order's reference photos actually live. Under /root deliberately:
+# nginx can't reach it, so the only way to a photo is through a role-checked
+# endpoint here, never a guessable static URL.
+ORDER_PHOTOS = "/root/ops-dashboard/data/order-photos"
 THEME_BACKUPS = "/root/ops-dashboard/theme-backups"
 FS_ROOT = "/root"   # System-files browser is confined to the Hermes home
 # Chat-photo cap. Modern phone photos routinely exceed the old 11 MB ceiling;
@@ -109,6 +113,7 @@ def hub_event(kind, detail, actor="?", app="key"):
         print(f"[events] {e}", flush=True)
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(ORDER_PHOTOS, exist_ok=True)
 os.makedirs(THEME_BACKUPS, exist_ok=True)
 
 
@@ -129,7 +134,14 @@ def _ensure_orders_schema():
             # Off by default so the supplier queue starts empty rather than
             # dumping every historical order on day one; every new order
             # (either write path) turns this on for itself at creation.
-            "supplier_visible": "INTEGER DEFAULT 0"}
+            "supplier_visible": "INTEGER DEFAULT 0",
+            # Photos used to survive ONLY as Google Drive URLs, so with Google
+            # disconnected an attached photo was written to the temp upload
+            # dir and then referenced by nothing — silently lost. They now
+            # live on our own disk (data/order-photos/<id>/) with Drive kept
+            # as a mirror, which is also what lets the supplier queue show
+            # them: the reference photo is the whole brief for a build.
+            "local_photos": "TEXT"}
     try:
         conn = sqlite3.connect(DB, timeout=5)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
@@ -196,8 +208,42 @@ def _ensure_order_items_schema():
         print(f"[order_items] schema check: {e}", flush=True)
 
 
+def _ensure_order_events_schema():
+    """Per-order timeline: who moved it to which stage, and when.
+
+    Replacing a WhatsApp group with a dashboard loses something real if it
+    isn't recorded — the group at least had timestamps and someone saying
+    "dial is out of stock". This is that history: every status change from
+    either side, plus notes the supplier writes back, so "when did we pay
+    for #147" and "why is #152 stuck" have answers."""
+    try:
+        conn = sqlite3.connect(DB, timeout=5)
+        conn.execute("""CREATE TABLE IF NOT EXISTS order_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL REFERENCES orders(id),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            actor TEXT, kind TEXT NOT NULL, detail TEXT)""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_order_events_order "
+                     "ON order_events(order_id, id)")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[order_events] schema check: {e}", flush=True)
+
+
+def order_event(conn, order_id, kind, detail, actor):
+    """Append to an order's timeline on an existing connection (so it commits
+    with whatever change it describes, never separately from it)."""
+    try:
+        conn.execute("INSERT INTO order_events (order_id, actor, kind, detail) "
+                     "VALUES (?,?,?,?)", (order_id, actor, kind, (detail or "")[:400]))
+    except Exception as e:
+        print(f"[order_events] {e}", flush=True)
+
+
 _ensure_orders_schema()
 _ensure_order_items_schema()
+_ensure_order_events_schema()
 
 
 def _fs_resolve(p):
@@ -783,6 +829,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/supplier/orders":
             self._handle_supplier_orders()
+            return
+        if path == "/supplier/photo":
+            self._handle_supplier_photo(query)
+            return
+        if path == "/orders/photo":
+            self._handle_order_photo(query)
             return
         if path == "/customers/list":
             self._handle_customers_list()
@@ -1716,9 +1768,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         import google_api
         access = google_api.access_token()
         warnings = []
-        if not access:
-            warnings.append("Google isn't connected — photos and the sheet mirror were "
-                            "skipped. Open Drop and reconnect Google.")
         links = []
         if photos and access:
             for i, fp in enumerate(photos):
@@ -1737,15 +1786,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "case_colour, movement, watch_size, supplier_visible) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
             (customer, phone, email, address, pincode, city, state, source, product,
-             price, qty, notes, status, 1 if links else 0, drive_link,
+             price, qty, notes, status, 1 if photos else 0, drive_link,
              json.dumps(links) if links else None,
              attrs.get("case_style"), attrs.get("dial_colour"), attrs.get("dial_style"),
              attrs.get("case_colour"), attrs.get("movement"), attrs.get("watch_size")))
         oid = cur.lastrowid
+
+        # Move the photos somewhere permanent BEFORE reporting success. They
+        # used to exist only as Drive URLs, so with Google disconnected an
+        # attached photo was written to a temp dir, referenced by nothing, and
+        # effectively lost. Drive is now a mirror of these, not the record.
+        stored = []
+        if photos:
+            dest_dir = os.path.join(ORDER_PHOTOS, str(oid))
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+                for i, fp in enumerate(photos):
+                    fn = f"{i + 1}{os.path.splitext(fp)[1].lower()}"
+                    try:
+                        os.replace(fp, os.path.join(dest_dir, fn))
+                    except OSError:      # different filesystem — copy instead
+                        with open(fp, "rb") as src, open(os.path.join(dest_dir, fn), "wb") as dst:
+                            dst.write(src.read())
+                        try:
+                            os.remove(fp)
+                        except OSError:
+                            pass
+                    stored.append(fn)
+            except Exception as e:
+                warnings.append(f"A photo couldn't be filed: {e}")
+            if stored:
+                conn.execute("UPDATE orders SET local_photos=? WHERE id=?",
+                            (json.dumps(stored), oid))
+        if not access:
+            warnings.append(
+                "Google isn't connected, so this order didn't reach the sheet"
+                + (" (the photos are saved here and visible to your supplier)" if stored else "")
+                + ". Open Drop and reconnect Google.")
+
         conn.execute(
             "INSERT INTO order_items (order_id, product, quantity, price_inr, line_total) "
             "VALUES (?,?,?,?,?)",
             (oid, product, qty, price, (price or 0) * qty))
+        order_event(conn, oid, "created",
+                   f"logged via {source or 'order form'} with status {status}", actor)
         row = conn.execute("SELECT received_at FROM orders WHERE id=?", (oid,)).fetchone()
         conn.commit()
         logged = row["received_at"] if row else ""
@@ -1799,9 +1883,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             rows = conn.execute(
                 "SELECT id, received_at, customer_name, customer_phone, customer_email, "
                 "address, pincode, city, state, source, product, quantity, price_inr, "
-                "notes, status, drive_link, photo_links, case_style, dial_colour, "
-                "dial_style, case_colour, movement, watch_size, shopify_name FROM orders "
-                "ORDER BY id DESC LIMIT 100").fetchall()
+                "notes, status, drive_link, photo_links, local_photos, case_style, "
+                "dial_colour, dial_style, case_colour, movement, watch_size, shopify_name "
+                "FROM orders ORDER BY id DESC LIMIT 100").fetchall()
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
@@ -1929,17 +2013,82 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "nothing to update"})
             return
         conn = db()
-        if not conn.execute("SELECT 1 FROM orders WHERE id=?", (oid,)).fetchone():
+        before = conn.execute("SELECT status FROM orders WHERE id=?", (oid,)).fetchone()
+        if not before:
             conn.close()
             self._json(404, {"error": "no such order"})
             return
         vals.append(oid)
         conn.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id=?", vals)
+        # A status move goes on the order's own timeline, so the supplier sees
+        # "paid" appear with a date rather than a value silently changing.
+        if "status" in p and str(p["status"]).strip() != (before["status"] or ""):
+            order_event(conn, oid, "status",
+                       f'{before["status"] or "new"} -> {str(p["status"]).strip()}', actor)
         conn.commit()
         conn.close()
         hub_event("order_updated", f"#{oid}: " + ", ".join(k for k in updatable if k in p),
                  actor, app="orders")
         self._json(200, {"ok": True, "id": oid})
+
+    def _handle_orders_delete(self):
+        """Remove an order completely — the row, its line items, its timeline
+        and its photos. A real delete, not a hidden flag, because the request
+        was to get rid of test and mistaken orders rather than archive them.
+
+        The derived customer is repaired afterwards rather than left behind:
+        their totals are recomputed from what's left, and a customer with no
+        remaining orders is removed too, so deleting an order can't leave a
+        phantom buyer with inflated lifetime spend in the list."""
+        actor = self._order_user()
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 2048)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            oid = int(p.get("id"))
+        except (TypeError, ValueError):
+            self._json(400, {"error": "missing order id"})
+            return
+        conn = db()
+        row = conn.execute(
+            "SELECT customer_name, customer_phone, customer_email, product "
+            "FROM orders WHERE id=?", (oid,)).fetchone()
+        if not row:
+            conn.close()
+            self._json(404, {"error": "no such order"})
+            return
+        conn.execute("DELETE FROM order_items WHERE order_id=?", (oid,))
+        conn.execute("DELETE FROM order_events WHERE order_id=?", (oid,))
+        conn.execute("DELETE FROM orders WHERE id=?", (oid,))
+        conn.commit()
+
+        import customers as customers_mod
+        ckey = customers_mod.key_for(row["customer_phone"], row["customer_email"],
+                                     row["customer_name"])
+        try:
+            remaining = customers_mod.recount(conn, ckey)
+        except Exception as e:
+            remaining = None
+            print(f"[orders-delete] customer repair skipped: {e}", flush=True)
+        conn.close()
+
+        photo_dir = os.path.join(ORDER_PHOTOS, str(oid))
+        if os.path.isdir(photo_dir):
+            try:
+                for fn in os.listdir(photo_dir):
+                    os.remove(os.path.join(photo_dir, fn))
+                os.rmdir(photo_dir)
+            except OSError as e:
+                print(f"[orders-delete] photo cleanup: {e}", flush=True)
+        hub_event("order_deleted", f'#{oid} {row["product"] or ""} ({row["customer_name"] or "?"})',
+                 actor, app="orders")
+        self._json(200, {"ok": True, "id": oid, "customer_orders_left": remaining})
 
     def _handle_order_items_relabel(self):
         """Rename a product for analytics — retroactive across every order
@@ -2005,6 +2154,76 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         key=str.lower)
         self._json(200, {"products": merged})
 
+    # --- Order photos ------------------------------------------------------
+    def _photo_names(self, conn, order_id, supplier_only=False):
+        """The stored filenames for an order, or None if it isn't visible to
+        this caller. supplier_only additionally requires the order to have
+        been shared with the supplier queue."""
+        q = "SELECT local_photos FROM orders WHERE id=?"
+        args = [order_id]
+        if supplier_only:
+            q += " AND supplier_visible=1"
+        row = conn.execute(q, args).fetchone()
+        if not row:
+            return None
+        try:
+            names = json.loads(row["local_photos"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            return []
+        return [n for n in names if isinstance(n, str)]
+
+    def _serve_order_photo(self, query, supplier_only):
+        params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+        try:
+            oid = int(params.get("id", ""))
+            idx = int(params.get("n", "0"))
+        except ValueError:
+            self._json(400, {"error": "bad request"})
+            return
+        conn = db()
+        names = self._photo_names(conn, oid, supplier_only)
+        conn.close()
+        if names is None:
+            self._json(404, {"error": "no such order"})
+            return
+        if not (0 <= idx < len(names)):
+            self._json(404, {"error": "no such photo"})
+            return
+        # Rebuild the path from the order id and an index into the stored
+        # list — the client never supplies a filename, so there's nothing
+        # here to traverse out of.
+        path = os.path.join(ORDER_PHOTOS, str(oid), os.path.basename(names[idx]))
+        if not os.path.isfile(path):
+            self._json(404, {"error": "photo missing"})
+            return
+        ext = os.path.splitext(path)[1].lower()
+        ctype = {".png": "image/png", ".webp": "image/webp"}.get(ext, "image/jpeg")
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._json(404, {"error": "photo unreadable"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        # Private: it's behind a role check, so no shared cache may keep it.
+        self.send_header("Cache-Control", "private, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_order_photo(self, query):
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        self._serve_order_photo(query, supplier_only=False)
+
+    def _handle_supplier_photo(self, query):
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        self._serve_order_photo(query, supplier_only=True)
+
     # --- Supplier build queue: what to build, never who for -----------------
     def _supplier_ok(self):
         """admin or supplier role — anyone else, including a signed-in person
@@ -2033,17 +2252,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn = db()
         try:
             rows = conn.execute(
-                "SELECT id, received_at, product, quantity, status, "
+                "SELECT id, received_at, product, quantity, status, notes, "
                 "case_style, dial_colour, dial_style, case_colour, movement, "
-                "watch_size FROM orders "
+                "watch_size, local_photos FROM orders "
                 "WHERE supplier_visible=1 AND status != 'cancelled' "
                 "ORDER BY id ASC").fetchall()
+            events = {}
+            for e in conn.execute(
+                    "SELECT order_id, created_at, actor, kind, detail FROM order_events "
+                    "WHERE order_id IN (SELECT id FROM orders WHERE supplier_visible=1) "
+                    "ORDER BY id ASC"):
+                events.setdefault(e["order_id"], []).append({
+                    "at": e["created_at"], "kind": e["kind"], "detail": e["detail"],
+                    # Who acted matters (did we pay, or did they mark it?) but
+                    # a full email address doesn't need to travel here.
+                    "by": (e["actor"] or "").split("@")[0]})
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
             return
         conn.close()
-        self._json(200, {"orders": [dict(r) for r in rows], "statuses": STATUSES})
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                n = len(json.loads(d.pop("local_photos") or "[]"))
+            except (json.JSONDecodeError, TypeError):
+                n = 0
+            d["photos"] = n
+            d["timeline"] = events.get(d["id"], [])
+            out.append(d)
+        self._json(200, {"orders": out, "statuses": STATUSES})
 
     def _handle_supplier_status(self):
         """Status-only, and only on an order actually shared with this role —
@@ -2071,16 +2310,58 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         conn = db()
         row = conn.execute(
-            "SELECT 1 FROM orders WHERE id=? AND supplier_visible=1", (oid,)).fetchone()
+            "SELECT status FROM orders WHERE id=? AND supplier_visible=1", (oid,)).fetchone()
         if not row:
             conn.close()
             self._json(404, {"error": "no such order"})
             return
+        was = row["status"] or "new"
+        if was == status:
+            conn.close()
+            self._json(200, {"ok": True, "id": oid, "status": status, "unchanged": True})
+            return
         conn.execute("UPDATE orders SET status=? WHERE id=?", (status, oid))
+        order_event(conn, oid, "status", f"{was} -> {status}", actor)
         conn.commit()
         conn.close()
         hub_event("order_updated", f"#{oid}: status -> {status}", actor, app="orders")
         self._json(200, {"ok": True, "id": oid, "status": status})
+
+    def _handle_supplier_note(self):
+        """Let the supplier say something back — 'dial is out of stock', 'sent
+        today'. WhatsApp had this and a status dropdown alone doesn't; without
+        it the dashboard is strictly worse than the group it replaces for
+        anything that isn't a clean state change."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            oid = int(p.get("id"))
+        except (TypeError, ValueError):
+            self._json(400, {"error": "missing order id"})
+            return
+        note = str(p.get("note", "")).strip()[:400]
+        if not note:
+            self._json(400, {"error": "write something first"})
+            return
+        conn = db()
+        if not conn.execute("SELECT 1 FROM orders WHERE id=? AND supplier_visible=1",
+                            (oid,)).fetchone():
+            conn.close()
+            self._json(404, {"error": "no such order"})
+            return
+        order_event(conn, oid, "note", note, actor)
+        conn.commit()
+        conn.close()
+        hub_event("supplier_note", f"#{oid}: {note[:120]}", actor, app="orders")
+        self._json(200, {"ok": True, "id": oid})
 
     def _handle_customers_list(self):
         if not self._has_tool("orders"):
@@ -2412,6 +2693,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_order_items_relabel()
         elif path == "/supplier/status":
             self._handle_supplier_status()
+        elif path == "/supplier/note":
+            self._handle_supplier_note()
+        elif path == "/orders/delete":
+            self._handle_orders_delete()
         elif path == "/access/set":
             self._handle_access_set()
         elif path == "/shopify/product/ai-draft":

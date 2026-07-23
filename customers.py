@@ -111,6 +111,43 @@ def upsert_from_order(conn, order):
     return dict(conn.execute("SELECT * FROM customers WHERE ckey=?", (ckey,)).fetchone())
 
 
+def recount(conn, ckey):
+    """Recompute one customer's totals from the orders that remain, and drop
+    them entirely if none do. Called after an order is deleted: totals are
+    derived, so without this a deleted order would keep counting toward
+    lifetime spend and the VIP tag forever. Returns how many orders are left.
+    """
+    ensure_schema(conn)
+    row = conn.execute("SELECT * FROM customers WHERE ckey=?", (ckey,)).fetchone()
+    if not row:
+        return 0
+    kind, _, val = ckey.partition(":")
+    if kind == "p":
+        where, params = "REPLACE(REPLACE(customer_phone,' ',''),'-','') LIKE ?", ("%" + val,)
+    elif kind == "e":
+        where, params = "LOWER(customer_email)=?", (val,)
+    else:
+        where, params = "LOWER(customer_name)=?", (val,)
+    agg = conn.execute(
+        f"SELECT COUNT(*) n, COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) spent, "
+        f"MIN(received_at) first_at, MAX(received_at) last_at FROM orders "
+        f"WHERE status != 'cancelled' AND {where}", params).fetchone()
+    n = agg["n"] or 0
+    if not n:
+        conn.execute("DELETE FROM customers WHERE ckey=?", (ckey,))
+        conn.commit()
+        return 0
+    spent = float(agg["spent"] or 0)
+    conn.execute(
+        "UPDATE customers SET orders_count=?, total_spent=?, avg_order_value=?, "
+        "first_order_at=?, last_order_at=?, auto_tags=?, updated_at=datetime('now') "
+        "WHERE ckey=?",
+        (n, spent, round(spent / n, 2), agg["first_at"], agg["last_at"],
+         _tags(n, spent), ckey))
+    conn.commit()
+    return n
+
+
 def all_tags(row):
     parts = [t.strip() for t in ((row.get("auto_tags") or "") + "," +
                                  (row.get("manual_tags") or "")).split(",")]

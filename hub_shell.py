@@ -803,13 +803,20 @@ SECTION_LABEL = {"face": "Home", "drop": "Drop", "ledger": "Ledger",
                  "chat": "Chat", "tools": "Tools", "orders": "Orders"}
 
 
-def hub_header(active):
+def hub_header(active, actions=""):
+    """Shared top bar + app nav.
+
+    `actions` is app-specific chrome (Drop's search / view-toggle / upload
+    buttons) injected before the who-chip. It exists so an app with its own
+    toolbar can still use the shared header instead of forking a copy of it —
+    a fork is how Drop's nav ended up advertising a "Ledger" tab months after
+    the nav item became "Orders" everywhere else."""
     label = SECTION_LABEL.get(active, "OS")
     return (
         '<header class="topbar">'
         '<a class="brand" href="/ops/#overview"><span class="brand-dot">L</span>'
         f'<span class="brand-name">Labs <span>{label}</span></span></a>'
-        '<div class="top-actions"><span id="who" class="who"></span></div>'
+        f'<div class="top-actions">{actions}<span id="who" class="who"></span></div>'
         '</header>\n  ' + _appnav(active=active, drop_ready=True)
     )
 

@@ -871,8 +871,11 @@ def main():
         ledger.build()
     except Exception as e:
         print(f"[ledger] {e}", file=sys.stderr)
+    # drop_chrome doesn't render a page — it re-syncs Drop's header/nav from
+    # hub_shell so the hand-written SPA can't drift out of step with the rest.
     for mod in ("tools", "blog", "product_updater", "product_builder",
-                "content_updater", "theme_editor", "files", "order_form", "supplier"):
+                "content_updater", "theme_editor", "files", "order_form", "supplier",
+                "drop_chrome"):
         try:
             __import__(mod).build()
         except Exception as e:
