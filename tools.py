@@ -53,8 +53,7 @@ TOOLS = [
         ("product", "Product builder", "Spin up a new product from parts, photos &amp; a spec.", "/ops/product-builder.html", "live"),
     ]),
     ("Admin", [
-        ("key", "Key", "Who can sign in to Labs OS — invite &amp; remove people.", "/ops/#key", "admin"),
-        ("access", "Tool access", "Who may use which tools — roles &amp; restricted logins.", "/ops/access.html", "admin"),
+        ("access", "People &amp; access", "Invite people, set roles, remove — who can sign in and what they can do.", "/ops/access.html", "admin"),
         ("files", "System files", "Browse the Hermes server files — read-only, hidden-file toggle.", "/ops/files.html", "admin"),
         ("map", "System map", "How the whole OS fits together — services, health, roadmap.", "/ops/architecture.html", "admin"),
     ]),

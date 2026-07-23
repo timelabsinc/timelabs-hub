@@ -874,6 +874,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         print(f"[key] {admin} {action}ed {email}", flush=True)
         hub_event(f"member_{action}", email, admin)
+        try:                                    # keep the tool-access gate in step
+            import access_store
+            access_store.forget(email) if action == "remove" else access_store.sync_nginx()
+        except Exception as _e:
+            print(f"[key] gate sync skipped: {_e}", flush=True)
         self._json(200, {"ok": True, "members": members})
 
     # --- Shopify connect (OAuth) -------------------------------------------

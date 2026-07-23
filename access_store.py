@@ -132,6 +132,16 @@ def everyone():
     return out
 
 
+def forget(email):
+    """Drop a person's role record (call when they leave the allowlist) and
+    refresh the gate so no stale restriction lingers."""
+    email = (email or "").strip().lower()
+    data = _load()
+    if data.get("roles", {}).pop(email, None) is not None:
+        _save(data)
+    sync_nginx()
+
+
 # ------------------------------------------------------------------ nginx gate
 def build_map():
     """nginx map: authenticated email -> where they're confined.
