@@ -125,7 +125,11 @@ def _ensure_orders_schema():
             # live API call, so it gets one unified order number like every
             # other channel and shows up in the same lists, totals and sheet.
             "shopify_order_id": "TEXT", "shopify_name": "TEXT",
-            "financial_status": "TEXT"}
+            "financial_status": "TEXT",
+            # Off by default so the supplier queue starts empty rather than
+            # dumping every historical order on day one; every new order
+            # (either write path) turns this on for itself at creation.
+            "supplier_visible": "INTEGER DEFAULT 0"}
     try:
         conn = sqlite3.connect(DB, timeout=5)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
@@ -777,6 +781,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/orders/products":
             self._handle_orders_products()
             return
+        if path == "/supplier/orders":
+            self._handle_supplier_orders()
+            return
         if path == "/customers/list":
             self._handle_customers_list()
             return
@@ -834,6 +841,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(200, {"events": [dict(r) for r in rows]})
             return
         if path == "/sessions":
+            # Every chat session ever had, across everyone — fine when every
+            # signed-in person was an equally-trusted admin, not once a
+            # deliberately-restricted outside role (supplier) can sign in too.
+            if not self._has_tool("chat"):
+                self._json(403, {"error": "not available for this account"})
+                return
             conn = db()
             rows = conn.execute(
                 "SELECT s.id, s.title, s.updated_at, "
@@ -844,6 +857,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(200, {"sessions": [dict(r) for r in rows]})
             return
         if path == "/history":
+            if not self._has_tool("chat"):
+                self._json(403, {"error": "not available for this account"})
+                return
             params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
             try:
                 session_id = int(params.get("session", 1))
@@ -1617,14 +1633,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------- order form
     def _order_user(self):
-        """Any signed-in (allowlisted) user may log orders — access is managed
-        in Key, not here. An empty header means SSO didn't populate it."""
+        """The caller's email, or '' if SSO didn't populate the header. Only
+        an identity — pair with _has_tool() wherever the endpoint returns
+        anything a restricted role (intake, supplier) shouldn't see."""
         return (self.headers.get("X-User-Email") or "").strip().lower()
+
+    def _has_tool(self, tool_key):
+        """Role-gate an API call directly, rather than trusting that nginx's
+        page-level redirect was the only door to it. It wasn't: nginx only
+        gates loading /ops/*.html — /ops/agent/api/ has its own location
+        block that just checks 'signed in', so before this, an intake or
+        supplier account could call any endpoint here by URL alone, PII
+        included, without ever touching a page it's blocked from. Every
+        signed-in person used to be a fully-trusted admin in practice, which
+        is the only reason that never mattered until a genuinely restricted
+        outside role (supplier) existed."""
+        email = self._order_user()
+        if not email:
+            return False
+        import access_store
+        return access_store.can_use(email, tool_key)
 
     def _handle_order_create(self):
         actor = self._order_user()
-        if not actor:
-            self._json(403, {"error": "sign in first"})
+        if not (self._has_tool("orders") or self._has_tool("intake")):
+            self._json(403, {"error": "not available for this account"})
             return
         length = int(self.headers.get("Content-Length", 0))
         try:
@@ -1701,8 +1734,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "INSERT INTO orders (customer_name, customer_phone, customer_email, address, "
             "pincode, city, state, source, product, price_inr, quantity, notes, status, "
             "has_image, drive_link, photo_links, case_style, dial_colour, dial_style, "
-            "case_colour, movement, watch_size) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "case_colour, movement, watch_size, supplier_visible) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
             (customer, phone, email, address, pincode, city, state, source, product,
              price, qty, notes, status, 1 if links else 0, drive_link,
              json.dumps(links) if links else None,
@@ -1758,8 +1791,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          "warnings": warnings})
 
     def _handle_orders_list(self):
-        if not self._order_user():
-            self._json(403, {"error": "sign in first"})
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
             return
         conn = db()
         try:
@@ -1780,9 +1813,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _handle_orders_parse(self):
         """Live helper for the form: address → city/state, product → attributes.
-        Keeps the vocabulary server-side so there's one implementation of it."""
-        if not self._order_user():
-            self._json(403, {"error": "sign in first"})
+        Keeps the vocabulary server-side so there's one implementation of it.
+        Pure computation on whatever the caller sends — no existing record is
+        read — so intake gets this too, same as /orders/create."""
+        if not (self._has_tool("orders") or self._has_tool("intake")):
+            self._json(403, {"error": "not available for this account"})
             return
         length = int(self.headers.get("Content-Length", 0))
         try:
@@ -1814,8 +1849,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         of being re-fetched live on every page load. Same tables `labs sales`
         and Hermes query directly, so the dashboard, the form and chat can
         never show three different numbers for the same question."""
-        if not self._order_user():
-            self._json(403, {"error": "sign in first"})
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
             return
         import order_taxonomy
         conn = db()
@@ -1866,8 +1901,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         PATCH — renaming a product for analytics goes through
         /orders/items/relabel instead, which is retroactive and explicit."""
         actor = self._order_user()
-        if not actor:
-            self._json(403, {"error": "sign in first"})
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
             return
         length = int(self.headers.get("Content-Length", 0))
         try:
@@ -1912,8 +1947,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         once. Never touches the order itself or what it says was charged,
         only the label What's Selling groups by."""
         actor = self._order_user()
-        if not actor:
-            self._json(403, {"error": "sign in first"})
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
             return
         length = int(self.headers.get("Content-Length", 0))
         try:
@@ -1943,9 +1978,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         (logged or synced) plus the live Shopify catalogue, merged once per
         page load rather than queried per keystroke — the list is small
         enough that client-side filtering is instant and this keeps the
-        combobox usable even if Shopify is briefly unreachable."""
-        if not self._order_user():
-            self._json(403, {"error": "sign in first"})
+        combobox usable even if Shopify is briefly unreachable. Product names
+        aren't PII, so intake gets this too, same as /orders/create."""
+        if not (self._has_tool("orders") or self._has_tool("intake")):
+            self._json(403, {"error": "not available for this account"})
             return
         conn = db()
         try:
@@ -1969,9 +2005,86 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         key=str.lower)
         self._json(200, {"products": merged})
 
+    # --- Supplier build queue: what to build, never who for -----------------
+    def _supplier_ok(self):
+        """admin or supplier role — anyone else, including a signed-in person
+        with no role record at all, is refused."""
+        email = (self.headers.get("X-User-Email") or "").strip().lower()
+        if not email:
+            return False
+        import access_store
+        return access_store.get_role(email) in ("admin", "supplier")
+
+    def _handle_supplier_orders(self):
+        """The build queue: order number, what to build, quantity, status.
+        The SELECT itself never names a PII or price column, so there is no
+        code path here that could leak one even by accident — this isn't a
+        matter of the response happening to omit fields the UI doesn't show.
+
+        No separate "paid" flag: `status` already has a paid stage, and it
+        means "we've paid the supplier" — Shopify's financial_status means
+        "the customer paid us", a fact about a different relationship
+        entirely that has no bearing on building the watch, so it's excluded
+        rather than surfaced under a confusingly-similar name."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        from order_form import STATUSES
+        conn = db()
+        try:
+            rows = conn.execute(
+                "SELECT id, received_at, product, quantity, status, "
+                "case_style, dial_colour, dial_style, case_colour, movement, "
+                "watch_size FROM orders "
+                "WHERE supplier_visible=1 AND status != 'cancelled' "
+                "ORDER BY id ASC").fetchall()
+        except sqlite3.OperationalError as e:
+            conn.close()
+            self._json(500, {"error": str(e)})
+            return
+        conn.close()
+        self._json(200, {"orders": [dict(r) for r in rows], "statuses": STATUSES})
+
+    def _handle_supplier_status(self):
+        """Status-only, and only on an order actually shared with this role —
+        the ownership check is server-side, not left to the UI only offering
+        shared orders."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        from order_form import STATUSES
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 2048)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            oid = int(p.get("id"))
+        except (TypeError, ValueError):
+            self._json(400, {"error": "missing order id"})
+            return
+        status = str(p.get("status", "")).strip()[:40]
+        if not status or status not in STATUSES:
+            self._json(400, {"error": "unrecognised status"})
+            return
+        conn = db()
+        row = conn.execute(
+            "SELECT 1 FROM orders WHERE id=? AND supplier_visible=1", (oid,)).fetchone()
+        if not row:
+            conn.close()
+            self._json(404, {"error": "no such order"})
+            return
+        conn.execute("UPDATE orders SET status=? WHERE id=?", (status, oid))
+        conn.commit()
+        conn.close()
+        hub_event("order_updated", f"#{oid}: status -> {status}", actor, app="orders")
+        self._json(200, {"ok": True, "id": oid, "status": status})
+
     def _handle_customers_list(self):
-        if not self._order_user():
-            self._json(403, {"error": "sign in first"})
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
             return
         import customers as customers_mod
         conn = db()
@@ -2019,6 +2132,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, {"committed": commit, "results": results})
 
     def _handle_new_session(self):
+        if not self._has_tool("chat"):
+            self._json(403, {"error": "not available for this account"})
+            return
         conn = db()
         cur = conn.execute("INSERT INTO webchat_sessions (title) VALUES ('New chat')")
         conn.commit()
@@ -2027,7 +2143,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, {"id": sid})
 
     def _handle_send(self):
-        # Shell access is granted per role, not to everyone who can chat.
+        # Shell access is granted per role, and now so is chat access at
+        # all — the PREAMBLE hands every caller a fair amount of business
+        # context regardless of tool access, which a deliberately-restricted
+        # role (supplier, intake) has no reason to receive.
+        if not self._has_tool("chat"):
+            self._json(403, {"error": "not available for this account"})
+            return
         tools_for_caller = toolset_for(self.headers.get("X-User-Email"))
         length = int(self.headers.get("Content-Length", 0))
         try:
@@ -2288,6 +2410,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_orders_update()
         elif path == "/orders/items/relabel":
             self._handle_order_items_relabel()
+        elif path == "/supplier/status":
+            self._handle_supplier_status()
         elif path == "/access/set":
             self._handle_access_set()
         elif path == "/shopify/product/ai-draft":

@@ -33,7 +33,12 @@ from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS
 
 OUT = "/var/www/ops/order-form.html"
 
-STATUSES = ["new", "confirmed", "in build", "shipped", "delivered", "cancelled"]
+# Matches the real supplier pipeline (acknowledged and paid are separate,
+# on-purpose, tracked-apart states — that gap was the whole reason tracking
+# used to fall apart): sent -> acknowledged by supplier -> we've paid them ->
+# parts in transit -> received & assembled -> shipped -> delivered.
+STATUSES = ["new", "acknowledged", "paid", "in transit", "assembled", "shipped",
+            "delivered", "cancelled"]
 DEFAULT_SOURCES = ["CC", "TLC", "Offkicks"]
 
 OF_CSS = r"""

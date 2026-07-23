@@ -53,6 +53,13 @@ ROLES = {
         "home": "/intake/",
         "tools": ["intake"],
     },
+    "supplier": {
+        "label": "Supplier",
+        "blurb": "The build queue only — order number, spec, photos, status. No customer "
+                 "name, phone, address, or price ever leaves the server for this role.",
+        "home": "/ops/supplier.html",
+        "tools": ["supplier"],
+    },
 }
 DEFAULT_ROLE = "full"
 

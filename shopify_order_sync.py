@@ -138,7 +138,8 @@ def sync(actor="shopify-sync"):
                     "INSERT INTO orders (received_at, customer_name, customer_phone, "
                     "customer_email, address, pincode, city, state, source, product, "
                     "price_inr, quantity, status, shopify_order_id, shopify_name, "
-                    "financial_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "financial_status, supplier_visible) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     ((o.get("createdAt") or "")[:19].replace("T", " "),
                      name, phone, email, _address(o), addr.get("zip") or "",
                      addr.get("city") or "", addr.get("province") or "",

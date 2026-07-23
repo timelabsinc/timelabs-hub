@@ -31,6 +31,7 @@ IC = {
     "access": '<path d="M16 11a4 4 0 1 0-8 0"/><circle cx="12" cy="7" r="3"/><path d="M4 21v-1a6 6 0 0 1 6-6h1"/><rect x="14" y="14" width="7" height="6" rx="1.5"/><path d="M16 14v-2a2 2 0 0 1 4 0v2"/>',
     "post": '<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h4"/><path d="M15 3l3 3"/>',
     "orders": '<path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/>',
+    "supplier": '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
 }
 
 # (key, name, description, href-or-None, status)  status: "live" | "soon" | "admin"
@@ -56,6 +57,7 @@ TOOLS = [
         ("access", "People &amp; access", "Invite people, set roles, remove — who can sign in and what they can do.", "/ops/access.html", "admin"),
         ("files", "System files", "Browse the Hermes server files — read-only, hidden-file toggle.", "/ops/files.html", "admin"),
         ("map", "System map", "How the whole OS fits together — services, health, roadmap.", "/ops/architecture.html", "admin"),
+        ("supplier", "Supplier build queue", "What your supplier sees — order number, spec, status. No customer details, no price.", "/ops/supplier.html", "admin"),
     ]),
 ]
 
