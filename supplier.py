@@ -297,6 +297,30 @@ SUP_CSS = r"""
   .shiprow .n{color:var(--muted);font-size:12px;min-width:38px;}
   .shiprow .st{margin-left:auto;font-size:11px;color:var(--muted);text-transform:uppercase;
     letter-spacing:.04em;font-weight:650;}
+  /* what's owed — the headline the Shipments tab exists to answer */
+  .owedcard{background:var(--card);border:1px solid var(--accent);border-radius:var(--r);
+    box-shadow:var(--shadow);padding:16px 18px;margin-bottom:16px;}
+  .owedtop{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}
+  .owedtop b{font-size:26px;font-weight:800;color:var(--ink);letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums;}
+  .owedtop span{font-size:11.5px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.05em;font-weight:650;}
+  .owedbar{display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;}
+  .owedbar .b{font-size:12.5px;color:var(--muted);}
+  .owedbar .b b{color:var(--ink);font-weight:650;}
+  .owedactions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
+  .owedactions button{min-height:var(--tap);padding:0 15px;border-radius:var(--r-s);
+    font:inherit;font-size:13.5px;font-weight:650;cursor:pointer;}
+  .owedactions .primary{border:none;background:var(--ink);color:var(--bg);}
+  .owedactions .ghost{border:1px solid var(--border);background:var(--card);color:var(--ink);}
+  .shippaid{display:flex;gap:14px;margin-top:6px;flex-wrap:wrap;}
+  .shippaid span{font-size:12px;color:var(--muted);}
+  .shippaid span b{color:var(--ink);font-weight:650;}
+  .shippaid .settled{color:var(--good);font-weight:650;}
+  .shiprecord{margin-top:10px;border:none;background:none;color:var(--accent);
+    font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;padding:6px 2px;
+    min-height:32px;}
+
   .shipform{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:14px;
     background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:14px;}
   @media(max-width:560px){ .shipform{grid-template-columns:1fr;} }
@@ -344,7 +368,7 @@ function ago(s){
 }
 function cls(s){return String(s||'').replace(/[^a-z]/gi,'');}
 
-var STATUSES=[], ORDERS=[], filter='attn', q='', openDetail={}, sort='oldest', onlyPhotos=false;
+var STATUSES=[], ORDERS=[], filter='attn', q='', openDetail={}, sort='oldest', onlyPhotos=false, IS_ADMIN=false;
 var stageF='', caseF='', moveF='', selectMode=false, SEL={}, SHIPS=[];
 /* Everything before "shipped" still wants something from them; the tail end
    is history. This split is what makes the queue a to-do list. */
@@ -779,17 +803,86 @@ function money(n,cur){
   if(n===null||n===undefined||n==='')return '—';
   return (cur||'USD')+' '+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 }
+function inr(n){
+  return '₹'+Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+var ARREARS=null;
+function drawOwed(){
+  if(!ARREARS){ $('owed-box').innerHTML=''; return; }
+  var owed=ARREARS.owed_inr||0;
+  var billName=localStorage.getItem('labs_bill_from')||'';
+  $('owed-box').innerHTML='<div class="owedcard">'+
+    '<div class="owedtop"><b>'+inr(Math.max(owed,0))+'</b><span>'+
+      (owed>0.5?'currently owed':owed<-0.5?'in credit':'settled')+'</span></div>'+
+    '<div class="owedbar">'+
+      '<span class="b">Shipment cost <b>'+inr(ARREARS.total_cost_inr)+'</b></span>'+
+      '<span class="b">Paid so far <b>'+inr(ARREARS.total_paid_inr)+'</b></span>'+
+    '</div>'+
+    '<div class="owedactions">'+
+      (IS_ADMIN?'<button class="ghost" id="rec-pay">Record a payment</button>':'')+
+      '<button class="primary" id="gen-bill">Generate bill</button>'+
+    '</div>'+
+  '</div>';
+  var b=$('gen-bill');
+  if(b)b.onclick=function(){
+    var name=prompt('Business name for the bill header:',billName);
+    if(name===null)return;
+    name=name.trim();
+    if(name){ localStorage.setItem('labs_bill_from',name); }
+    window.open(API+'/supplier/bill?from='+encodeURIComponent(name||'Supplier'),'_blank');
+  };
+  var r=$('rec-pay');
+  if(r)r.onclick=openRecordPayment;
+}
+function openRecordPayment(){
+  var opts=SHIPS.map(function(s){
+    return '<button class="opt" data-s="'+s.id+'"><i></i>'+esc(s.code)+
+      ' <span style="opacity:.6">('+money(s.total_cost,s.currency)+')</span></button>';
+  }).join('')+'<button class="opt" data-s=""><i></i>Unallocated (not tied to a shipment)</button>';
+  $('sheet-title').textContent='Record a payment';
+  $('sheet-opts').innerHTML=opts;
+  $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
+    b.onclick=function(){
+      closeSheet();
+      var sid=b.dataset.s;
+      var amount=prompt('Amount paid:');
+      if(!amount)return;
+      var currency=(prompt('Currency (USD or INR):','USD')||'USD').trim().toUpperCase();
+      var note=prompt('Note (optional):')||'';
+      jpost('/supplier/payment/record',{amount:amount,currency:currency,
+        shipment_id:sid||null,note:note}).then(function(){
+        toast('Payment recorded');
+        loadShips();
+      }).catch(function(e){ toast(e.message); });
+    };
+  });
+  $('sheet').classList.add('on');
+}
 async function loadShips(){
   try{
     var d=await api('/supplier/shipments');
     SHIPS=d.shipments||[];
     var unassigned=d.unassigned||[];
+    try{ ARREARS=await api('/supplier/arrears'); }catch(e){ ARREARS=null; }
+    drawOwed();
+    var byId={};
+    (ARREARS&&ARREARS.shipments||[]).forEach(function(a){ byId[a.id]=a; });
     if(!SHIPS.length){
       $('shiplist').innerHTML='<div class="sempty">No shipments yet. Add one above, then '+
         'select builds in the queue and use &ldquo;Add to shipment&rdquo;.</div>';
       return;
     }
     $('shiplist').innerHTML=SHIPS.map(function(s){
+      var a=byId[s.id];
+      var paidLine='';
+      if(a){
+        var settled=a.balance_inr<=0.5;
+        paidLine='<div class="shippaid">'+
+          '<span>Paid <b>'+inr(a.paid_inr)+'</b></span>'+
+          '<span class="'+(settled?'settled':'')+'">'+
+            (settled?'Settled':'Balance <b>'+inr(a.balance_inr)+'</b>')+'</span>'+
+        '</div>';
+      }
       return '<div class="shipcard">'+
         '<div class="shiptop">'+
           '<span class="shipcode">'+esc(s.code||'')+'</span>'+
@@ -800,6 +893,8 @@ async function loadShips(){
         '</div>'+
         '<div class="shipmeta" style="margin-top:4px">Total '+esc(money(s.total_cost,s.currency))+
           (s.order_count?' ÷ '+s.order_count:'')+'</div>'+
+        paidLine+
+        (IS_ADMIN?'<button class="shiprecord" data-payship="'+s.id+'">+ Record a payment for this shipment</button>':'')+
         (s.orders&&s.orders.length?'<div class="shiporders">'+s.orders.map(function(o){
           return '<div class="shiprow"><span class="n">#'+o.id+'</span>'+
             '<span>'+esc((o.product||'').slice(0,46))+'</span>'+
@@ -809,6 +904,20 @@ async function loadShips(){
     }).join('')+
       (unassigned.length?'<p class="shipmeta" style="margin-top:6px">'+unassigned.length+
         ' build'+(unassigned.length===1?'':'s')+' not yet in a shipment.</p>':'');
+    $('shiplist').querySelectorAll('[data-payship]').forEach(function(b){
+      b.onclick=function(){
+        var sid=b.dataset.payship;
+        var amount=prompt('Amount paid:');
+        if(!amount)return;
+        var currency=(prompt('Currency (USD or INR):','USD')||'USD').trim().toUpperCase();
+        var note=prompt('Note (optional):')||'';
+        jpost('/supplier/payment/record',{amount:amount,currency:currency,
+          shipment_id:sid,note:note}).then(function(){
+          toast('Payment recorded');
+          loadShips();
+        }).catch(function(e){ toast(e.message); });
+      };
+    });
   }catch(e){ $('shiplist').innerHTML='<div class="sempty">'+esc(e.message)+'</div>'; }
 }
 $('shipform').onsubmit=async function(e){
@@ -923,6 +1032,7 @@ load();
 
 fetch(API+'/whoami').then(function(r){return r.ok?r.json():null;}).then(function(i){
   if(i&&i.email){var w=$('who');if(w)w.textContent=i.email;}
+  if(i&&i.admin){IS_ADMIN=true; if(ARREARS)drawOwed();}
 }).catch(function(){});
 """
 
@@ -1012,6 +1122,7 @@ def build():
   </section>
 
   <section class="pane" id="pane-ships">
+    <div id="owed-box"></div>
     <form class="shipform" id="shipform">
       <input id="s-code" placeholder="Shipment number" aria-label="Shipment number" autocomplete="off" required>
       <input id="s-carrier" placeholder="Carrier (DHL, EMS&hellip;)" aria-label="Carrier" autocomplete="off">

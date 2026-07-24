@@ -274,6 +274,22 @@ def _ensure_shipments_schema():
         cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
         if cols and "shipment_id" not in cols:
             conn.execute("ALTER TABLE orders ADD COLUMN shipment_id INTEGER")
+        # Payments toward what's owed to the supplier. shipment_id is nullable
+        # on purpose: a payment can be recorded against one consignment
+        # ("this $500 settles shipment 125678") or left unallocated ("sent
+        # $500, haven't said which shipment yet") — either way it counts
+        # against the running total owed, which is what "arrears" means here.
+        # Partial payments are the reason this is its own table rather than a
+        # paid/unpaid flag: a shipment can be paid down over several transfers.
+        conn.execute("""CREATE TABLE IF NOT EXISTS supplier_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            shipment_id INTEGER REFERENCES shipments(id),
+            amount REAL NOT NULL,
+            currency TEXT DEFAULT 'USD',
+            note TEXT, actor TEXT)""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_supplier_payments_shipment "
+                     "ON supplier_payments(shipment_id)")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -881,6 +897,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/supplier/shipments":
             self._handle_supplier_shipments()
+            return
+        if path == "/supplier/arrears":
+            self._handle_supplier_arrears()
+            return
+        if path == "/supplier/bill":
+            self._handle_supplier_bill(query)
             return
         if path == "/orders/photo":
             self._handle_order_photo(query)
@@ -2517,6 +2539,124 @@ class Handler(http.server.BaseHTTPRequestHandler):
         hub_event("order_updated", f"#{oid}: status -> {status}", actor, app="orders")
         self._json(200, {"ok": True, "id": oid, "status": status})
 
+    # Same effective INR/USD rate the Ledger and Home dashboard already use —
+    # bank charges and transfer fees included, not the market rate — so a
+    # rupee figure here means the same thing as the same figure shown
+    # anywhere else in the OS.
+    _USD_INR = 100.0
+
+    def _to_inr(self, amount, currency):
+        if not amount:
+            return 0.0
+        return float(amount) * (self._USD_INR if (currency or "USD").upper() == "USD" else 1.0)
+
+    def _handle_supplier_arrears(self):
+        """What's currently owed to the supplier, and the shipment-by-shipment
+        breakdown behind it. 'Owed' = every shipment's cost minus every
+        payment recorded against it, whether tied to one shipment or left
+        general — a running balance, not a paid/unpaid flag, because partial
+        payments are real here."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        conn = db()
+        try:
+            ships = conn.execute(
+                "SELECT id, code, carrier, total_cost, currency FROM shipments "
+                "ORDER BY id DESC").fetchall()
+            pays = conn.execute(
+                "SELECT shipment_id, amount, currency FROM supplier_payments").fetchall()
+        except sqlite3.OperationalError as e:
+            conn.close()
+            self._json(500, {"error": str(e)})
+            return
+        conn.close()
+
+        paid_by_ship, unallocated_inr = {}, 0.0
+        for p in pays:
+            inr = self._to_inr(p["amount"], p["currency"])
+            if p["shipment_id"] is None:
+                unallocated_inr += inr
+            else:
+                paid_by_ship[p["shipment_id"]] = paid_by_ship.get(p["shipment_id"], 0.0) + inr
+
+        out_ships, total_cost_inr, total_paid_inr = [], 0.0, 0.0
+        for s in ships:
+            cost_inr = self._to_inr(s["total_cost"], s["currency"])
+            paid_inr = paid_by_ship.get(s["id"], 0.0)
+            total_cost_inr += cost_inr
+            total_paid_inr += paid_inr
+            out_ships.append({
+                "id": s["id"], "code": s["code"], "carrier": s["carrier"],
+                "total_cost": s["total_cost"], "currency": s["currency"],
+                "cost_inr": round(cost_inr, 2), "paid_inr": round(paid_inr, 2),
+                "balance_inr": round(cost_inr - paid_inr, 2)})
+        total_paid_inr += unallocated_inr
+        self._json(200, {
+            "owed_inr": round(total_cost_inr - total_paid_inr, 2),
+            "total_cost_inr": round(total_cost_inr, 2),
+            "total_paid_inr": round(total_paid_inr, 2),
+            "unallocated_paid_inr": round(unallocated_inr, 2),
+            "shipments": out_ships})
+
+    def _handle_supplier_payment_record(self):
+        """Log a payment toward what's owed. Admin/orders-role only — the
+        supplier shouldn't be the one who can mark their own bill paid; they
+        can see the balance and generate the bill, but recording that money
+        actually moved is the business's side to confirm."""
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            amount = float(p.get("amount"))
+        except (TypeError, ValueError):
+            self._json(400, {"error": "a payment amount is needed"})
+            return
+        if amount <= 0:
+            self._json(400, {"error": "amount should be positive"})
+            return
+        currency = (str(p.get("currency", "USD")).strip()[:8] or "USD").upper()
+        note = str(p.get("note", "")).strip()[:300]
+        raw_sid = p.get("shipment_id")
+        conn = db()
+        shipment_id, code = None, None
+        if raw_sid not in (None, "", 0):
+            try:
+                shipment_id = int(raw_sid)
+            except (TypeError, ValueError):
+                conn.close()
+                self._json(400, {"error": "bad shipment"})
+                return
+            row = conn.execute("SELECT code FROM shipments WHERE id=?",
+                              (shipment_id,)).fetchone()
+            if not row:
+                conn.close()
+                self._json(404, {"error": "no such shipment"})
+                return
+            code = row["code"]
+        cur = conn.execute(
+            "INSERT INTO supplier_payments (shipment_id, amount, currency, note, actor) "
+            "VALUES (?,?,?,?,?)", (shipment_id, amount, currency, note, actor))
+        pid = cur.lastrowid
+        if shipment_id:
+            for oid in [r["id"] for r in conn.execute(
+                    "SELECT id FROM orders WHERE shipment_id=?", (shipment_id,))]:
+                order_event(conn, oid, "payment",
+                           f"{currency} {amount:.2f} recorded for {code}", actor)
+        conn.commit()
+        conn.close()
+        hub_event("supplier_payment", f"{currency} {amount:.2f}" +
+                 (f" -> shipment {code}" if shipment_id else " (unallocated)"),
+                 actor, app="orders")
+        self._json(200, {"ok": True, "id": pid})
+
     def _handle_supplier_tracking(self):
         """Courier reference for a build. Lives on the order rather than in a
         note so it can be shown as a copyable field and, later, looked up —
@@ -2635,6 +2775,105 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except OSError as e:
             print(f"[pdf-photo] {e}", flush=True)
             return None
+
+    def _handle_supplier_bill(self, query):
+        """A statement of what's currently owed, as a PDF the supplier can
+        send to request payment. Deliberately plain — no GST/GSTIN/HSN,
+        no tax breakdown, this is a working-arrangement payment request, not
+        a compliance document. Every figure comes straight from
+        _handle_supplier_arrears()'s own math, so the bill and the on-screen
+        balance can never disagree about what's owed."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+        from_name = urllib.parse.unquote(params.get("from", "")).strip()[:80] or "Supplier"
+
+        conn = db()
+        ships = conn.execute(
+            "SELECT id, code, carrier, total_cost, currency FROM shipments "
+            "ORDER BY id ASC").fetchall()
+        pays = conn.execute(
+            "SELECT shipment_id, amount, currency FROM supplier_payments").fetchall()
+        conn.close()
+
+        paid_by_ship, unallocated_inr = {}, 0.0
+        for p in pays:
+            inr = self._to_inr(p["amount"], p["currency"])
+            if p["shipment_id"] is None:
+                unallocated_inr += inr
+            else:
+                paid_by_ship[p["shipment_id"]] = paid_by_ship.get(p["shipment_id"], 0.0) + inr
+
+        rows, total_due = [], 0.0
+        for s in ships:
+            cost_inr = self._to_inr(s["total_cost"], s["currency"])
+            paid_inr = paid_by_ship.get(s["id"], 0.0)
+            balance = cost_inr - paid_inr
+            if balance <= 0.5:
+                continue
+            total_due += balance
+            rows.append(
+                '<tr><td><b>' + html_mod.escape(s["code"] or f'#{s["id"]}') + '</b>'
+                + (f'<br><span class="sub">{html_mod.escape(s["carrier"])}</span>'
+                   if s["carrier"] else "") + '</td>'
+                + f'<td class="n">{html_mod.escape(s["currency"])} {s["total_cost"]:,.2f}</td>'
+                + f'<td class="n">{"₹" + format(paid_inr, ",.2f") if paid_inr else "—"}</td>'
+                + f'<td class="n"><b>₹{balance:,.2f}</b></td></tr>')
+        total_due -= unallocated_inr
+        credit_row = ""
+        if unallocated_inr > 0.5:
+            credit_row = (f'<tr><td colspan="3" class="credit">Advance / unallocated payment '
+                          f'on file</td><td class="n credit">−₹{unallocated_inr:,.2f}</td></tr>')
+
+        if not rows and unallocated_inr <= 0.5:
+            self._json(200, {"empty": True, "message": "Nothing outstanding right now."})
+            return
+
+        import datetime as _dt
+        doc = (
+            "<html><head><meta charset='utf-8'><style>"
+            "@page{size:A4;margin:1.9cm 1.7cm;}"
+            "body{font-family:Helvetica,Arial,sans-serif;font-size:10.5pt;color:#1a1f1b;}"
+            ".mark{font-size:7.5pt;letter-spacing:2.5pt;text-transform:uppercase;color:#8a6a2c;}"
+            "h1{font-size:17pt;margin:3pt 0 2pt;}"
+            ".meta{color:#777;font-size:9pt;margin-bottom:22pt;}"
+            "table{width:100%;border-collapse:collapse;margin-top:6pt;}"
+            "th{text-align:left;font-size:8pt;text-transform:uppercase;letter-spacing:.5pt;"
+            "color:#777;border-bottom:1pt solid #999;padding:0 8pt 6pt;}"
+            "td{padding:9pt 8pt;border-bottom:1pt solid #eee;vertical-align:top;}"
+            "td.n{text-align:right;font-variant-numeric:tabular-nums;}"
+            ".sub{color:#888;font-size:8.5pt;}"
+            "tr.credit td{color:#3f7d4f;font-style:italic;border-bottom:none;padding-top:4pt;}"
+            ".total-row td{border-top:1.5pt solid #1a1f1b;border-bottom:none;padding-top:12pt;"
+            "font-size:13pt;font-weight:bold;}"
+            ".stamp{color:#888;font-size:8pt;margin-top:26pt;border-top:1pt solid #ddd;padding-top:7pt;}"
+            "</style></head><body>"
+            f"<div class='mark'>{html_mod.escape(from_name)}</div>"
+            "<h1>Payment request</h1>"
+            f"<div class='meta'>To Timelabs Co &middot; "
+            f"{_dt.datetime.now().strftime('%d %b %Y')}</div>"
+            "<table><thead><tr><th>Shipment</th><th class='n'>Cost</th>"
+            "<th class='n'>Paid so far</th><th class='n'>Balance due</th></tr></thead><tbody>"
+            + "".join(rows) + credit_row
+            + f"<tr class='total-row'><td colspan='3'>Total due</td>"
+              f"<td class='n'>₹{total_due:,.2f}</td></tr>"
+            "</tbody></table>"
+            "<div class='stamp'>Generated from the Timelabs build queue &middot; "
+            f"{_dt.datetime.now().strftime('%d %b %Y, %H:%M')}</div>"
+            "</body></html>")
+        try:
+            from weasyprint import HTML
+            pdf = HTML(string=doc).write_pdf()
+        except Exception as e:
+            self._json(500, {"error": f"couldn't build the PDF: {e}"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Disposition", 'attachment; filename="payment-request.pdf"')
+        self.send_header("Content-Length", str(len(pdf)))
+        self.end_headers()
+        self.wfile.write(pdf)
 
     def _handle_supplier_ledger(self, query):
         """An order-request sheet for a batch of builds, so the supplier can
@@ -3416,6 +3655,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_shipment_save()
         elif path == "/supplier/shipment/assign":
             self._handle_supplier_shipment_assign()
+        elif path == "/supplier/payment/record":
+            self._handle_supplier_payment_record()
         elif path == "/orders/delete":
             self._handle_orders_delete()
         elif path == "/orders/bulk":
