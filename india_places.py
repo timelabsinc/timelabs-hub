@@ -34,36 +34,111 @@ STATE_ALIASES = {
     "hr": "Haryana", "br": "Bihar", "jk": "Jammu and Kashmir",
 }
 
-# Enough coverage that the common case resolves without a pincode dataset.
-CITIES = [
-    "Mumbai", "Navi Mumbai", "Thane", "Pune", "Nagpur", "Nashik", "Aurangabad",
-    "Solapur", "Kolhapur", "Delhi", "New Delhi", "Noida", "Greater Noida",
-    "Ghaziabad", "Faridabad", "Gurgaon", "Gurugram", "Bengaluru", "Bangalore",
-    "Mysuru", "Mysore", "Mangalore", "Hubli", "Belgaum", "Chennai", "Coimbatore",
-    "Madurai", "Tiruchirappalli", "Salem", "Tirunelveli", "Vellore", "Erode",
-    "Hyderabad", "Secunderabad", "Warangal", "Nizamabad", "Visakhapatnam",
-    "Vijayawada", "Guntur", "Nellore", "Tirupati", "Kolkata", "Howrah",
-    "Durgapur", "Asansol", "Siliguri", "Ahmedabad", "Surat", "Vadodara",
-    "Rajkot", "Bhavnagar", "Jamnagar", "Gandhinagar", "Jaipur", "Jodhpur",
-    "Udaipur", "Kota", "Ajmer", "Bikaner", "Lucknow", "Kanpur", "Varanasi",
-    "Agra", "Meerut", "Allahabad", "Prayagraj", "Bareilly", "Aligarh",
-    "Moradabad", "Saharanpur", "Gorakhpur", "Jhansi", "Mathura", "Patna",
-    "Gaya", "Bhagalpur", "Muzaffarpur", "Ranchi", "Jamshedpur", "Dhanbad",
-    "Bhopal", "Indore", "Jabalpur", "Gwalior", "Ujjain", "Raipur", "Bhilai",
-    "Bilaspur", "Chandigarh", "Ludhiana", "Amritsar", "Jalandhar", "Patiala",
-    "Bathinda", "Panchkula", "Ambala", "Karnal", "Panipat", "Hisar", "Rohtak",
-    "Sonipat", "Dehradun", "Haridwar", "Rishikesh", "Haldwani", "Shimla",
-    "Srinagar", "Jammu", "Guwahati", "Dibrugarh", "Silchar", "Imphal",
-    "Shillong", "Aizawl", "Kohima", "Agartala", "Itanagar", "Gangtok",
-    "Bhubaneswar", "Cuttack", "Rourkela", "Puri", "Thiruvananthapuram",
-    "Kochi", "Ernakulam", "Kozhikode", "Calicut", "Thrissur", "Kollam",
-    "Kannur", "Alappuzha", "Panaji", "Vasco da Gama", "Margao", "Puducherry",
-    "Port Blair", "Dwarka", "Rewari", "Palwal", "Bahadurgarh", "Kurukshetra",
-]
+# City -> state. It used to be a flat list of names, which meant a pasted
+# address only ever produced a state if the customer had spelled the state out
+# themselves — "Baner Road, Pune / 411045" resolved the city and left State
+# blank, on every order, and that blank went to the sheet and the customer
+# record. Knowing the city is knowing the state, so the table carries both.
+CITY_STATE = {
+    "Mumbai": "Maharashtra", "Navi Mumbai": "Maharashtra", "Thane": "Maharashtra",
+    "Pune": "Maharashtra", "Nagpur": "Maharashtra", "Nashik": "Maharashtra",
+    "Aurangabad": "Maharashtra", "Solapur": "Maharashtra", "Kolhapur": "Maharashtra",
+    "Delhi": "Delhi", "New Delhi": "Delhi", "Dwarka": "Delhi",
+    "Noida": "Uttar Pradesh", "Greater Noida": "Uttar Pradesh",
+    "Ghaziabad": "Uttar Pradesh", "Lucknow": "Uttar Pradesh",
+    "Kanpur": "Uttar Pradesh", "Varanasi": "Uttar Pradesh", "Agra": "Uttar Pradesh",
+    "Meerut": "Uttar Pradesh", "Allahabad": "Uttar Pradesh",
+    "Prayagraj": "Uttar Pradesh", "Bareilly": "Uttar Pradesh",
+    "Aligarh": "Uttar Pradesh", "Moradabad": "Uttar Pradesh",
+    "Saharanpur": "Uttar Pradesh", "Gorakhpur": "Uttar Pradesh",
+    "Jhansi": "Uttar Pradesh", "Mathura": "Uttar Pradesh",
+    "Faridabad": "Haryana", "Gurgaon": "Haryana", "Gurugram": "Haryana",
+    "Panchkula": "Haryana", "Ambala": "Haryana", "Karnal": "Haryana",
+    "Panipat": "Haryana", "Hisar": "Haryana", "Rohtak": "Haryana",
+    "Sonipat": "Haryana", "Rewari": "Haryana", "Palwal": "Haryana",
+    "Bahadurgarh": "Haryana", "Kurukshetra": "Haryana",
+    "Bengaluru": "Karnataka", "Bangalore": "Karnataka", "Mysuru": "Karnataka",
+    "Mysore": "Karnataka", "Mangalore": "Karnataka", "Hubli": "Karnataka",
+    "Belgaum": "Karnataka",
+    "Chennai": "Tamil Nadu", "Coimbatore": "Tamil Nadu", "Madurai": "Tamil Nadu",
+    "Tiruchirappalli": "Tamil Nadu", "Salem": "Tamil Nadu",
+    "Tirunelveli": "Tamil Nadu", "Vellore": "Tamil Nadu", "Erode": "Tamil Nadu",
+    "Hyderabad": "Telangana", "Secunderabad": "Telangana",
+    "Warangal": "Telangana", "Nizamabad": "Telangana",
+    "Visakhapatnam": "Andhra Pradesh", "Vijayawada": "Andhra Pradesh",
+    "Guntur": "Andhra Pradesh", "Nellore": "Andhra Pradesh",
+    "Tirupati": "Andhra Pradesh",
+    "Kolkata": "West Bengal", "Howrah": "West Bengal", "Durgapur": "West Bengal",
+    "Asansol": "West Bengal", "Siliguri": "West Bengal",
+    "Ahmedabad": "Gujarat", "Surat": "Gujarat", "Vadodara": "Gujarat",
+    "Rajkot": "Gujarat", "Bhavnagar": "Gujarat", "Jamnagar": "Gujarat",
+    "Gandhinagar": "Gujarat",
+    "Jaipur": "Rajasthan", "Jodhpur": "Rajasthan", "Udaipur": "Rajasthan",
+    "Kota": "Rajasthan", "Ajmer": "Rajasthan", "Bikaner": "Rajasthan",
+    "Patna": "Bihar", "Gaya": "Bihar", "Bhagalpur": "Bihar",
+    "Muzaffarpur": "Bihar",
+    "Ranchi": "Jharkhand", "Jamshedpur": "Jharkhand", "Dhanbad": "Jharkhand",
+    "Bhopal": "Madhya Pradesh", "Indore": "Madhya Pradesh",
+    "Jabalpur": "Madhya Pradesh", "Gwalior": "Madhya Pradesh",
+    "Ujjain": "Madhya Pradesh",
+    "Raipur": "Chhattisgarh", "Bhilai": "Chhattisgarh", "Bilaspur": "Chhattisgarh",
+    "Chandigarh": "Chandigarh",
+    "Ludhiana": "Punjab", "Amritsar": "Punjab", "Jalandhar": "Punjab",
+    "Patiala": "Punjab", "Bathinda": "Punjab",
+    "Dehradun": "Uttarakhand", "Haridwar": "Uttarakhand",
+    "Rishikesh": "Uttarakhand", "Haldwani": "Uttarakhand",
+    "Shimla": "Himachal Pradesh",
+    "Srinagar": "Jammu and Kashmir", "Jammu": "Jammu and Kashmir",
+    "Guwahati": "Assam", "Dibrugarh": "Assam", "Silchar": "Assam",
+    "Imphal": "Manipur", "Shillong": "Meghalaya", "Aizawl": "Mizoram",
+    "Kohima": "Nagaland", "Agartala": "Tripura", "Itanagar": "Arunachal Pradesh",
+    "Gangtok": "Sikkim",
+    "Bhubaneswar": "Odisha", "Cuttack": "Odisha", "Rourkela": "Odisha",
+    "Puri": "Odisha",
+    "Thiruvananthapuram": "Kerala", "Kochi": "Kerala", "Ernakulam": "Kerala",
+    "Kozhikode": "Kerala", "Calicut": "Kerala", "Thrissur": "Kerala",
+    "Kollam": "Kerala", "Kannur": "Kerala", "Alappuzha": "Kerala",
+    "Panaji": "Goa", "Vasco da Gama": "Goa", "Margao": "Goa",
+    "Puducherry": "Puducherry",
+    "Port Blair": "Andaman and Nicobar Islands",
+}
+CITIES = list(CITY_STATE)
+
+# Coarse fallback for a town not in the table above. Indian pincodes are
+# allocated by region, so the first two digits pin the state for most of the
+# country. Only unambiguous ranges are listed — where a prefix genuinely
+# straddles two states it's left out rather than guessed, since a wrong state
+# is worse than a blank one someone fills in.
+PIN_STATE = {
+    "11": "Delhi", "12": "Haryana", "13": "Haryana", "14": "Punjab",
+    "15": "Punjab", "16": "Punjab", "17": "Himachal Pradesh",
+    "18": "Jammu and Kashmir", "19": "Jammu and Kashmir",
+    "20": "Uttar Pradesh", "21": "Uttar Pradesh", "22": "Uttar Pradesh",
+    "23": "Uttar Pradesh", "25": "Uttar Pradesh", "27": "Uttar Pradesh",
+    "28": "Uttar Pradesh",
+    "30": "Rajasthan", "31": "Rajasthan", "32": "Rajasthan", "33": "Rajasthan",
+    "34": "Rajasthan", "36": "Gujarat", "37": "Gujarat", "38": "Gujarat",
+    "39": "Gujarat",
+    "40": "Maharashtra", "41": "Maharashtra", "42": "Maharashtra",
+    "43": "Maharashtra", "44": "Maharashtra",
+    "45": "Madhya Pradesh", "46": "Madhya Pradesh", "47": "Madhya Pradesh",
+    "48": "Madhya Pradesh", "49": "Chhattisgarh",
+    "50": "Telangana", "51": "Andhra Pradesh", "52": "Andhra Pradesh",
+    "53": "Andhra Pradesh",
+    "56": "Karnataka", "57": "Karnataka", "58": "Karnataka", "59": "Karnataka",
+    "60": "Tamil Nadu", "61": "Tamil Nadu", "62": "Tamil Nadu",
+    "63": "Tamil Nadu", "64": "Tamil Nadu",
+    "67": "Kerala", "68": "Kerala", "69": "Kerala",
+    "70": "West Bengal", "71": "West Bengal", "72": "West Bengal",
+    "73": "West Bengal", "74": "West Bengal",
+    "75": "Odisha", "76": "Odisha", "77": "Odisha",
+    "78": "Assam", "80": "Bihar", "84": "Bihar",
+}
 
 _STATE_LOOKUP = {s.lower(): s for s in STATES}
 _STATE_LOOKUP.update(STATE_ALIASES)
 _CITY_LOOKUP = {c.lower(): c for c in CITIES}
+_CITY_STATE_LOOKUP = {c.lower(): s for c, s in CITY_STATE.items()}
 
 
 def _boundary(needle, hay):
@@ -105,11 +180,27 @@ def find_city(text, state=None):
     return None
 
 
+def state_for_pin(pincode):
+    """State from a pincode's region prefix, for towns not in the city table."""
+    digits = "".join(c for c in (pincode or "") if c.isdigit())
+    return PIN_STATE.get(digits[:2]) if len(digits) == 6 else None
+
+
 def parse(address, pincode=None):
-    """(city, state) — either may be None."""
+    """(city, state) — either may be None.
+
+    Three sources, most reliable first: the state written in the address, the
+    state implied by a recognised city, then the pincode's region. Anything
+    the customer spelled out wins, because they know where they live.
+    """
     blob = " ".join(x for x in [address, pincode] if x)
     state = find_state(blob)
-    return find_city(blob, state), state
+    city = find_city(blob, state)
+    if not state and city:
+        state = _CITY_STATE_LOOKUP.get(city.lower())
+    if not state:
+        state = state_for_pin(pincode)
+    return city, state
 
 
 if __name__ == "__main__":
