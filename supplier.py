@@ -225,6 +225,48 @@ SUP_CSS = r"""
   .ocost .addcost:hover{border-color:var(--accent);color:var(--accent);}
   .ocost .defc{font-size:11px;color:var(--muted);}
   .ocost.locked b{color:var(--muted);}
+  /* Batches. These rules were lost once already: they sat inside a block of
+     dead Shipments CSS that got deleted wholesale, and the tab rendered as
+     bare bullets and stacked buttons until it was noticed on screen. Kept
+     here, after .owedcard, well away from anything retired. */
+  .bcard{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+    padding:15px 16px;margin-bottom:11px;box-shadow:var(--shadow);}
+  .bcard.ack{border-color:var(--good);}
+  .btop{display:flex;align-items:flex-start;gap:12px;}
+  .bno{font-size:14.5px;font-weight:750;color:var(--ink);letter-spacing:-.01em;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .bmeta{font-size:11.5px;color:var(--muted);margin-top:3px;}
+  .bright{margin-left:auto;text-align:right;flex:none;}
+  .btot{font-size:19px;font-weight:800;color:var(--ink);letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums;line-height:1.15;}
+  .bstat{display:inline-block;font-size:10px;font-weight:750;text-transform:uppercase;
+    letter-spacing:.05em;padding:3px 8px;border-radius:999px;margin-top:5px;}
+  .bstat.draft{color:var(--muted);background:var(--card-2);}
+  .bstat.ok{color:var(--good);background:var(--good-bg);}
+  .blines{list-style:none;margin:13px 0 0;padding:12px 0 0;
+    border-top:1px solid var(--border);}
+  .blines li{display:flex;align-items:baseline;gap:12px;padding:7px 0;font-size:13px;}
+  .blines li + li{border-top:1px solid var(--border);}
+  .blines li span{flex:1;min-width:0;color:var(--muted);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;}
+  .blines li b{flex:none;color:var(--ink);font-weight:650;
+    font-variant-numeric:tabular-nums;}
+  .blines li.ship span,.blines li.ship b{color:var(--ink);}
+  .blines li.paid span,.blines li.paid b{color:var(--good);}
+  .bnote{font-size:12.5px;color:var(--muted);margin-top:11px;padding-left:11px;
+    border-left:2px solid var(--border-2);}
+  .backby{font-size:11.5px;color:var(--good);margin-top:9px;}
+  .bact{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;
+    padding-top:13px;border-top:1px solid var(--border);}
+  .bact button{flex:none;min-height:38px;padding:0 14px;border-radius:var(--r-s);
+    border:1px solid var(--border-2);background:var(--card);color:var(--ink);
+    font:inherit;font-size:13px;font-weight:650;cursor:pointer;white-space:nowrap;
+    display:inline-flex;align-items:center;justify-content:center;}
+  .bact button:hover{border-color:var(--accent);color:var(--accent);}
+  .bact button.go{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+  .bact button.go:hover{opacity:.9;color:var(--bg);}
+  .bact button.danger{color:var(--bad);border-color:var(--border);margin-left:auto;}
+  .bact button.danger:hover{border-color:var(--bad);color:var(--bad);}
   .btrk{display:flex;align-items:center;gap:7px;margin-top:9px;flex-wrap:wrap;}
   .btrk .chip{font-size:11.5px;font-weight:650;color:var(--ink);background:var(--card-2);
     border-radius:6px;padding:3px 8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
@@ -959,10 +1001,10 @@ function billCard(b){
       ? '<span class="chip">'+esc(b.tracking_code)+'</span><button data-btrk="'+b.id+'">Change</button>'
       : '<button data-btrk="'+b.id+'">+ Add courier / tracking</button>')+'</div>'+
     '<div class="bact">'+
-      '<button class="obtn ghost" data-billpdf="'+b.id+'">Bill PDF</button>'+
-      (CAN_ACK&&!ack?'<button class="obtn" data-billack="'+b.id+'">Acknowledge</button>':'')+
-      (CAN_ACK&&ack?'<button class="obtn ghost" data-billpay="'+b.id+'">Record payment</button>':'')+
-      (CAN_ACK?'<button class="obtn danger" data-billdel="'+b.id+'">Delete</button>':'')+
+      '<button data-billpdf="'+b.id+'">Bill PDF</button>'+
+      (CAN_ACK&&!ack?'<button class="go" data-billack="'+b.id+'">Agree this batch</button>':'')+
+      (CAN_ACK&&ack?'<button data-billpay="'+b.id+'">Record payment</button>':'')+
+      (CAN_ACK?'<button class="danger" data-billdel="'+b.id+'">Delete</button>':'')+
     '</div>'+
   '</article>';
 }

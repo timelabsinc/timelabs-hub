@@ -43,6 +43,9 @@ UPLOADS = os.path.join(ROOT, ".uploads")
 THUMBS = os.path.join(ROOT, ".thumbs")
 TRASH = os.path.join(ROOT, ".trash")
 SHARES = os.path.join(ROOT, ".shares")   # public share tokens -> target json
+# Last Organize run, so renaming files is reversible. One slot, not a history:
+# undo is for "that looked wrong, put it back", not an audit trail.
+UNDO_LOG = os.path.join(ROOT, ".last-organize.json")
 PUBLIC_BASE = "https://ops.timelabsco.in"
 GDRIVE_TOKEN = "/root/ops-dashboard/.gdrive-token.json"
 OAUTH_CLIENT = "/root/oauth-client.json"
@@ -302,6 +305,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._mkdir()
         elif path == "/rename":
             self._rename()
+        elif path == "/move":
+            self._move()
+        elif path == "/undo-organize":
+            self._undo_organize()
         elif path == "/delete":
             self._delete()
         elif path == "/upload/init":
@@ -352,6 +359,77 @@ class Handler(http.server.BaseHTTPRequestHandler):
         os.rename(src, dst)
         print(f"[drop] {self._user()} rename {old} -> {new}", flush=True)
         self._json(200, {"ok": True})
+
+    def _move(self):
+        """Move files between folders. Both ends go through safe_rel, so a
+        crafted path can't walk out of ROOT in either direction, and the
+        destination has to already exist — this creates nothing implicitly."""
+        p = self._body_json()
+        src_d = safe_rel((p or {}).get("from", ""))
+        dst_d = safe_rel((p or {}).get("to", ""))
+        names = (p or {}).get("names") or []
+        if src_d is None or dst_d is None or not isinstance(names, list) or not names:
+            self._json(400, {"error": "bad request"})
+            return
+        if not os.path.isdir(dst_d):
+            self._json(404, {"error": "no such folder"})
+            return
+        if os.path.realpath(src_d) == os.path.realpath(dst_d):
+            self._json(400, {"error": "that is already where they are"})
+            return
+        moved, skipped = [], []
+        for raw in names[:500]:
+            fn = safe_name(str(raw))
+            if not fn:
+                continue
+            s = os.path.join(src_d, fn)
+            if not os.path.exists(s):
+                skipped.append(fn)
+                continue
+            # Moving a folder into itself would delete the tree it's walking.
+            if os.path.isdir(s) and os.path.realpath(dst_d).startswith(os.path.realpath(s) + os.sep):
+                skipped.append(fn)
+                continue
+            dest = unique_path(dst_d, fn)
+            shutil.move(s, dest)
+            moved.append(os.path.basename(dest))
+        print(f"[drop] {self._user()} moved {len(moved)} -> {dst_d}", flush=True)
+        self._json(200, {"ok": True, "moved": len(moved), "names": moved,
+                         "skipped": skipped})
+
+    def _undo_organize(self):
+        """Put the last Organize run back: original names, original folder,
+        and remove the folders it made if they're now empty."""
+        try:
+            log = json.load(open(UNDO_LOG))
+        except (OSError, json.JSONDecodeError):
+            self._json(404, {"error": "nothing to undo"})
+            return
+        base = safe_rel(log.get("path", ""))
+        if base is None:
+            self._json(400, {"error": "that folder is gone"})
+            return
+        restored = 0
+        for item in log.get("items", []):
+            cur = os.path.join(base, item.get("folder", ""), item.get("to", ""))
+            if not os.path.isfile(cur):
+                continue
+            shutil.move(cur, unique_path(base, item.get("from", "")))
+            restored += 1
+        for folder in log.get("folders", []):
+            fp = os.path.join(base, folder)
+            try:
+                if os.path.isdir(fp) and not os.listdir(fp):
+                    os.rmdir(fp)
+            except OSError:
+                pass
+        try:
+            os.remove(UNDO_LOG)
+        except OSError:
+            pass
+        print(f"[drop] {self._user()} undid organize ({restored} files)", flush=True)
+        hub_event("organize_undo", f"{restored} photos put back", self._user())
+        self._json(200, {"ok": True, "restored": restored})
 
     def _delete(self):
         p = self._body_json()
@@ -560,7 +638,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if d is None or not isinstance(groups, list) or not groups:
             self._json(400, {"error": "bad request"})
             return
-        moved, made = 0, []
+        # Files are renamed after the folder they land in ("Daytona Panda 01.jpg")
+        # so the name still says what the photo is once it's out of Drop — in a
+        # WhatsApp thread or an email attachment, "IMG_0167.jpg" says nothing.
+        # Every move is recorded first so the whole run can be put back.
+        rename = (p or {}).get("rename", True)
+        moved, made, log = 0, [], []
         for g in groups[:40]:
             gname = safe_name(str((g or {}).get("name", "")))
             files = (g or {}).get("files") or []
@@ -571,6 +654,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 continue
             os.makedirs(target, exist_ok=True)
             made.append(gname)
+            seq = 0
             for raw in files[:500]:
                 fn = safe_name(str(raw))
                 if not fn:
@@ -578,11 +662,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 src_p = os.path.join(d, fn)
                 if not os.path.isfile(src_p):
                     continue
-                shutil.move(src_p, unique_path(target, fn))
+                seq += 1
+                if rename:
+                    ext = os.path.splitext(fn)[1].lower()
+                    cand = safe_name(f"{gname} {seq:02d}{ext}") or fn
+                else:
+                    cand = fn
+                dest = unique_path(target, cand)
+                shutil.move(src_p, dest)
+                log.append({"from": fn, "to": os.path.basename(dest), "folder": gname})
                 moved += 1
+        try:
+            with open(UNDO_LOG, "w") as f:
+                json.dump({"path": rel, "folders": made, "items": log,
+                           "at": time.time()}, f)
+        except OSError as e:
+            print(f"[drop] could not write undo log: {e}", flush=True)
         print(f"[drop] {self._user()} organized {moved} files into {made}", flush=True)
         hub_event("organize", f"{moved} photos into folders: {', '.join(made)}", self._user())
-        self._json(200, {"ok": True, "moved": moved, "folders": made})
+        self._json(200, {"ok": True, "moved": moved, "folders": made,
+                         "renamed": bool(rename), "can_undo": bool(log)})
 
     # ------------------------------------------------------------- google drive
     @staticmethod

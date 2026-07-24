@@ -3385,17 +3385,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         rows = ""
         for it in items:
             label = it["ref_code"] or (f"#{it['order_id']}" if it["order_id"] else "")
-            rows += ('<tr><td><b>' + html_mod.escape(str(label)) + '</b>'
+            # The photo is the spec on these builds — a line that just says
+            # "White RM mod" doesn't tell anyone which watch was billed, and
+            # this PDF gets forwarded to people who never saw the queue.
+            shot = self._photo_data_uri(it["order_id"], 200) if it["order_id"] else None
+            cell = ('<td class="shot">'
+                    + (f'<img src="{shot}">' if shot else '<span class="noshot"></span>')
+                    + '</td>')
+            rows += ('<tr>' + cell + '<td><b>' + html_mod.escape(str(label)) + '</b>'
                      + (f'<br><span class="sub">{html_mod.escape(it["description"] or "")}</span>'
                         if it["description"] else "")
                      + '</td>'
                      + f'<td class="n">{ccy}{it["cost"]:,.2f}</td></tr>')
         if bill["shipping_cost"]:
-            rows += ('<tr><td>Shipping</td>'
+            rows += ('<tr><td class="shot"></td><td>Shipping</td>'
                      f'<td class="n">{ccy}{bill["shipping_cost"]:,.2f}</td></tr>')
         paid_row = ""
         if paid:
-            paid_row = (f'<tr class="credit"><td>Already paid</td>'
+            paid_row = (f'<tr class="credit"><td class="shot"></td><td>Already paid</td>'
                         f'<td class="n">-{ccy}{paid:,.2f}</td></tr>')
         due = (bill["total"] or 0) - paid
 
@@ -3418,6 +3425,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "color:#777;border-bottom:1pt solid #999;padding:0 8pt 6pt;}"
             "td{padding:9pt 8pt;border-bottom:1pt solid #eee;vertical-align:top;}"
             "td.n{text-align:right;font-variant-numeric:tabular-nums;}"
+            "td.shot,th.shot{width:56pt;padding-right:0;}"
+            "td.shot img{width:48pt;height:48pt;object-fit:cover;border-radius:3pt;display:block;}"
             ".sub{color:#888;font-size:8.5pt;}"
             "tr.credit td{color:#3f7d4f;font-style:italic;}"
             ".total-row td{border-top:1.5pt solid #1a1f1b;border-bottom:none;padding-top:12pt;"
@@ -3430,10 +3439,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             f"{_dt.datetime.now().strftime('%d %b %Y')} &middot; "
             f"{len(items)} build(s)</div>"
             + ack +
-            "<table><thead><tr><th>Build</th>"
+            "<table><thead><tr><th class='shot'></th><th>Build</th>"
             "<th class='n'>Cost</th></tr></thead><tbody>"
             + rows + paid_row
-            + f"<tr class='total-row'><td>{'Balance due' if paid else 'Total due'}</td>"
+            + f"<tr class='total-row'><td class='shot'></td>"
+              f"<td>{'Balance due' if paid else 'Total due'}</td>"
               f"<td class='n'>{ccy}{due:,.2f}</td></tr>"
             "</tbody></table>"
             + (f"<p class='sub'>{html_mod.escape(bill['notes'])}</p>" if bill["notes"] else "")
