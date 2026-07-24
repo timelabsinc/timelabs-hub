@@ -457,7 +457,7 @@ function cardEl(o){
       '" aria-label="Select order '+o.id+'"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>':'')+
     '<div class="otop">'+photoEl(o)+
       '<div class="omid">'+
-        '<div class="onum">ORDER #'+o.id+'</div>'+
+        '<div class="onum">'+(o.ref_code?'ORDER '+esc(o.ref_code):'ORDER #'+o.id)+'</div>'+
         '<h3 class="oprod">'+esc(o.product||'—')+
           (o.quantity>1?'<span class="oqty">x'+o.quantity+'</span>':'')+'</h3>'+
         specEl(o)+

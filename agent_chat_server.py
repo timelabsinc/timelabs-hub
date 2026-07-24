@@ -139,6 +139,12 @@ def _ensure_orders_schema():
             # Courier/tracking reference, entered by whoever has it — usually
             # the supplier once a build ships.
             "tracking_code": "TEXT",
+            # The original order number a build already had before Labs OS —
+            # the number in the WhatsApp caption when these were tracked by
+            # hand. Kept so the supplier still recognises "order 101" rather
+            # than our internal auto-id, and so backfilled history lines up
+            # with whatever was written down at the time.
+            "ref_code": "TEXT",
             # Photos used to survive ONLY as Google Drive URLs, so with Google
             # disconnected an attached photo was written to the temp upload
             # dir and then referenced by nothing — silently lost. They now
@@ -1934,8 +1940,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "SELECT id, received_at, customer_name, customer_phone, customer_email, "
                 "address, pincode, city, state, source, product, quantity, price_inr, "
                 "notes, status, drive_link, photo_links, local_photos, case_style, "
-                "dial_colour, dial_style, case_colour, movement, watch_size, shopify_name "
-                "FROM orders ORDER BY id DESC LIMIT 100").fetchall()
+                "dial_colour, dial_style, case_colour, movement, watch_size, shopify_name, "
+                "ref_code FROM orders ORDER BY id DESC LIMIT 100").fetchall()
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
@@ -2144,13 +2150,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             try:
                 product = str((it or {}).get("product", "")).strip()[:200]
                 photo = str((it or {}).get("photo_path", "")).strip()
-                if not product:
-                    failed.append({"i": i, "error": "no product name"})
-                    continue
+                ref = str((it or {}).get("ref_code", "")).strip()[:60]
                 rp = os.path.realpath(photo) if photo else ""
                 if photo and (not rp.startswith(upload_root) or not os.path.isfile(rp)):
                     failed.append({"i": i, "error": "photo upload expired"})
                     continue
+                # A backfilled build is a photo plus its old order number; the
+                # picture IS the spec, so a product name isn't required. Fall
+                # back to the ref, then a placeholder, so the row is never
+                # nameless on the queue. But a row with neither a photo nor any
+                # text is empty — skip it rather than create a blank order.
+                if not product and not rp and not ref:
+                    failed.append({"i": i, "error": "nothing to add"})
+                    continue
+                if not product:
+                    # With a photo the picture IS the spec, and the card
+                    # already shows the order number in its header — so don't
+                    # repeat the number as the product name too.
+                    product = ("See reference photo" if rp
+                               else (f"Order {ref}" if ref else "Build"))
                 notes = str((it or {}).get("notes", "")).strip()[:1000]
                 try:
                     qty = max(1, int((it or {}).get("quantity") or 1))
@@ -2164,10 +2182,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 attrs = order_taxonomy.extract(product + " " + notes)
                 cur = conn.execute(
                     "INSERT INTO orders (customer_name, source, product, price_inr, "
-                    "quantity, notes, status, has_image, case_style, dial_colour, "
+                    "quantity, notes, status, has_image, ref_code, case_style, dial_colour, "
                     "dial_style, case_colour, movement, watch_size, supplier_visible) "
-                    "VALUES ('',?,?,?,?,?,'new',?,?,?,?,?,?,?,1)",
-                    (source, product, price, qty, notes, 1 if rp else 0,
+                    "VALUES ('',?,?,?,?,?,'new',?,?,?,?,?,?,?,?,1)",
+                    (source, product, price, qty, notes, 1 if rp else 0, ref or None,
                      attrs.get("case_style"), attrs.get("dial_colour"),
                      attrs.get("dial_style"), attrs.get("case_colour"),
                      attrs.get("movement"), attrs.get("watch_size")))
@@ -2191,9 +2209,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "INSERT INTO order_items (order_id, product, quantity, price_inr, "
                     "line_total) VALUES (?,?,?,?,?)",
                     (oid, product, qty, price, (price or 0) * qty))
-                order_event(conn, oid, "created", "added in a bulk batch", actor)
+                order_event(conn, oid, "created",
+                           f"backfilled in a bulk batch{f' (order {ref})' if ref else ''}", actor)
                 conn.commit()
-                created.append({"id": oid, "product": product})
+                created.append({"id": oid, "product": product, "ref_code": ref})
             except Exception as e:
                 failed.append({"i": i, "error": str(e)[:120]})
         conn.close()
@@ -2425,7 +2444,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             rows = conn.execute(
                 "SELECT id, received_at, product, quantity, status, notes, "
                 "case_style, dial_colour, dial_style, case_colour, movement, "
-                "watch_size, local_photos, tracking_code FROM orders "
+                "watch_size, local_photos, tracking_code, ref_code FROM orders "
                 "WHERE supplier_visible=1 AND status != 'cancelled' "
                 "ORDER BY id ASC").fetchall()
             events = {}
@@ -2541,7 +2560,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         as copied text, a WhatsApp message or a PDF, so the three can't drift
         into saying different things about the same order."""
         o = conn.execute(
-            "SELECT id, received_at, product, quantity, status, tracking_code, "
+            "SELECT id, received_at, product, quantity, status, tracking_code, ref_code, "
             "case_style, dial_colour, dial_style, case_colour, movement, watch_size "
             "FROM orders WHERE id=? AND supplier_visible=1", (oid,)).fetchone()
         if not o:
@@ -2552,7 +2571,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         events = conn.execute(
             "SELECT created_at, kind, detail FROM order_events "
             "WHERE order_id=? ORDER BY id ASC", (oid,)).fetchall()
-        lines = [f"Order #{o['id']} — {o['product'] or ''}"]
+        # Lead with the original order number when there is one — that's the
+        # number the supplier already knows the build by.
+        head_num = f"Order {o['ref_code']}" if o["ref_code"] else f"Order #{o['id']}"
+        lines = [f"{head_num} — {o['product'] or ''}"]
         if o["quantity"] and o["quantity"] > 1:
             lines.append(f"Quantity: {o['quantity']}")
         if spec:

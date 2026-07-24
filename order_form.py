@@ -245,6 +245,27 @@ OF_CSS = r"""
   .rowdel[disabled]{opacity:.3;cursor:wait;}
   @media(max-width:720px){ .rowdel{opacity:1;} }
 
+  /* bulk add rows */
+  .brow{display:flex;gap:11px;align-items:flex-start;padding:11px;border:1px solid var(--border);
+    border-radius:var(--r-s);background:var(--card);margin-bottom:9px;}
+  .bthumb{width:64px;height:64px;border-radius:8px;flex:none;overflow:hidden;background:var(--card-2);
+    border:1px solid var(--border);position:relative;}
+  .bthumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  .bthumb .up{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-size:10.5px;font-weight:650;color:var(--muted);background:rgba(0,0,0,.35);}
+  .bmid{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px;}
+  .bmid input{width:100%;font-size:16px;border:1px solid var(--border);border-radius:var(--r-s);
+    background:var(--bg);color:var(--ink);padding:8px 10px;-webkit-appearance:none;appearance:none;}
+  .bmid input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
+  .bref{max-width:150px;}
+  .brm{border:1px solid var(--border);background:none;color:var(--muted);border-radius:6px;
+    width:30px;height:30px;font-size:17px;line-height:1;cursor:pointer;flex:none;}
+  .brm:hover{border-color:var(--bad);color:var(--bad);}
+  .bresult{background:var(--good-bg);color:var(--good);border-radius:var(--r-s);padding:12px 14px;
+    font-size:13.5px;line-height:1.55;margin-top:14px;}
+  .bresult a{color:var(--accent);font-weight:650;}
+  .bresult.warn{background:var(--accent-bg);color:var(--accent);}
+
   /* what's selling — sortable table */
   .sellhead{display:flex;align-items:baseline;gap:8px;margin:22px 0 10px;}
   .sellhead h3{font-size:12.5px;font-weight:650;color:var(--muted);text-transform:uppercase;
@@ -290,6 +311,7 @@ document.querySelectorAll('.tab').forEach(function(t){
       if(t.dataset.p==='orders')loadOrders();
       if(t.dataset.p==='customers')loadCustomers();
       if(t.dataset.p==='selling')loadSelling();
+      if(t.dataset.p==='bulk')drawBulkSources();
     }
   };
 });
@@ -623,7 +645,8 @@ async function loadOrders(){
       rows.map(function(o){
         var st=String(o.status||'new'), spec=specOf(o);
         return '<tr>'+
-          '<td data-l="Order" class="o-num">#'+o.id+'</td>'+
+          '<td data-l="Order" class="o-num">#'+o.id+
+            (o.ref_code?'<div class="o-sub">was '+esc(o.ref_code)+'</div>':'')+'</td>'+
           '<td data-l="Logged" class="o-when">'+esc(when(o.received_at))+'</td>'+
           '<td data-l="Source">'+(o.source?'<span class="pill">'+esc(o.source)+'</span>':'')+
             (o.shopify_name?'<div class="o-sub">'+esc(o.shopify_name)+'</div>':'')+'</td>'+
@@ -807,15 +830,110 @@ async function loadSelling(){
   }catch(e){$('selling').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
 }
 
+/* ---------------- bulk add ----------------
+   Backfill: one screenshot -> one build. Each photo uploads to the same temp
+   store a single order uses; the order number from the WhatsApp caption is
+   typed per row (captions don't travel with saved images), then the whole
+   batch is created at once. Rows survive a failed upload so nothing typed is
+   lost. */
+var bulkRows=[], bulkSrc='';
+function bulkDraw(){
+  var box=$('bulk-rows');
+  box.innerHTML=bulkRows.map(function(r){
+    return '<div class="brow" data-k="'+r.key+'">'+
+      '<div class="bthumb"><img src="'+r.url+'" alt="">'+
+        (r.path?'':'<span class="up">…</span>')+'</div>'+
+      '<div class="bmid">'+
+        '<input class="bref" data-f="ref" placeholder="Order # (from the caption)" value="'+esc(r.ref||'')+'" inputmode="numeric">'+
+        '<input data-f="product" placeholder="Product (optional — photo is the spec)" value="'+esc(r.product||'')+'">'+
+      '</div>'+
+      '<button class="brm" data-rm="'+r.key+'" title="Remove" aria-label="Remove">&times;</button>'+
+    '</div>';
+  }).join('');
+  box.querySelectorAll('.brow').forEach(function(el){
+    var k=el.dataset.k, r=bulkRows.filter(function(x){return x.key===k;})[0];
+    el.querySelectorAll('input').forEach(function(inp){
+      inp.oninput=function(){ r[inp.dataset.f]=inp.value; };
+    });
+  });
+  box.querySelectorAll('.brm').forEach(function(b){
+    b.onclick=function(){ bulkRows=bulkRows.filter(function(x){return x.key!==b.dataset.rm;}); bulkDraw(); };
+  });
+  $('bulk-actions').style.display=bulkRows.length?'':'none';
+  var pend=bulkRows.filter(function(r){return !r.path;}).length;
+  $('bulk-save').disabled=pend>0;
+  $('bulk-save').innerHTML = pend>0
+    ? 'Uploading '+pend+'…'
+    : 'Add '+bulkRows.length+' build'+(bulkRows.length===1?'':'s');
+}
+async function bulkAddFiles(files){
+  var list=Array.prototype.slice.call(files||[]).filter(function(f){
+    return f&&f.type&&f.type.indexOf('image/')===0;});
+  for(var i=0;i<list.length;i++){
+    if(bulkRows.length>=60){toast('60 at a time is the limit');break;}
+    var f=list[i];
+    var rec={key:String(Date.now())+'-'+i+'-'+Math.random().toString(36).slice(2,7),
+             url:URL.createObjectURL(f),path:null,ref:'',product:''};
+    bulkRows.push(rec);bulkDraw();
+    try{
+      var fd=new FormData(); fd.append('image',f,f.name||('shot-'+Date.now()+'.jpg'));
+      var d=await api('/upload',{method:'POST',body:fd});
+      rec.path=d.path;
+    }catch(err){
+      bulkRows=bulkRows.filter(function(x){return x.key!==rec.key;});
+      toast(err.message);
+    }
+    bulkDraw();
+  }
+}
+function drawBulkSources(){
+  var list=(window.__sources||[]).slice();
+  var host=$('bulk-srcs');
+  host.innerHTML=list.map(function(s){
+    return '<button type="button" class="src'+(s===bulkSrc?' on':'')+'" data-s="'+esc(s)+'">'+esc(s)+'</button>';
+  }).join('');
+  host.querySelectorAll('.src[data-s]').forEach(function(b){
+    b.onclick=function(){ bulkSrc=(bulkSrc===b.dataset.s)?'':b.dataset.s; drawBulkSources(); };
+  });
+}
+$('bulk-dz').onclick=function(){ $('bulk-file').click(); };
+$('bulk-file').onchange=function(){ bulkAddFiles(this.files); this.value=''; };
+['dragenter','dragover'].forEach(function(ev){
+  $('bulk-dz').addEventListener(ev,function(e){e.preventDefault();$('bulk-dz').classList.add('over');});});
+['dragleave','drop'].forEach(function(ev){
+  $('bulk-dz').addEventListener(ev,function(e){e.preventDefault();$('bulk-dz').classList.remove('over');});});
+$('bulk-dz').addEventListener('drop',function(e){ bulkAddFiles(e.dataTransfer&&e.dataTransfer.files); });
+$('bulk-save').onclick=async function(){
+  if(!bulkRows.length)return;
+  if(bulkRows.filter(function(r){return !r.path;}).length){toast('A photo is still uploading');return;}
+  var btn=$('bulk-save'); btn.disabled=true;
+  var items=bulkRows.map(function(r){
+    return {photo_path:r.path,ref_code:(r.ref||'').trim(),product:(r.product||'').trim()};
+  });
+  try{
+    var d=await jpost('/orders/bulk',{source:bulkSrc,items:items});
+    var n=(d.created||[]).length, bad=(d.failed||[]).length;
+    $('bulk-result').innerHTML='<div class="bresult'+(bad?' warn':'')+'">'+
+      '<b>'+n+' build'+(n===1?'':'s')+' added</b> to the '+
+      '<a href="/ops/supplier.html">supplier queue</a>.'+
+      (bad?' '+bad+' row'+(bad===1?'':'s')+' couldn\'t be added.':'')+'</div>';
+    bulkRows=[]; bulkDraw();
+    loaded={};
+    toast(n+' build'+(n===1?'':'s')+' added');
+  }catch(e){ toast(e.message); }
+  btn.disabled=false;
+};
+
 /* ---------------- boot ---------------- */
 var STATUSES_LIST=Array.prototype.map.call($('f-status').options,function(o){return o.value;});
 (async function(){
   drawShots();drawAttrs();
   try{
     var m=await api('/orders/meta');
+    window.__sources=m.sources||[];
     drawSources(m.sources||[]);
     attrLabels=(m.vocab&&m.vocab.labels)||{};
-  }catch(e){drawSources([]);}
+  }catch(e){window.__sources=[];drawSources([]);}
   try{
     var pd=await api('/orders/products');
     PRODUCTS=pd.products||[];
@@ -843,6 +961,7 @@ def build():
 
     <div class="tabs">
       <button class="tab on" data-p="new">New order</button>
+      <button class="tab" data-p="bulk">Bulk add</button>
       <button class="tab" data-p="orders">Orders</button>
       <button class="tab" data-p="customers">Customers</button>
       <button class="tab" data-p="selling">What's selling</button>
@@ -917,6 +1036,29 @@ def build():
 
         <button class="btn primary" id="save" disabled>Save order</button>
         <div class="savehint">or press <span class="kbd">&#8984;</span> + <span class="kbd">Enter</span></div>
+      </div>
+    </section>
+
+    <section class="pane" id="pane-bulk">
+      <div class="of-card">
+        <div class="of-legend">Backfill builds from photos</div>
+        <p class="o-sub" style="margin:0 0 13px;line-height:1.5">Drop a batch of watch
+          screenshots — each becomes a build on the supplier queue. Add the original
+          order number per photo so your supplier still recognises it. No customer or
+          price needed now; add those later on any build that sells.</p>
+        <div class="dz" id="bulk-dz">
+          <div class="dz-t">Add screenshots</div>
+          <div class="dz-s">Tap to pick from your photos &middot; or drag them here</div>
+        </div>
+        <input type="file" id="bulk-file" accept="image/jpeg,image/png,image/webp" multiple>
+        <div id="bulk-rows" style="margin-top:14px"></div>
+        <div id="bulk-actions" style="display:none;margin-top:6px">
+          <div class="of-field"><label>Where did these come from?</label>
+            <div class="srcs" id="bulk-srcs"></div></div>
+          <button class="btn primary" id="bulk-save">Add builds</button>
+          <div class="savehint">Photos upload as you add them; nothing is saved until you tap the button.</div>
+        </div>
+        <div id="bulk-result"></div>
       </div>
     </section>
 
