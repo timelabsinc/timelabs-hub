@@ -13,9 +13,17 @@ a Reddit Developer Support ticket (support.reddithelp.com, ~7 day review
 once submitted — not yet submitted as of 2026-07-24). A script app
 authenticates as the account itself (password grant), which is the
 simplest flow for a single-account bot like this one. Datacenter IPs are
-hard-blocked from Reddit's public pages (verified directly from this VPS),
-so oauth.reddit.com is the only reachable path — there is no scraping
-fallback if these credentials are ever missing.
+hard-blocked from most of Reddit's public surface — old.reddit's JSON
+endpoints and www's HTML both refuse this VPS (verified directly) — so
+oauth.reddit.com is the only reachable path for full data (score, comment
+counts, search).
+
+Until credentials exist, fetch_new_threads() falls back to Reddit's public
+Atom RSS feeds (www.reddit.com/r/<sub>/new/.rss), which are NOT IP-blocked
+(also verified directly) and need no key at all — a sanctioned, long-standing
+feature for feed readers, not scraping. The tradeoff: RSS gives title, body,
+author and link but not score or comment count, so those fields come back
+None until OAuth is live. mode() reports which source is currently active.
 
 Create the app: reddit.com/prefs/apps (once the support ticket is approved) →
 "script" type → note the client_id (under the app name) and client_secret →
@@ -26,11 +34,13 @@ add to .env as:
   REDDIT_PASSWORD=xxxxx
 """
 import base64
+import datetime
 import json
 import time
 import urllib.request
 import urllib.error
 import urllib.parse
+import xml.etree.ElementTree as ET
 
 ENV_PATH = "/root/ops-dashboard/.env"
 USER_AGENT = "timelabs-labsos/1.0 by /u/Brief_Client_2900"
@@ -150,11 +160,9 @@ def _opportunity_score(tag, num_comments):
     return round(min(base, 1.0), 2)
 
 
-def fetch_new_threads(subs=None, limit=25):
-    """New posts from each target sub, tagged and scored. Read-only — makes
-    no writes to Reddit. Raises RedditError if not configured or unreachable."""
+def _fetch_new_threads_oauth(subs, limit):
     out = []
-    for sub in (subs or TARGET_SUBS):
+    for sub in subs:
         data = _api_get(f"/r/{sub}/new", {"limit": limit})
         for child in data.get("data", {}).get("children", []):
             p = child.get("data", {})
@@ -172,3 +180,81 @@ def fetch_new_threads(subs=None, limit=25):
                 "opportunity_score": _opportunity_score(tag, int(p.get("num_comments", 0))),
             })
     return out
+
+
+_ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
+
+
+def _fetch_new_threads_rss(subs, limit):
+    """No auth, no rate-limit budget to spend — just Reddit's own public
+    feed. Missing score/comment count (RSS doesn't carry them) means the
+    opportunity score is tag-only here, a little less precise than the
+    OAuth version, but real threads beat none while the ticket is pending.
+
+    One subreddit's transient 429/error doesn't kill the whole sync — each
+    is fetched independently, so a hiccup on r/Watches still leaves whatever
+    r/SeikoMods and the rest returned. Only raises if every subreddit failed,
+    since a sync that silently returns nothing looks identical to "nothing
+    new" otherwise."""
+    out = []
+    errors = []
+    for i, sub in enumerate(subs):
+        if i:
+            time.sleep(4)   # a beat between requests, unauthenticated and unhurried —
+                             # anonymous RSS's real per-IP budget turned out tighter than
+                             # expected in testing, so err conservative
+        url = f"https://www.reddit.com/r/{sub}/new/.rss?limit={limit}"
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = resp.read()
+        except urllib.error.HTTPError as e:
+            errors.append(f"r/{sub}: {e.code}")
+            continue
+        except urllib.error.URLError as e:
+            errors.append(f"r/{sub}: {e.reason}")
+            continue
+        root = ET.fromstring(body)
+        for entry in root.findall("atom:entry", _ATOM_NS)[:limit]:
+            title = (entry.findtext("atom:title", "", _ATOM_NS) or "").strip()
+            content = (entry.findtext("atom:content", "", _ATOM_NS) or "")
+            raw_author = entry.findtext("atom:author/atom:name", "", _ATOM_NS) or ""
+            author = raw_author[3:] if raw_author.startswith("/u/") else raw_author
+            link_el = entry.find("atom:link", _ATOM_NS)
+            permalink = link_el.get("href") if link_el is not None else ""
+            thread_id = (entry.findtext("atom:id", "", _ATOM_NS) or "").strip()
+            updated = entry.findtext("atom:updated", "", _ATOM_NS) or ""
+            try:
+                created_utc = int(datetime.datetime.fromisoformat(updated).timestamp())
+            except ValueError:
+                created_utc = 0
+            tag = _tag(title, content)
+            out.append({
+                "thread_id": thread_id, "subreddit": sub, "title": title,
+                "permalink": permalink, "author": author, "created_utc": created_utc,
+                "score": None, "num_comments": None, "tag": tag,
+                "opportunity_score": _opportunity_score(tag, 0),
+            })
+    if errors and not out:
+        raise RedditError("Couldn't reach any subreddit's RSS feed: " + "; ".join(errors))
+    if errors:
+        print(f"[reddit_rss] partial fetch, some subs failed: {'; '.join(errors)}", flush=True)
+    return out
+
+
+def mode():
+    """Which source fetch_new_threads() is currently using — the UI shows a
+    lighter banner (not a hard "disconnected" one) when this is 'rss', since
+    the Listener still works, just with less data per thread."""
+    return "oauth" if configured() else "rss"
+
+
+def fetch_new_threads(subs=None, limit=25):
+    """New posts from each target sub, tagged and scored. Read-only — makes
+    no writes to Reddit either way. Uses the OAuth API when credentials
+    exist, otherwise falls back to the public RSS feed (see module
+    docstring) so the Listener has real data before the app is approved."""
+    subs = subs or TARGET_SUBS
+    if configured():
+        return _fetch_new_threads_oauth(subs, limit)
+    return _fetch_new_threads_rss(subs, limit)

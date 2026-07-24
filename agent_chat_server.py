@@ -2919,9 +2919,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ------------------------------------------------------------- reddit
     def _handle_reddit_threads(self, query):
         """Read-only list of threads the Listener has already fetched, plus
-        whether the account is even connected yet — the UI uses `connected`
-        to draw the setup banner instead of an empty list, which look
-        identical otherwise."""
+        which source is currently live — 'rss' still means the Listener
+        works (Reddit's public feed, no score/comment counts), 'oauth' means
+        the full API is connected. Only an actual fetch failure should read
+        as broken, not the RSS fallback being active."""
         if not self._has_tool("reddit"):
             self._json(403, {"error": "not available for this account"})
             return
@@ -2937,7 +2938,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
         conn.close()
         import reddit_api
-        self._json(200, {"connected": reddit_api.configured(), "threads": rows})
+        self._json(200, {"mode": reddit_api.mode(), "threads": rows})
 
     def _handle_reddit_sync(self):
         """Pull fresh threads from the target subreddits and upsert them.
@@ -2959,9 +2960,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             cur = conn.execute("SELECT id FROM reddit_threads WHERE thread_id=?",
                                (t["thread_id"],)).fetchone()
             if cur:
+                # COALESCE so an RSS re-sync (score/num_comments unknown,
+                # always None) can't blank out real numbers a previous
+                # OAuth sync already recorded for this thread.
                 conn.execute(
-                    "UPDATE reddit_threads SET score=?, num_comments=?, "
-                    "opportunity_score=? WHERE thread_id=?",
+                    "UPDATE reddit_threads SET score=COALESCE(?,score), "
+                    "num_comments=COALESCE(?,num_comments), opportunity_score=? "
+                    "WHERE thread_id=?",
                     (t["score"], t["num_comments"], t["opportunity_score"], t["thread_id"]))
             else:
                 conn.execute(

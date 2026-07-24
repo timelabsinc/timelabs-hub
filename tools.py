@@ -48,7 +48,7 @@ TOOLS = [
         ("blog", "Blog builder", "Your 27 queued topics → the content plan.", "/ops/blog.html", "live"),
         ("post", "Blog uploader", "Write a post and publish it to the store.", "/ops/blog-uploader.html", "live"),
         ("content", "Content updater", "Bulk-refresh product copy &amp; edit store pages in your voice.", "/ops/content-updater.html", "live"),
-        ("reddit", "Reddit listener", "Surfaces watch-hobbyist threads worth a genuine reply — read-only, nothing auto-posts.", "/ops/reddit.html", "soon"),
+        ("reddit", "Reddit listener", "Surfaces watch-hobbyist threads worth a genuine reply — read-only, nothing auto-posts.", "/ops/reddit.html", "live"),
     ]),
     ("Shopify", [
         ("theme", "Theme editor", "Describe a look — Claude restyles your storefront, you approve it.", "/ops/theme-editor.html", "live"),

@@ -106,10 +106,12 @@ function draw(){
   $('rd-hot').textContent=THREADS.filter(function(t){return t.opportunity_score>=0.7;}).length;
   if(!rows.length){
     $('list').innerHTML='<div class="rd-empty">'+(THREADS.length?'No threads match this filter.':
-      'No threads yet. Once connected, click Sync to pull the first batch.')+'</div>';
+      'No threads yet — click Sync to pull the first batch.')+'</div>';
     return;
   }
   $('list').innerHTML=rows.map(function(t){
+    var upvotes = t.score==null ? '&mdash;' : t.score;
+    var comments = t.num_comments==null ? '&mdash;' : t.num_comments;
     return '<div class="rd-card">'
       +'<div class="rd-top">'
       +'<span class="rd-sr">r/'+esc(t.subreddit)+'</span>'
@@ -118,24 +120,34 @@ function draw(){
       +'<span class="rd-score">score '+ (t.opportunity_score||0).toFixed(2) +'</span>'
       +'</div>'
       +'<a class="rd-title" href="'+esc(t.permalink)+'" target="_blank" rel="noopener">'+esc(t.title)+'</a>'
-      +'<div class="rd-meta">'+ (t.score||0) +' upvotes &middot; '+ (t.num_comments||0) +' comments</div>'
+      +'<div class="rd-meta">'+upvotes+' upvotes &middot; '+comments+' comments</div>'
       +'</div>';
   }).join('');
 }
+
+var BANNER={
+  rss:['Running on Reddit\\u2019s public feed \\u2014 limited data for now',
+    'No Reddit app is connected yet, so threads come from Reddit\\u2019s public RSS feed '
+    +'instead of the full API: real titles and links, but no upvote or comment counts. '
+    +'A Developer Support ticket is the way to unlock full data \\u2014 once approved and '
+    +'the credentials are added to .env, this switches over automatically.'],
+  oauth:['','']
+};
 
 async function load(){
   try{
     var d=await api('/reddit/threads');
     THREADS=d.threads||[];
-    if(!d.connected){
-      $('rd-banner').classList.add('on');
-      $('rd-sync').disabled=true;
-      $('rd-sync').title="Waiting on Reddit API credentials";
-    } else {
+    var b=BANNER[d.mode]||BANNER.rss;
+    if(d.mode==='oauth'){
       $('rd-banner').classList.remove('on');
-      $('rd-sync').disabled=false;
-      $('rd-sync').title='';
+    } else {
+      $('rd-banner-t').textContent=b[0];
+      $('rd-banner-p').innerHTML=b[1];
+      $('rd-banner').classList.add('on');
     }
+    $('rd-sync').disabled=false;
+    $('rd-sync').title='';
     draw();
   }catch(e){
     $('list').innerHTML='<div class="rd-empty">'+esc(e.message)+'</div>';
@@ -181,13 +193,7 @@ def build():
       <p class="page-sub">Genuine watch-hobbyist threads worth a reply. Read-only — nothing here
         ever posts or comments on its own. Refreshed {generated}.</p>
     </div>
-    <div class="rd-banner" id="rd-banner">
-      <b>Waiting on Reddit API access</b>
-      <p>Reddit closed self-service app creation — a Developer Support ticket at
-        support.reddithelp.com still needs to be submitted, requesting manual approval
-        (usually about a week once it is). Once the client ID and secret are added to
-        .env, Sync will start pulling threads automatically.</p>
-    </div>
+    <div class="rd-banner" id="rd-banner"><b id="rd-banner-t"></b><p id="rd-banner-p"></p></div>
     <div class="rd-kpirow">
       <div class="rd-kpi"><div class="v" id="rd-total">&mdash;</div><div class="l">threads tracked</div></div>
       <div class="rd-kpi"><div class="v" id="rd-buying">&mdash;</div><div class="l">buying intent</div></div>
