@@ -277,6 +277,15 @@ HUB_STYLE = r"""
     textarea, select{font-size:16px !important;}
   }
 
+  /* Order headline figures. Deliberately inside the panel with the source
+     mix underneath, so the numbers are always read together with the window
+     and channel split they describe. */
+  .okpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;}
+  .okpi b{display:block;font-size:21px;font-weight:750;color:var(--ink);letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums;}
+  .okpi span{font-size:10.5px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.05em;font-weight:650;}
+
   .tabpanel{display:none;}
   .tabpanel.active{display:block;animation:fadeup .22s var(--ease);}
   @keyframes fadeup{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}

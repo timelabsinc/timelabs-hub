@@ -17,6 +17,10 @@ import urllib.request
 import urllib.error
 
 BASE = "/root/ops-dashboard"
+# The effective rupees-per-dollar the business actually pays once bank charges
+# and transfer fees are in — same figure fx_apply.py uses on invoices, not the
+# market rate, so shipment costs here line up with the Ledger.
+USD_INR_EFFECTIVE = 100.0
 sys.path.insert(0, "/root/ops-dashboard")
 from hub_shell import (  # the Hub/Face "Meridian" shell + chart engine
     page, source_chip, _refund_pct, kpi_card, stat_pill, svg_revenue_chart,
@@ -248,7 +252,7 @@ def fetch_logged_orders(limit=60):
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
             "SELECT received_at, customer_name, product, price_inr, quantity, status, "
-            "source, sender_number, chat_id FROM orders "
+            "source, sender_number, chat_id, id FROM orders "
             f"WHERE received_at >= date('now', '-{LOOKBACK_DAYS} days') "
             "ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
@@ -264,7 +268,9 @@ def fetch_logged_orders(limit=60):
         out.append({"when": (r[0] or "")[:16], "customer": r[1] or "—",
                     "product": r[2] or "—", "amount": float(r[3] or 0),
                     "qty": int(r[4] or 1), "status": (r[5] or "new").lower(),
-                    "source": src, "ref": ""})
+                    # id is what lets shipment costs be looked up for exactly
+                    # the orders on screen
+                    "source": src, "ref": "", "id": r[9]})
     return out
 
 
@@ -344,6 +350,37 @@ def product_analytics(top=8):
     ranked = [(r[0], {"units": r[1] or 0, "revenue": r[2] or 0.0, "orders": r[3] or 0})
               for r in rows]
     return ranked[:top], ranked[-top:][::-1] if len(ranked) > top else []
+
+
+def shipment_cost_for(orders):
+    """What the shipments carrying these orders cost us, in rupees.
+
+    Only counts each shipment once even when several of its watches are in
+    the list — otherwise a consignment's freight would be added again for
+    every build inside it. Costs are entered per consignment in the supplier
+    queue, usually in USD, so they're converted at the same effective rate
+    the Ledger uses rather than the market rate.
+    """
+    import sqlite3
+    ids = [o.get("id") for o in orders if o.get("id")]
+    if not ids:
+        return 0.0
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        marks = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT DISTINCT s.id, s.total_cost, s.currency FROM shipments s "
+            f"JOIN orders o ON o.shipment_id = s.id WHERE o.id IN ({marks})", ids).fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"[shipment-cost] {e}", file=sys.stderr)
+        return 0.0
+    total = 0.0
+    for _sid, cost, cur in rows:
+        if not cost:
+            continue
+        total += float(cost) * (USD_INR_EFFECTIVE if (cur or "USD").upper() == "USD" else 1.0)
+    return total
 
 
 def fetch_research():
@@ -568,10 +605,23 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
                 '<p class="f-note" style="margin-top:12px">Slowest movers: '
                 + ", ".join(f'{html.escape(n)} ({v["units"]})' for n, v in slow[:5]) + '</p>'
             )
+        # Headline numbers for exactly the orders shown below — the owner asked
+        # for totals that follow the current range rather than a fixed all-time
+        # figure, so these move with LOOKBACK_DAYS and say so.
+        total_cost = shipment_cost_for(orders)
+        cost_bit = (f'<div class="okpi"><b>{fmt_inr(total_cost)}</b>'
+                    f'<span>Shipping cost</span></div>' if total_cost else '')
         orders_html = (
             '<section><h2>Orders — every source</h2><div class="panel">'
-            f'<p class="f-note">{mix} &nbsp;·&nbsp; {len(orders)} orders &nbsp;·&nbsp; '
-            f'<b>{fmt_inr(total_rev)}</b> total</p></div>'
+            '<div class="okpis">'
+            f'<div class="okpi"><b>{len(orders)}</b><span>Orders</span></div>'
+            f'<div class="okpi"><b>{fmt_inr(total_rev)}</b><span>Order value</span></div>'
+            f'{cost_bit}'
+            f'<div class="okpi"><b>{fmt_inr(total_rev / len(orders)) if orders else "—"}</b>'
+            f'<span>Average</span></div>'
+            '</div>'
+            f'<p class="f-note" style="margin-top:10px">{mix} &nbsp;·&nbsp; '
+            f'last {LOOKBACK_DAYS} days</p></div>'
             '<div class="panel tscroll" style="margin-top:10px">'
             '<table><thead><tr><th>When</th><th>Source</th><th>Customer</th><th>Product</th>'
             '<th class="n">Value</th><th class="n">Qty</th><th>Status</th></tr></thead>'

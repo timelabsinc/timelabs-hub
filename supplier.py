@@ -61,6 +61,32 @@ SUP_CSS = r"""
   .sync{font-size:11.5px;color:var(--muted);}
   .sync.err{color:var(--bad);}
 
+  /* tabs */
+  .tabs{display:flex;gap:4px;margin-top:11px;}
+  .tabs button{flex:none;border:none;background:none;color:var(--muted);font:inherit;
+    font-size:14px;font-weight:650;padding:8px 2px;margin-right:16px;cursor:pointer;
+    border-bottom:2px solid transparent;min-height:38px;}
+  .tabs button.on{color:var(--ink);border-bottom-color:var(--accent);}
+  .pane{display:none;} .pane.on{display:block;}
+
+  /* Stage filter stays upfront — it's the question the supplier asks every
+     time they open this ("what needs me?"), so it shouldn't cost a tap to
+     see. Icons carry it so four stages fit a phone width without wrapping;
+     the label is hidden on narrow screens but kept for screen readers. */
+  .stagebar{display:flex;gap:6px;margin-top:10px;}
+  .stg{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;
+    border:1px solid var(--border);background:var(--card);color:var(--muted);
+    border-radius:var(--r-s);padding:7px 4px;font:inherit;font-size:11px;font-weight:650;
+    cursor:pointer;min-height:46px;justify-content:center;
+    transition:background .12s,color .12s,border-color .12s;}
+  .stg svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.9;
+    stroke-linecap:round;stroke-linejoin:round;}
+  .stg b{font-size:13px;font-weight:800;line-height:1;}
+  .stg .lbl{font-size:10px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
+  .stg.on{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+  .stg.attn.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+  @media(max-width:380px){ .stg .lbl{display:none;} }
+
   /* Filters collapse behind a button so they never eat the space the queue
      itself needs — but the active count stays visible on the button, so a
      filtered view can't be mistaken for an empty one. */
@@ -233,6 +259,53 @@ SUP_CSS = r"""
   .lb-nav button{min-width:var(--tap);min-height:38px;border-radius:var(--r-s);border:none;
     background:rgba(255,255,255,.16);color:#fff;font:inherit;font-size:14px;font-weight:650;cursor:pointer;}
 
+  /* multi-select + the bar that appears once anything is picked */
+  .ocard.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-bg);}
+  .osel{position:absolute;top:9px;left:9px;z-index:2;width:24px;height:24px;
+    border-radius:6px;border:1.5px solid var(--border-2);background:var(--card);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;}
+  .osel svg{width:14px;height:14px;stroke:#fff;fill:none;stroke-width:3;opacity:0;}
+  .osel.on{background:var(--accent);border-color:var(--accent);}
+  .osel.on svg{opacity:1;}
+  .ocard{position:relative;}
+  .ocard.selectable .oshot{margin-left:20px;}
+
+  .bulkbar{position:sticky;bottom:0;z-index:60;display:none;gap:8px;align-items:center;
+    background:var(--ink);color:var(--bg);border-radius:var(--r);padding:10px 12px;
+    margin:12px 0 calc(10px + env(safe-area-inset-bottom));box-shadow:var(--shadow-lg);
+    flex-wrap:wrap;}
+  .bulkbar.on{display:flex;}
+  .bulkbar b{font-size:13.5px;}
+  .bulkbar .sp{flex:1;}
+  .bulkbar button{min-height:38px;border:1px solid rgba(255,255,255,.28);background:transparent;
+    color:var(--bg);border-radius:var(--r-s);padding:0 12px;font:inherit;font-size:13px;
+    font-weight:650;cursor:pointer;}
+  .bulkbar button.primary{background:var(--bg);color:var(--ink);border-color:var(--bg);}
+
+  /* shipments */
+  .shipcard{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+    box-shadow:var(--shadow);padding:15px;margin-bottom:12px;}
+  .shiptop{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
+  .shipcode{font-size:15.5px;font-weight:750;color:var(--ink);
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .shipmeta{font-size:12.5px;color:var(--muted);}
+  .shipcost{margin-left:auto;text-align:right;}
+  .shipcost b{display:block;font-size:17px;font-weight:750;color:var(--ink);letter-spacing:-.01em;}
+  .shipcost span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:650;}
+  .shiporders{margin-top:11px;border-top:1px solid var(--border);padding-top:10px;}
+  .shiprow{display:flex;gap:9px;align-items:center;font-size:13px;padding:5px 0;color:var(--ink);}
+  .shiprow .n{color:var(--muted);font-size:12px;min-width:38px;}
+  .shiprow .st{margin-left:auto;font-size:11px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.04em;font-weight:650;}
+  .shipform{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:14px;
+    background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:14px;}
+  @media(max-width:560px){ .shipform{grid-template-columns:1fr;} }
+  .shipform input{font-size:16px;border:1px solid var(--border);border-radius:var(--r-s);
+    background:var(--bg);color:var(--ink);padding:10px 12px;-webkit-appearance:none;appearance:none;}
+  .shipform input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
+  .shipform button{grid-column:1/-1;min-height:var(--tap);border:none;border-radius:var(--r-s);
+    background:var(--ink);color:var(--bg);font:inherit;font-size:14.5px;font-weight:700;cursor:pointer;}
+
   .sempty{text-align:center;color:var(--muted);font-size:14px;line-height:1.6;padding:44px 20px;}
   .sempty svg{width:40px;height:40px;stroke:var(--border-2);fill:none;stroke-width:1.4;margin-bottom:12px;}
   .sfoot{text-align:center;color:var(--muted);font-size:11.5px;padding:26px 0 34px;}
@@ -272,6 +345,7 @@ function ago(s){
 function cls(s){return String(s||'').replace(/[^a-z]/gi,'');}
 
 var STATUSES=[], ORDERS=[], filter='attn', q='', openDetail={}, sort='oldest', onlyPhotos=false;
+var stageF='', caseF='', moveF='', selectMode=false, SEL={}, SHIPS=[];
 /* Everything before "shipped" still wants something from them; the tail end
    is history. This split is what makes the queue a to-do list. */
 var DONE=['shipped','delivered'];
@@ -289,6 +363,9 @@ function bucket(o){
 }
 function matches(o){
   if(onlyPhotos&&!o.photos)return false;
+  if(stageF&&o.status!==stageF)return false;
+  if(caseF&&(o.case_style||'')!==caseF)return false;
+  if(moveF&&(o.movement||'')!==moveF)return false;
   if(!q)return true;
   var hay=('#'+o.id+' '+(o.product||'')+' '+(o.notes||'')+' '+(o.tracking_code||'')+' '+
     ['case_style','dial_colour','dial_style','case_colour','movement','watch_size']
@@ -300,7 +377,29 @@ function activeFilters(){
   if(onlyPhotos)n++;
   if(sort!=='oldest')n++;
   if(q)n++;
+  if(stageF)n++;
+  if(caseF)n++;
+  if(moveF)n++;
   return n;
+}
+/* Attribute filters are built from what's actually in the queue rather than
+   the full catalogue vocabulary — offering "Daytona" when no Daytona is in
+   the queue is a filter that can only ever return nothing. */
+function distinct(key){
+  var seen={};
+  ORDERS.forEach(function(o){ if(o[key]) seen[o[key]]=(seen[o[key]]||0)+1; });
+  return Object.keys(seen).sort();
+}
+function chipRow(host,key,cur,setter){
+  var vals=distinct(key);
+  var el=$(host);
+  if(!vals.length){ el.innerHTML='<span class="shipmeta">None recorded yet</span>'; return; }
+  el.innerHTML=vals.map(function(v){
+    return '<button class="schip'+(v===cur?' on':'')+'" data-v="'+esc(v)+'">'+esc(v)+'</button>';
+  }).join('');
+  el.querySelectorAll('.schip').forEach(function(b){
+    b.onclick=function(){ setter(b.dataset.v===cur?'':b.dataset.v); render(); };
+  });
 }
 function sortOrders(list){
   var c=list.slice();
@@ -352,7 +451,10 @@ function trackEl(o){
 }
 function cardEl(o){
   var nxt=nextOf(o.status), le=lastEvent(o), attn=bucket(o)==='attn';
-  return '<article class="ocard'+(attn?' attn':'')+'" data-id="'+o.id+'">'+
+  return '<article class="ocard'+(attn?' attn':'')+(selectMode?' selectable':'')+
+      (SEL[o.id]?' sel':'')+'" data-id="'+o.id+'">'+
+    (selectMode?'<button class="osel'+(SEL[o.id]?' on':'')+'" data-sel="'+o.id+
+      '" aria-label="Select order '+o.id+'"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>':'')+
     '<div class="otop">'+photoEl(o)+
       '<div class="omid">'+
         '<div class="onum">ORDER #'+o.id+'</div>'+
@@ -407,26 +509,60 @@ function render(){
       '</div></div>';
   }
   $('list').innerHTML=html;
-  var counts={attn:groups.attn.length,wip:groups.wip.length,done:groups.done.length};
-  document.querySelectorAll('.schip[data-f]').forEach(function(c){
-    var k=c.dataset.f;
-    c.classList.toggle('on',k===filter);
-    var n=c.querySelector('b');
-    if(n)n.textContent = k==='all'?vis.length:counts[k];
+  var counts={attn:groups.attn.length,wip:groups.wip.length,done:groups.done.length,all:vis.length};
+  document.querySelectorAll('.stg').forEach(function(c){
+    c.classList.toggle('on',c.dataset.f===filter);
+  });
+  ['attn','wip','done','all'].forEach(function(k){
+    var el=$('c-'+k); if(el)el.textContent=counts[k];
   });
   document.querySelectorAll('.schip[data-sort]').forEach(function(c){
     c.classList.toggle('on',c.dataset.sort===sort);
   });
   var pc=$('f-photos'); if(pc)pc.classList.toggle('on',onlyPhotos);
+  var sm=$('f-select'); if(sm)sm.classList.toggle('on',selectMode);
+  chipRow('f-stages','status',stageF,function(v){stageF=v;});
+  chipRow('f-case','case_style',caseF,function(v){caseF=v;});
+  chipRow('f-move','movement',moveF,function(v){moveF=v;});
   var n=activeFilters(), badge=$('fcount');
   badge.textContent=n?String(n):'';
   badge.style.display=n?'':'none';
   $('fbtn').classList.toggle('on',n>0);
+  drawBulk();
   wire();
+}
+
+/* ---- multi-select + bulk ---- */
+function selIds(){ return Object.keys(SEL).filter(function(k){return SEL[k];}).map(Number); }
+function drawBulk(){
+  var ids=selIds();
+  $('bulkbar').classList.toggle('on',selectMode&&ids.length>0);
+  $('bulkn').textContent=ids.length+' selected';
+}
+function clearSel(){ SEL={}; render(); }
+async function bulkDo(body,label){
+  var ids=selIds();
+  if(!ids.length)return;
+  try{
+    var d=await jpost('/supplier/bulk',Object.assign({ids:ids},body));
+    toast(label+' — '+d.count+' order'+(d.count===1?'':'s'));
+    SEL={};
+    load(true);
+  }catch(e){ toast(e.message); }
 }
 
 function wire(){
   var L=$('list');
+  L.querySelectorAll('[data-sel]').forEach(function(b){
+    b.onclick=function(e){
+      e.stopPropagation();
+      var id=b.dataset.sel;
+      SEL[id]=!SEL[id];
+      b.classList.toggle('on',SEL[id]);
+      b.closest('.ocard').classList.toggle('sel',SEL[id]);
+      drawBulk();
+    };
+  });
   L.querySelectorAll('[data-adv]').forEach(function(b){
     b.onclick=function(){ setStatus(+b.dataset.adv, b.dataset.to, b); };
   });
@@ -626,10 +762,120 @@ document.addEventListener('keydown',function(e){
   }
 });
 
+/* ---- tabs ---- */
+document.querySelectorAll('.tabs button').forEach(function(t){
+  t.onclick=function(){
+    var k=t.dataset.tab;
+    document.querySelectorAll('.tabs button').forEach(function(x){x.classList.toggle('on',x===t);});
+    $('pane-queue').classList.toggle('on',k==='queue');
+    $('pane-ships').classList.toggle('on',k==='ships');
+    $('queue-controls').style.display = k==='queue' ? '' : 'none';
+    if(k==='ships')loadShips();
+  };
+});
+
+/* ---- shipments ---- */
+function money(n,cur){
+  if(n===null||n===undefined||n==='')return '—';
+  return (cur||'USD')+' '+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+async function loadShips(){
+  try{
+    var d=await api('/supplier/shipments');
+    SHIPS=d.shipments||[];
+    var unassigned=d.unassigned||[];
+    if(!SHIPS.length){
+      $('shiplist').innerHTML='<div class="sempty">No shipments yet. Add one above, then '+
+        'select builds in the queue and use &ldquo;Add to shipment&rdquo;.</div>';
+      return;
+    }
+    $('shiplist').innerHTML=SHIPS.map(function(s){
+      return '<div class="shipcard">'+
+        '<div class="shiptop">'+
+          '<span class="shipcode">'+esc(s.code||'')+'</span>'+
+          '<span class="shipmeta">'+esc(s.carrier||'')+
+            (s.order_count?' · '+s.order_count+' watch'+(s.order_count===1?'':'es'):' · empty')+'</span>'+
+          '<span class="shipcost"><b>'+esc(money(s.per_watch,s.currency))+'</b>'+
+            '<span>per watch</span></span>'+
+        '</div>'+
+        '<div class="shipmeta" style="margin-top:4px">Total '+esc(money(s.total_cost,s.currency))+
+          (s.order_count?' ÷ '+s.order_count:'')+'</div>'+
+        (s.orders&&s.orders.length?'<div class="shiporders">'+s.orders.map(function(o){
+          return '<div class="shiprow"><span class="n">#'+o.id+'</span>'+
+            '<span>'+esc((o.product||'').slice(0,46))+'</span>'+
+            '<span class="st">'+esc(o.status)+'</span></div>';
+        }).join('')+'</div>':'')+
+      '</div>';
+    }).join('')+
+      (unassigned.length?'<p class="shipmeta" style="margin-top:6px">'+unassigned.length+
+        ' build'+(unassigned.length===1?'':'s')+' not yet in a shipment.</p>':'');
+  }catch(e){ $('shiplist').innerHTML='<div class="sempty">'+esc(e.message)+'</div>'; }
+}
+$('shipform').onsubmit=async function(e){
+  e.preventDefault();
+  var code=$('s-code').value.trim();
+  if(!code){toast('A shipment number is needed');return;}
+  try{
+    await jpost('/supplier/shipment/save',{code:code,carrier:$('s-carrier').value.trim(),
+      total_cost:$('s-cost').value,currency:$('s-cur').value.trim()||'USD'});
+    toast('Shipment '+code+' saved');
+    $('s-code').value='';$('s-carrier').value='';$('s-cost').value='';
+    loadShips();
+  }catch(err){ toast(err.message); }
+};
+
+/* ---- bulk buttons ---- */
+$('bulk-clear').onclick=clearSel;
+$('bulk-status').onclick=function(){
+  $('sheet-title').textContent=selIds().length+' orders — set status';
+  $('sheet-opts').innerHTML=STATUSES.map(function(s){
+    return '<button class="opt" data-s="'+esc(s)+'"><i></i>'+esc(s)+'</button>';}).join('');
+  $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
+    b.onclick=function(){ closeSheet(); bulkDo({status:b.dataset.s},'Status set'); };
+  });
+  $('sheet').classList.add('on');
+};
+$('bulk-track').onclick=function(){
+  var v=prompt('Tracking number for '+selIds().length+' selected orders:');
+  if(v===null)return;
+  bulkDo({tracking_code:v.trim()},'Tracking set');
+};
+$('bulk-ship').onclick=async function(){
+  if(!SHIPS.length){ try{ var d=await api('/supplier/shipments'); SHIPS=d.shipments||[]; }catch(e){} }
+  if(!SHIPS.length){ toast('Create a shipment first, on the Shipments tab'); return; }
+  $('sheet-title').textContent='Add '+selIds().length+' to a shipment';
+  $('sheet-opts').innerHTML=SHIPS.map(function(s){
+    return '<button class="opt" data-s="'+s.id+'"><i></i>'+esc(s.code)+
+      ' <span style="opacity:.6">('+s.order_count+')</span></button>';}).join('')+
+    '<button class="opt" data-s=""><i></i>Remove from shipment</button>';
+  $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
+    b.onclick=async function(){
+      closeSheet();
+      try{
+        var d=await jpost('/supplier/shipment/assign',
+          {ids:selIds(),shipment_id:b.dataset.s||null});
+        toast(d.count+' order'+(d.count===1?'':'s')+' updated');
+        SEL={}; load(true); loadShips();
+      }catch(e){ toast(e.message); }
+    };
+  });
+  $('sheet').classList.add('on');
+};
+$('bulk-pdf').onclick=function(){
+  var ids=selIds();
+  if(!ids.length)return;
+  window.open(API+'/supplier/ledger?ids='+ids.join(','),'_blank');
+};
+
 /* filters + search */
-document.querySelectorAll('.schip[data-f]').forEach(function(c){
+document.querySelectorAll('.stg').forEach(function(c){
   c.onclick=function(){ filter=c.dataset.f; render(); window.scrollTo({top:0,behavior:'smooth'}); };
 });
+$('f-select').onclick=function(){
+  selectMode=!selectMode;
+  if(!selectMode)SEL={};
+  render();
+};
 document.querySelectorAll('.schip[data-sort]').forEach(function(c){
   c.onclick=function(){ sort=c.dataset.sort; render(); };
 });
@@ -640,7 +886,8 @@ $('fbtn').onclick=function(){
   $('fbtn').setAttribute('aria-expanded',open?'true':'false');
 };
 $('fclear').onclick=function(){
-  q='';onlyPhotos=false;sort='oldest';$('q').value='';render();
+  q='';onlyPhotos=false;sort='oldest';stageF='';caseF='';moveF='';
+  $('q').value='';render();
 };
 var qT;
 $('q').addEventListener('input',function(){
@@ -699,39 +946,82 @@ def build():
       <span class="sp"></span>
       <span class="swho" id="who"></span>
     </div>
-    <div class="fbar">
-      <input id="q" class="ssearch" type="search" placeholder="Search number, product, spec, tracking"
-             aria-label="Search the queue" autocomplete="off">
-      <button class="fbtn" id="fbtn" aria-expanded="false" aria-controls="fpanel">
-        <svg viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
-        Filters<span class="cnt" id="fcount" style="display:none"></span>
-        <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
-      </button>
+    <div class="tabs">
+      <button class="on" data-tab="queue">Build queue</button>
+      <button data-tab="ships">Shipments</button>
     </div>
-    <div class="fpanel" id="fpanel">
-      <p class="flab">Show</p>
-      <div class="frow">
-        <button class="schip on" data-f="attn">Needs you <b>0</b></button>
-        <button class="schip" data-f="wip">In progress <b>0</b></button>
-        <button class="schip" data-f="done">Done <b>0</b></button>
-        <button class="schip" data-f="all">Everything <b>0</b></button>
+
+    <div id="queue-controls">
+      <div class="stagebar">
+        <button class="stg attn on" data-f="attn" aria-label="Needs you">
+          <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+          <b id="c-attn">0</b><span class="lbl">Needs you</span></button>
+        <button class="stg" data-f="wip" aria-label="In progress">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <b id="c-wip">0</b><span class="lbl">In progress</span></button>
+        <button class="stg" data-f="done" aria-label="Done">
+          <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+          <b id="c-done">0</b><span class="lbl">Done</span></button>
+        <button class="stg" data-f="all" aria-label="Everything">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+          <b id="c-all">0</b><span class="lbl">All</span></button>
       </div>
-      <p class="flab">Order by</p>
-      <div class="frow">
-        <button class="schip on" data-sort="oldest">Oldest first</button>
-        <button class="schip" data-sort="newest">Newest first</button>
-        <button class="schip" data-sort="stage">Stage</button>
+      <div class="fbar">
+        <input id="q" class="ssearch" type="search" placeholder="Search number, product, spec, tracking"
+               aria-label="Search the queue" autocomplete="off">
+        <button class="fbtn" id="fbtn" aria-expanded="false" aria-controls="fpanel">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+          Filters<span class="cnt" id="fcount" style="display:none"></span>
+          <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
       </div>
-      <p class="flab">Only</p>
-      <div class="frow">
-        <button class="schip" id="f-photos">With a photo</button>
-        <button class="fclear" id="fclear">Reset filters</button>
+      <div class="fpanel" id="fpanel">
+        <p class="flab">Exact stage</p>
+        <div class="frow" id="f-stages"></div>
+        <p class="flab">Case style</p>
+        <div class="frow" id="f-case"></div>
+        <p class="flab">Movement</p>
+        <div class="frow" id="f-move"></div>
+        <p class="flab">Order by</p>
+        <div class="frow">
+          <button class="schip on" data-sort="oldest">Oldest first</button>
+          <button class="schip" data-sort="newest">Newest first</button>
+          <button class="schip" data-sort="stage">Stage</button>
+        </div>
+        <div class="frow">
+          <button class="schip" id="f-photos">With a photo</button>
+          <button class="schip" id="f-select">Select mode</button>
+          <button class="fclear" id="fclear">Reset filters</button>
+        </div>
       </div>
+      <div style="margin-top:8px"><span class="sync" id="sync">Loading&hellip;</span></div>
     </div>
-    <div style="margin-top:8px"><span class="sync" id="sync">Loading&hellip;</span></div>
   </div>
 
-  <main id="list"><div class="sempty">Loading&hellip;</div></main>
+  <section class="pane on" id="pane-queue">
+    <main id="list"><div class="sempty">Loading&hellip;</div></main>
+    <div class="bulkbar" id="bulkbar">
+      <b id="bulkn">0 selected</b>
+      <span class="sp"></span>
+      <button id="bulk-status">Set status</button>
+      <button id="bulk-track">Tracking</button>
+      <button id="bulk-ship">Add to shipment</button>
+      <button class="primary" id="bulk-pdf">Build request PDF</button>
+      <button id="bulk-clear">Clear</button>
+    </div>
+  </section>
+
+  <section class="pane" id="pane-ships">
+    <form class="shipform" id="shipform">
+      <input id="s-code" placeholder="Shipment number" aria-label="Shipment number" autocomplete="off" required>
+      <input id="s-carrier" placeholder="Carrier (DHL, EMS&hellip;)" aria-label="Carrier" autocomplete="off">
+      <input id="s-cost" type="number" step="0.01" min="0" placeholder="Total cost" aria-label="Total cost">
+      <input id="s-cur" placeholder="USD" aria-label="Currency" value="USD" autocomplete="off">
+      <button type="submit">Save shipment</button>
+    </form>
+    <div id="shiplist"><div class="sempty">Loading&hellip;</div></div>
+  </section>
+
   <p class="sfoot">Timelabs Co &middot; build queue</p>
 </div>
 
