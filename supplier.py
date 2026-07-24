@@ -352,6 +352,19 @@ SUP_CSS = r"""
     margin:12px 0 calc(10px + env(safe-area-inset-bottom));box-shadow:var(--shadow-lg);
     flex-wrap:wrap;}
   .bulkbar.on{display:flex;}
+  .fbtn.newbatch{border-color:var(--accent);color:var(--accent);background:var(--accent-bg);}
+  .fbtn.newbatch.on{background:var(--accent);color:#fff;border-color:var(--accent);}
+  /* Says what to do while picking. Selection used to live behind the Filters
+     panel, where nobody would look for it — this replaces that with a mode
+     that announces itself. */
+  .pickhint{display:none;align-items:center;gap:8px;margin-top:10px;padding:9px 12px;
+    background:var(--accent-bg);border:1px solid var(--accent);border-radius:var(--r-s);
+    font-size:12.5px;color:var(--accent);font-weight:650;}
+  .pickhint.on{display:flex;}
+  .pickhint .sp{flex:1;}
+  .pickhint button{border:none;background:none;color:var(--accent);font:inherit;
+    font-size:12.5px;font-weight:750;cursor:pointer;text-decoration:underline;
+    padding:4px 2px;min-height:30px;}
   .bulkbar b{font-size:13.5px;}
   .bulkbar .sp{flex:1;}
   .bulkbar button{min-height:38px;border:1px solid rgba(255,255,255,.28);background:transparent;
@@ -583,6 +596,24 @@ function cardEl(o){
   '</article>';
 }
 
+/* Redraw a single card. render() rebuilds every card's innerHTML, photos
+   included, which is the right thing when the filter or the data changes and
+   badly wrong for a status tap — the whole list re-decodes its images and the
+   tap feels laggy on a phone. Interactions that only change one build use
+   this instead. */
+function refreshCard(id){
+  var el=$('list').querySelector('.ocard[data-id="'+id+'"]');
+  var o=byId(id);
+  if(!el||!o){ render(); return; }
+  /* a build that no longer belongs in the current view needs the full pass */
+  if(!matches(o)||(filter!=='all'&&bucket(o)!==filter)){ render(); return; }
+  var tmp=document.createElement('div');
+  tmp.innerHTML=cardEl(o);
+  el.replaceWith(tmp.firstChild);
+  wire();
+  drawBulk();
+}
+
 function render(){
   var vis=ORDERS.filter(matches);
   var groups={attn:[],wip:[],done:[]};
@@ -615,7 +646,9 @@ function render(){
     c.classList.toggle('on',c.dataset.sort===sort);
   });
   var pc=$('f-photos'); if(pc)pc.classList.toggle('on',onlyPhotos);
-  var sm=$('f-select'); if(sm)sm.classList.toggle('on',selectMode);
+  $('newbatch').classList.toggle('on',selectMode);
+  $('newbatch').querySelector('span').textContent=selectMode?'Cancel':'New batch';
+  $('pickhint').classList.toggle('on',selectMode);
   chipRow('f-stages','status',stageF,function(v){stageF=v;});
   chipRow('f-case','case_style',caseF,function(v){caseF=v;});
   chipRow('f-move','movement',moveF,function(v){moveF=v;});
@@ -631,9 +664,28 @@ function render(){
 function selIds(){ return Object.keys(SEL).filter(function(k){return SEL[k];}).map(Number); }
 function drawBulk(){
   var ids=selIds();
-  $('bulkbar').classList.toggle('on',selectMode&&ids.length>0);
-  $('bulkn').textContent=ids.length+' selected';
+  /* Visible for the whole of select mode, not only once something is ticked —
+     otherwise the bar (and the way out of the mode) vanishes the moment you
+     deselect the last build. */
+  $('bulkbar').classList.toggle('on',selectMode);
+  var tot=ids.reduce(function(a,i){
+    var o=byId(i); if(!o)return a;
+    return a+(o.supplier_cost!=null?toINR(o.supplier_cost,o.supplier_cost_ccy):(o.default_cost||0));
+  },0);
+  $('bulkn').textContent=ids.length?ids.length+' selected · '+inr(tot):'Nothing selected';
+  $('bulk-bill').disabled=!ids.length;
+  $('bulk-bill').style.opacity=ids.length?'':'.5';
 }
+function unbilledIds(){
+  return ORDERS.filter(function(o){return !o.bill_id;}).map(function(o){return o.id;});
+}
+function enterSelect(preselect){
+  selectMode=true;
+  SEL={};
+  if(preselect)unbilledIds().forEach(function(i){SEL[i]=true;});
+  render();
+}
+function exitSelect(){ selectMode=false; SEL={}; render(); }
 function clearSel(){ SEL={}; render(); }
 async function bulkDo(body,label){
   var ids=selIds();
@@ -710,7 +762,7 @@ function wire(){
         jpost('/supplier/cost',{order_id:id,cost:v,currency:'INR'}).then(function(){
           o.supplier_cost=Number(v); o.supplier_cost_ccy='INR';
           toast('Cost saved');
-          render(); drawMoney();
+          refreshCard(id); drawMoney();
         }).catch(function(err){ inp.disabled=false; toast(err.message); });
       };
     };
@@ -742,7 +794,7 @@ async function setStatus(id,to,btn){
   o.status=to;
   (o.timeline=o.timeline||[]).push({at:new Date().toISOString(),kind:'status',
     detail:was+' -> '+to,by:'you'});
-  render();
+  refreshCard(id);
   try{
     await jpost('/supplier/status',{id:id,status:to});
     toast('#'+id+' → '+to);
@@ -794,11 +846,13 @@ async function doShare(id,how){
     /* Straight into the team's WhatsApp from here — no app switch, and it
        lands where the team already looks rather than in a file someone has
        to be told about. */
-    toast('Sending…');
+    /* Returns as soon as it's queued; delivery happens server-side. The
+       timeline on the order is what confirms it actually landed, so refresh
+       shortly after rather than making the supplier wait on the send. */
     try{
       await jpost('/supplier/whatsapp',{id:id,with_pdf:how==='postpdf'});
-      toast('Posted to WhatsApp');
-      load(true);
+      toast('Sending to WhatsApp…');
+      setTimeout(function(){ load(true); }, 6000);
     }catch(e){ toast(e.message); }
     return;
   }
@@ -1037,7 +1091,7 @@ function drawMoney(){
 }
 
 /* ---- bulk buttons ---- */
-$('bulk-clear').onclick=clearSel;
+$('bulk-clear').onclick=exitSelect;
 $('bulk-cost').onclick=function(){
   var ids=selIds();
   if(!ids.length){toast('Nothing selected');return;}
@@ -1064,10 +1118,23 @@ $('bulk-bill').onclick=function(){
     .then(function(d){
       toast('Batch '+d.bill_no+' created — '+inr(d.total)+
         (d.defaulted?' ('+d.defaulted+' at default rate)':''));
-      clearSel(); load(true); loadBills();
+      exitSelect(); load(true); loadBills();
       document.querySelector('.tabs button[data-tab="bills"]').click();
     }).catch(function(e){ toast(e.message); });
 };
+/* One obvious way in. Everything not yet billed starts ticked, because a
+   batch is normally "the outstanding watches" — untick the few that aren't
+   ready rather than hunting for the many that are. Two batches from one
+   queue is then just: pick some, create, pick the rest, create. */
+$('newbatch').onclick=function(){
+  if(selectMode){ exitSelect(); return; }
+  var n=unbilledIds().length;
+  if(!n){ toast('Every build is already in a batch'); return; }
+  enterSelect(true);
+  window.scrollTo({top:0,behavior:'smooth'});
+};
+$('pick-all').onclick=function(){ enterSelect(true); };
+$('pick-none').onclick=function(){ clearSel(); };
 $('bulk-status').onclick=function(){
   $('sheet-title').textContent=selIds().length+' orders — set status';
   $('sheet-opts').innerHTML=STATUSES.map(function(s){
@@ -1087,11 +1154,6 @@ $('bulk-pdf').onclick=function(){
 document.querySelectorAll('.stg').forEach(function(c){
   c.onclick=function(){ filter=c.dataset.f; render(); window.scrollTo({top:0,behavior:'smooth'}); };
 });
-$('f-select').onclick=function(){
-  selectMode=!selectMode;
-  if(!selectMode)SEL={};
-  render();
-};
 document.querySelectorAll('.schip[data-sort]').forEach(function(c){
   c.onclick=function(){ sort=c.dataset.sort; render(); };
 });
@@ -1137,8 +1199,17 @@ async function load(quiet){
   }
   loading=false;
 }
-document.addEventListener('visibilitychange',function(){ if(!document.hidden)load(true); });
-setInterval(function(){ if(!document.hidden)load(true); },90000);
+/* The background refresh must never interrupt work in progress: rebuilding
+   the list would drop a half-typed note or cost, and re-deriving selection
+   mid-pick is worse. Skip the tick and catch the next one. */
+function busyEditing(){
+  var a=document.activeElement;
+  if(a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'))return true;
+  return selectMode;
+}
+document.addEventListener('visibilitychange',function(){
+  if(!document.hidden&&!busyEditing())load(true); });
+setInterval(function(){ if(!document.hidden&&!busyEditing())load(true); },90000);
 load();
 
 fetch(API+'/whoami').then(function(r){return r.ok?r.json():null;}).then(function(i){
@@ -1195,6 +1266,10 @@ def build():
           Filters<span class="cnt" id="fcount" style="display:none"></span>
           <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
         </button>
+        <button class="fbtn newbatch" id="newbatch">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New batch</span>
+        </button>
       </div>
       <div class="fpanel" id="fpanel">
         <p class="flab">Exact stage</p>
@@ -1213,11 +1288,16 @@ def build():
         </div>
         <div class="frow">
           <button class="schip" id="f-photos">With a photo</button>
-          <button class="schip" id="f-select">Select mode</button>
           <button class="fclear" id="fclear">Reset filters</button>
         </div>
       </div>
       <div class="syncline"><span class="sync" id="sync">Loading&hellip;</span></div>
+      <div class="pickhint" id="pickhint">
+        <span id="pickmsg">Tap the builds for this batch</span>
+        <span class="sp"></span>
+        <button id="pick-all">All unbilled</button>
+        <button id="pick-none">None</button>
+      </div>
       <div class="moneybar" id="moneybar"></div>
       <details class="helpbox">
         <summary>How these numbers are worked out</summary>
@@ -1250,9 +1330,9 @@ def build():
       <span class="sp"></span>
       <button id="bulk-cost">Set cost</button>
       <button id="bulk-status">Set status</button>
-      <button class="primary" id="bulk-bill">Create batch</button>
       <button id="bulk-pdf">Build request PDF</button>
-      <button id="bulk-clear">Clear</button>
+      <button class="primary" id="bulk-bill">Create batch</button>
+      <button id="bulk-clear">Cancel</button>
     </div>
   </section>
 

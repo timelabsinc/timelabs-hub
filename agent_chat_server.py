@@ -3715,21 +3715,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 print(f"[whatsapp] PDF skipped: {e}", flush=True)
 
-        try:
-            r = subprocess.run(["hermes", "send", "--to", target, "--quiet", body],
-                              capture_output=True, text=True, timeout=60)
-        except Exception as e:
-            self._json(502, {"error": f"couldn't reach WhatsApp: {e}"})
-            return
-        if r.returncode != 0:
-            self._json(502, {"error": (r.stderr or r.stdout or "send failed").strip()[:200]})
-            return
-        conn = db()
-        order_event(conn, oid, "shared", f"status sent to WhatsApp ({target})", actor)
-        conn.commit()
-        conn.close()
-        hub_event("order_shared", f"#{oid} status -> WhatsApp", actor, app="orders")
-        self._json(200, {"ok": True, "id": oid, "target": target})
+        # The send goes to a background thread and the request returns now.
+        # `hermes send` takes ~4.5s for plain text and longer with a PDF
+        # attached, and holding the HTTP response open for it made the button
+        # look broken — the supplier taps it, nothing happens for five
+        # seconds, so he taps it again. The outcome lands on the order's
+        # timeline either way, which is where he'd look to confirm it went.
+        def _deliver():
+            try:
+                r = subprocess.run(["hermes", "send", "--to", target, "--quiet", body],
+                                   capture_output=True, text=True, timeout=120)
+                ok = r.returncode == 0
+                detail = (f"status sent to WhatsApp ({target})" if ok else
+                          "WhatsApp send failed: " +
+                          (r.stderr or r.stdout or "unknown error").strip()[:160])
+            except Exception as e:
+                ok, detail = False, f"WhatsApp send failed: {e}"[:200]
+            try:
+                c = db()
+                order_event(c, oid, "shared" if ok else "share_failed", detail, actor)
+                c.commit()
+                c.close()
+            except Exception as e:
+                print(f"[whatsapp] could not log outcome: {e}", flush=True)
+            hub_event("order_shared" if ok else "order_share_failed",
+                      f"#{oid} status -> WhatsApp" if ok else f"#{oid} WhatsApp failed",
+                      actor, app="orders")
+
+        threading.Thread(target=_deliver, daemon=True).start()
+        self._json(200, {"ok": True, "id": oid, "target": target, "queued": True})
 
     def _handle_supplier_shipments(self):
         """Shipments with the builds they carry and what each one costs.

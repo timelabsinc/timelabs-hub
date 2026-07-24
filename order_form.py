@@ -494,16 +494,50 @@ function drawSources(list){
    permission needed), the clipboard API behind a button (the phone path), and
    the file picker (which on iPhone offers camera + photo library). */
 var shots=[];
+/* Updates in place rather than rewriting innerHTML.
+   The old version rebuilt every tile on each call — and it's called once per
+   file added plus once per upload that finishes — which threw away and
+   recreated every <img>. On a phone adding several multi-megabyte photos the
+   browser had to re-decode all of them each time, so tiles flickered and
+   briefly showed the wrong picture. Keeping each <img> element alive means
+   each photo decodes once. */
 function drawShots(){
-  $('shots').innerHTML=shots.map(function(p){
-    return '<div class="shot'+(p.path?'':' up')+'"><img src="'+p.url+'" alt="">'+
-      (p.path?'':'<span class="spin">…</span>')+
-      '<button class="rm" data-k="'+p.key+'" title="Remove">&times;</button></div>';
-  }).join('');
-  $('shots').querySelectorAll('.rm').forEach(function(b){
-    b.onclick=function(ev){ev.stopPropagation();
-      shots=shots.filter(function(x){return x.key!==b.dataset.k;});drawShots();};
+  var host=$('shots');
+  var seen={};
+  shots.forEach(function(p,idx){
+    seen[p.key]=1;
+    var el=host.querySelector('[data-shot="'+p.key+'"]');
+    if(!el){
+      el=document.createElement('div');
+      el.className='shot';
+      el.setAttribute('data-shot',p.key);
+      var img=document.createElement('img');
+      img.alt=''; img.src=p.url;
+      var spin=document.createElement('span');
+      spin.className='spin'; spin.textContent='…';
+      var rm=document.createElement('button');
+      rm.className='rm'; rm.title='Remove'; rm.innerHTML='&times;';
+      rm.onclick=function(ev){
+        ev.stopPropagation();
+        removeShot(p.key);
+      };
+      el.appendChild(img); el.appendChild(spin); el.appendChild(rm);
+      host.appendChild(el);
+    }
+    /* only the pending flag changes once a tile exists */
+    el.classList.toggle('up',!p.path);
+    if(host.children[idx]!==el)host.insertBefore(el,host.children[idx]||null);
   });
+  Array.prototype.slice.call(host.children).forEach(function(el){
+    if(!seen[el.getAttribute('data-shot')])el.remove();
+  });
+}
+function removeShot(key){
+  shots=shots.filter(function(x){
+    if(x.key===key&&x.url){ try{URL.revokeObjectURL(x.url);}catch(e){} }
+    return x.key!==key;
+  });
+  drawShots();
 }
 async function addFiles(files){
   var list=Array.prototype.slice.call(files||[]).filter(function(f){
@@ -599,6 +633,9 @@ function reset(){
   $('f-qty').value='1';$('f-status').value='new';
   $('caught').innerHTML='';
   attrs={};dropped={};drawAttrs();
+  /* release the blob URLs before dropping the records, or a long session of
+     logging orders on a phone slowly leaks every photo it ever previewed */
+  shots.forEach(function(x){ if(x.url){ try{URL.revokeObjectURL(x.url);}catch(e){} } });
   shots=[];drawShots();
   window.scrollTo({top:0,behavior:'smooth'});
   $('paste').focus();
@@ -837,27 +874,46 @@ async function loadSelling(){
    batch is created at once. Rows survive a failed upload so nothing typed is
    lost. */
 var bulkRows=[], bulkSrc='';
+/* Incremental, for the same reason as drawShots — but it matters more here,
+   because this list takes 60 photos and every redraw used to destroy the
+   order-number inputs too. Anyone typing a reference while an upload
+   finished lost what they were typing and their cursor with it. Rows are
+   built once and only their pending flag changes afterwards. */
 function bulkDraw(){
   var box=$('bulk-rows');
-  box.innerHTML=bulkRows.map(function(r){
-    return '<div class="brow" data-k="'+r.key+'">'+
-      '<div class="bthumb"><img src="'+r.url+'" alt="">'+
-        (r.path?'':'<span class="up">…</span>')+'</div>'+
-      '<div class="bmid">'+
-        '<input class="bref" data-f="ref" placeholder="Order # (from the caption)" value="'+esc(r.ref||'')+'" inputmode="numeric">'+
-        '<input data-f="product" placeholder="Product (optional — photo is the spec)" value="'+esc(r.product||'')+'">'+
-      '</div>'+
-      '<button class="brm" data-rm="'+r.key+'" title="Remove" aria-label="Remove">&times;</button>'+
-    '</div>';
-  }).join('');
-  box.querySelectorAll('.brow').forEach(function(el){
-    var k=el.dataset.k, r=bulkRows.filter(function(x){return x.key===k;})[0];
-    el.querySelectorAll('input').forEach(function(inp){
-      inp.oninput=function(){ r[inp.dataset.f]=inp.value; };
-    });
+  var seen={};
+  bulkRows.forEach(function(r,idx){
+    seen[r.key]=1;
+    var el=box.querySelector('[data-k="'+r.key+'"]');
+    if(!el){
+      el=document.createElement('div');
+      el.className='brow';
+      el.setAttribute('data-k',r.key);
+      el.innerHTML='<div class="bthumb"><img alt=""><span class="up">…</span></div>'+
+        '<div class="bmid">'+
+          '<input class="bref" data-f="ref" placeholder="Order # (from the caption)" inputmode="numeric">'+
+          '<input data-f="product" placeholder="Product (optional — photo is the spec)">'+
+        '</div>'+
+        '<button class="brm" title="Remove" aria-label="Remove">&times;</button>';
+      el.querySelector('img').src=r.url;
+      el.querySelectorAll('input').forEach(function(inp){
+        inp.value=r[inp.dataset.f]||'';
+        inp.oninput=function(){ r[inp.dataset.f]=inp.value; };
+      });
+      el.querySelector('.brm').onclick=function(){
+        bulkRows=bulkRows.filter(function(x){
+          if(x.key===r.key&&x.url){ try{URL.revokeObjectURL(x.url);}catch(e){} }
+          return x.key!==r.key;
+        });
+        bulkDraw();
+      };
+      box.appendChild(el);
+    }
+    el.querySelector('.bthumb .up').style.display=r.path?'none':'';
+    if(box.children[idx]!==el)box.insertBefore(el,box.children[idx]||null);
   });
-  box.querySelectorAll('.brm').forEach(function(b){
-    b.onclick=function(){ bulkRows=bulkRows.filter(function(x){return x.key!==b.dataset.rm;}); bulkDraw(); };
+  Array.prototype.slice.call(box.children).forEach(function(el){
+    if(!seen[el.getAttribute('data-k')])el.remove();
   });
   $('bulk-actions').style.display=bulkRows.length?'':'none';
   var pend=bulkRows.filter(function(r){return !r.path;}).length;
@@ -917,6 +973,7 @@ $('bulk-save').onclick=async function(){
       '<b>'+n+' build'+(n===1?'':'s')+' added</b> to the '+
       '<a href="/ops/supplier.html">supplier queue</a>.'+
       (bad?' '+bad+' row'+(bad===1?'':'s')+' couldn\'t be added.':'')+'</div>';
+    bulkRows.forEach(function(x){ if(x.url){ try{URL.revokeObjectURL(x.url);}catch(e){} } });
     bulkRows=[]; bulkDraw();
     loaded={};
     toast(n+' build'+(n===1?'':'s')+' added');
