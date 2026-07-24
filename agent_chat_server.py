@@ -2912,6 +2912,83 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          "subtotal": subtotal, "shipping_cost": shipping,
                          "total": total, "defaulted": defaulted})
 
+    def _handle_supplier_bill_whatsapp(self):
+        """Post a batch's bill straight into the team WhatsApp, PDF attached.
+
+        This is how a batch actually reaches the other side: the supplier
+        raises it, taps send, and it lands in the group everyone already
+        watches. Sending happens on a background thread for the same reason
+        the status share does — `hermes send` with an attachment takes long
+        enough that holding the response open makes the button look dead."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            bid = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            bid = 0
+        from_name = str(p.get("from") or "Supplier").strip()[:80]
+
+        target = ""
+        try:
+            with open("/root/ops-dashboard/.env") as f:
+                for line in f:
+                    if line.startswith("WHATSAPP_ORDER_TARGET="):
+                        target = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+        except OSError:
+            pass
+        if not target:
+            self._json(400, {"error": "No WhatsApp destination is set up yet."})
+            return
+
+        conn = db()
+        bill = conn.execute("SELECT * FROM supplier_bills WHERE id=?", (bid,)).fetchone()
+        n = conn.execute("SELECT COUNT(*) FROM supplier_bill_items WHERE bill_id=?",
+                         (bid,)).fetchone()[0]
+        conn.close()
+        if not bill:
+            self._json(404, {"error": "no such batch"})
+            return
+
+        ccy = "\u20b9" if (bill["currency"] or "INR").upper() == "INR" else \
+            (bill["currency"] or "") + " "
+        text = (f"*{bill['bill_no']}* — {n} build(s)\n"
+                f"Total {ccy}{bill['total']:,.2f}\n"
+                f"Status: {'agreed' if bill['status'] == 'acknowledged' else 'awaiting your OK'}")
+
+        def _deliver():
+            body = text
+            try:
+                pdf = self._bill_pdf_bytes(bid, from_name)
+                if pdf:
+                    path = os.path.join(UPLOAD_DIR, f"{bill['bill_no']}.pdf")
+                    with open(path, "wb") as f:
+                        f.write(pdf)
+                    body = f"MEDIA:{path}\n{text}"
+            except Exception as e:
+                print(f"[batch-wa] PDF skipped: {e}", flush=True)
+            try:
+                r = subprocess.run(["hermes", "send", "--to", target, "--quiet", body],
+                                   capture_output=True, text=True, timeout=180)
+                ok = r.returncode == 0
+            except Exception as e:
+                ok, r = False, None
+                print(f"[batch-wa] {e}", flush=True)
+            hub_event("supplier_bill" if ok else "supplier_bill_failed",
+                      f"{bill['bill_no']} sent to WhatsApp" if ok
+                      else f"{bill['bill_no']} WhatsApp send failed", actor, "supplier")
+
+        threading.Thread(target=_deliver, daemon=True).start()
+        self._json(200, {"ok": True, "queued": True, "target": target})
+
     def _handle_supplier_bill_tracking(self):
         """One courier reference for a whole batch. Editable after
         acknowledgement on purpose — the money is settled at that point but
@@ -3364,13 +3441,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
             bid = int(params.get("id") or 0)
         except (TypeError, ValueError):
             bid = 0
+        conn = db()
+        exists = conn.execute("SELECT bill_no FROM supplier_bills WHERE id=?", (bid,)).fetchone()
+        conn.close()
+        if not exists:
+            self._json(404, {"error": "no such batch"})
+            return
+        try:
+            pdf = self._bill_pdf_bytes(bid, from_name)
+        except Exception as e:
+            self._json(500, {"error": f"couldn't build the PDF: {e}"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Disposition",
+                         f'attachment; filename="{exists["bill_no"]}.pdf"')
+        self.send_header("Content-Length", str(len(pdf)))
+        self.end_headers()
+        self.wfile.write(pdf)
 
+    def _bill_pdf_bytes(self, bid, from_name="Supplier"):
+        """The bill as PDF bytes. Shared by the download and the WhatsApp
+        send so the document a supplier posts to the group is byte-for-byte
+        the one we'd print ourselves."""
         conn = db()
         bill = conn.execute("SELECT * FROM supplier_bills WHERE id=?", (bid,)).fetchone()
         if not bill:
             conn.close()
-            self._json(404, {"error": "no such bill"})
-            return
+            return None
         items = conn.execute(
             "SELECT * FROM supplier_bill_items WHERE bill_id=? ORDER BY id ASC",
             (bid,)).fetchall()
@@ -3450,19 +3548,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             + "<div class='stamp'>Generated from the Timelabs build queue &middot; "
             f"{_dt.datetime.now().strftime('%d %b %Y, %H:%M')}</div>"
             "</body></html>")
-        try:
-            from weasyprint import HTML
-            pdf = HTML(string=doc).write_pdf()
-        except Exception as e:
-            self._json(500, {"error": f"couldn't build the PDF: {e}"})
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", "application/pdf")
-        self.send_header("Content-Disposition",
-                         f'attachment; filename="{bill["bill_no"]}.pdf"')
-        self.send_header("Content-Length", str(len(pdf)))
-        self.end_headers()
-        self.wfile.write(pdf)
+        from weasyprint import HTML
+        return HTML(string=doc).write_pdf()
 
     # ------------------------------------------------------------- reddit
     def _handle_reddit_threads(self, query):
@@ -4335,6 +4422,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_bill_acknowledge()
         elif path == "/supplier/bill/delete":
             self._handle_supplier_bill_delete()
+        elif path == "/supplier/bill/whatsapp":
+            self._handle_supplier_bill_whatsapp()
         elif path == "/supplier/bill/tracking":
             self._handle_supplier_bill_tracking()
         elif path == "/reddit/sync":

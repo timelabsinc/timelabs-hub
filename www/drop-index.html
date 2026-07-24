@@ -252,6 +252,27 @@
     #gdsheet.open{transform:translate(-50%,50%) scale(1);opacity:1;pointer-events:auto;}
   }
 
+  /* selection + move */
+  .card{position:relative;}
+  .pick{position:absolute;left:8px;top:8px;z-index:3;width:24px;height:24px;border-radius:50%;
+    border:1.5px solid rgba(255,255,255,.85);background:rgba(0,0,0,.35);display:none;
+    align-items:center;justify-content:center;cursor:pointer;padding:0;}
+  body.picking .pick{display:flex;}
+  .pick svg{width:14px;height:14px;stroke:#fff;fill:none;stroke-width:3;opacity:0;}
+  .card.on .pick{background:var(--accent);border-color:var(--accent);}
+  .card.on .pick svg{opacity:1;}
+  .card.on{outline:2px solid var(--accent);outline-offset:-2px;}
+  .folder.dragover{outline:2px dashed var(--accent);outline-offset:-2px;}
+  .actbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom));
+    z-index:90;display:none;align-items:center;gap:10px;padding:9px 12px;border-radius:999px;
+    background:#171717;color:#fff;box-shadow:0 8px 30px rgba(0,0,0,.35);font-size:13.5px;
+    max-width:calc(100vw - 24px);flex-wrap:nowrap;overflow:auto;}
+  .actbar.on{display:flex;}
+  .actbar b{font-weight:650;white-space:nowrap;}
+  .actbar button{border:1px solid rgba(255,255,255,.3);background:transparent;color:#fff;
+    border-radius:999px;padding:6px 13px;font:inherit;font-size:13px;font-weight:650;
+    cursor:pointer;white-space:nowrap;}
+  .actbar button.primary{background:#fff;color:#171717;border-color:#fff;}
   /* organize sheet */
   #orgsheet{position:fixed;left:0;right:0;bottom:0;z-index:118;background:var(--card);
     border:1px solid var(--border);border-bottom:none;border-radius:16px 16px 0 0;
@@ -306,43 +327,36 @@
 
   .freenote{font-size:11.5px;color:var(--muted);padding:14px 2px 0;}
 </style>
+<style id="labs-mobile-fix">
+@media (pointer:coarse){
+  input:not([type=button]):not([type=submit]):not([type=reset]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),
+  textarea, select{font-size:16px !important;}
+}
+/* The upload FAB is the ONLY upload trigger on a phone (the toolbar Upload
+   button is desktop-only). Its correct rule places it above the 60px bottom
+   nav bar, but a later unscoped `.fab{bottom:26px}` overrides that and drops
+   it behind the nav bar, where it's half-hidden and awkward to tap — the
+   "photo selector has UI issues on phone" report. Restore the nav-aware
+   position on touch layouts; injected last so it wins. */
+@media (max-width:759px){
+  .fab{bottom:calc(var(--nav-h,60px) + env(safe-area-inset-bottom,0px) + 18px) !important;}
+}
+</style>
 </head>
 <body>
 <div class="wrap">
-  <header class="topbar">
-    <a class="brand" href="/ops/#overview" title="Back to Hub">
-      <span class="brand-dot">L</span>
-      <span class="brand-name">Labs <span>Drop</span></span>
-    </a>
-    <span class="top-spacer"></span>
-    <button class="iconbtn" id="searchBtn" title="Search" aria-label="Search">
-      <svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-    </button>
-    <button class="iconbtn" id="viewBtn" title="Toggle view" aria-label="Toggle grid or list view">
-      <svg class="ic" id="viewIcGrid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-      <svg class="ic" id="viewIcList" viewBox="0 0 24 24" style="display:none"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
-    </button>
-    <button class="btn desktop-only" id="newBtn">
-      <svg class="ic" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v6M9 14h6"/></svg>
-      New folder
-    </button>
-    <button class="btn primary desktop-only" id="upBtn2">
-      <svg class="ic" viewBox="0 0 24 24"><path d="M12 16V4M6 10l6-6 6 6"/><path d="M4 20h16"/></svg>
-      Upload
-    </button>
-  </header>
-<nav class="appnav" aria-label="Apps">
-  <a class="appitem" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg></span><span>Home</span></a>
-  <a class="appitem active" href="/drop/"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span><span>Drop</span></a>
-  <a class="appitem" href="/ops/ledger.html"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><path d="M5 3h14v18H5z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span><span>Ledger</span></a>
-  <a class="appitem" href="/ops/agent/"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg></span><span>Chat</span></a>
-  <a class="appitem" href="/ops/tools.html"><span class="ic"><svg viewBox="0 0 24 24" class="ic"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg></span><span>Tools</span></a>
-</nav>
+  <!--labs:chrome-->
+  <header class="topbar"><a class="brand" href="/ops/#overview"><span class="brand-dot">L</span><span class="brand-name">Labs <span>Drop</span></span></a><div class="top-actions"><button class="iconbtn" id="searchBtn" title="Search" aria-label="Search"><svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button><button class="iconbtn" id="viewBtn" title="Toggle view" aria-label="Toggle grid or list view"><svg class="ic" id="viewIcGrid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><svg class="ic" id="viewIcList" viewBox="0 0 24 24" style="display:none"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><button class="btn desktop-only" id="newBtn"><svg class="ic" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v6M9 14h6"/></svg>New folder</button><button class="btn primary desktop-only" id="upBtn2"><svg class="ic" viewBox="0 0 24 24"><path d="M12 16V4M6 10l6-6 6 6"/><path d="M4 20h16"/></svg>Upload</button><span id="who" class="who"></span></div></header>
+  <nav class="appnav" aria-label="Apps"><a class="appitem" href="/ops/#overview"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg></span><span>Home</span></a><a class="appitem active" href="/drop/"><span class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span><span>Drop</span></a><a class="appitem" href="/ops/order-form.html"><span class="ic"><svg viewBox="0 0 24 24"><path d="M6 2h9l4 4v16H6z"/><path d="M15 2v4h4M9 12h6M9 16h4"/></svg></span><span>Orders</span></a><a class="appitem" href="/ops/agent/"><span class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg></span><span>Chat</span></a><a class="appitem" href="/ops/tools.html"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg></span><span>Tools</span></a></nav>
+<!--/labs:chrome-->
 
   <div class="toolbar">
     <nav class="crumbs" id="crumbs" aria-label="Folder path"></nav>
     <button class="iconbtn" id="sortBtn" title="Sort" aria-label="Sort files">
       <svg class="ic" viewBox="0 0 24 24"><path d="M3 6h13M3 12h9M3 18h5"/><path d="M18 9l3-3 3 3M21 6v12"/></svg>
+    </button>
+    <button class="iconbtn" id="pickBtn" title="Select files" aria-label="Select files">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
     </button>
     <button class="iconbtn" id="orgBtn" title="Organize similar photos" aria-label="Organize similar photos">
       <svg class="ic" viewBox="0 0 24 24"><path d="M15 4l5 5L8 21l-5 1 1-5z"/><path d="M14 7l3 3"/><path d="M5 6V2M3 4h4M19 17v-4M17 15h4"/></svg>
@@ -408,6 +422,17 @@
   </div>
 </div>
 
+<div class="actbar" id="actbar">
+  <b id="actmsg">0 selected</b>
+  <button id="actCut">Move…</button>
+  <button id="actClear">Cancel</button>
+</div>
+<div class="actbar" id="clipbar">
+  <b id="clipmsg">0 ready to move</b>
+  <button class="primary" id="clipPaste">Move here</button>
+  <button id="clipCancel">Cancel</button>
+</div>
+
 <div id="orgsheet" role="dialog" aria-label="Organize proposal">
   <div class="gd-head">
     <b>Organize photos</b>
@@ -446,6 +471,9 @@ let state = { path: '', dirs: [], files: [], view: localStorage.getItem('drop_vi
 let uploads = [];       // {file, path, id, sent, size, status, err}
 let uploading = false;
 let viewIdx = -1;       // index into visible files for the preview overlay
+let picking = false;                 // multi-select mode
+let sel = new Set();                 // filenames ticked in the current folder
+let clip = { names: [], from: null }; // files cut, waiting for a destination
 
 /* ---------------- helpers ---------------- */
 const $ = id => document.getElementById(id);
@@ -610,6 +638,22 @@ function render(){
   $('folders').querySelectorAll('.folder').forEach(b => {
     b.onclick = e => { if(e.target.closest('.fdots')) return; nav(state.path ? state.path + '/' + b.dataset.n : b.dataset.n); };
     b.oncontextmenu = e => { e.preventDefault(); showMenu(e, b.dataset.n, true); };
+    /* Dropping onto a folder is the desktop shortcut for the same move the
+       Move…/Move here buttons do — those stay the phone path, where dragging
+       across a scrolling grid is unpleasant. */
+    b.addEventListener('dragover', e => {
+      if(!e.dataTransfer.types.includes('application/x-drop-files')) return;
+      e.preventDefault(); b.classList.add('dragover');
+    });
+    b.addEventListener('dragleave', () => b.classList.remove('dragover'));
+    b.addEventListener('drop', async e => {
+      b.classList.remove('dragover');
+      let names = [];
+      try { names = JSON.parse(e.dataTransfer.getData('application/x-drop-files') || '[]'); } catch(_){}
+      if(!names.length) return;
+      e.preventDefault(); e.stopPropagation();
+      await moveTo(names, state.path, state.path ? state.path + '/' + b.dataset.n : b.dataset.n);
+    });
   });
   $('folders').querySelectorAll('.fdots').forEach(b => {
     b.onclick = e => { e.stopPropagation(); showMenu(e, b.dataset.n, true); };
@@ -631,21 +675,35 @@ function render(){
       ? '<img loading="lazy" src="' + API + '/thumb?path=' + encodeURIComponent((state.path ? state.path + '/' : '') + f.name) + '" alt="" onerror="this.remove()">'
       : ICONS[f.kind] || ICONS.file;
     const badge = f.kind === 'video' ? '<span class="badge">' + ICONS.play + 'video</span>' : '';
-    return '<div class="card" data-i="' + i + '"><div class="pv">' + pv + badge + '</div>' +
+    return '<div class="card' + (sel.has(f.name) ? ' on' : '') + '" data-i="' + i +
+      '" data-n="' + esc(f.name) + '" draggable="true">' +
+      '<button class="pick" aria-label="Select ' + esc(f.name) + '">' +
+      '<svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>' +
+      '<div class="pv">' + pv + badge + '</div>' +
       '<div class="meta"><div class="nm">' + esc(f.name) + '</div>' +
       '<div class="sub num">' + fmtSize(f.size) + ' · ' + fmtDate(f.mtime) + '</div></div>' +
       '<button class="dots" data-i="' + i + '" aria-label="More options">' + ICONS.dots + '</button></div>';
   }).join('');
   $('grid').querySelectorAll('.card').forEach(c => {
+    const nm = c.dataset.n;
     c.onclick = e => {
       if(e.target.closest('.dots')) return;
+      if(e.target.closest('.pick') || picking){ toggleSel(nm); return; }
       openView(parseInt(c.dataset.i, 10));
     };
     c.oncontextmenu = e => {
       e.preventDefault();
       showMenu(e, visibleFiles()[parseInt(c.dataset.i, 10)].name, false);
     };
+    c.addEventListener('dragstart', e => {
+      /* dragging an unticked file moves just that one, which is what the
+         gesture implies; dragging a ticked one moves the whole selection */
+      const names = sel.has(nm) && sel.size ? Array.from(sel) : [nm];
+      e.dataTransfer.setData('application/x-drop-files', JSON.stringify(names));
+      e.dataTransfer.effectAllowed = 'move';
+    });
   });
+  drawActbar();
   $('grid').querySelectorAll('.dots').forEach(b => {
     b.onclick = e => {
       e.stopPropagation();
@@ -1065,6 +1123,50 @@ async function newFolder(){
 $('sortBtn').onclick = showSortMenu;
 $('newBtn').onclick = newFolder;
 $('newBtnM').onclick = newFolder;
+
+/* ---------------- selection + moving ---------------- */
+function toggleSel(name){
+  if(sel.has(name)) sel.delete(name); else sel.add(name);
+  if(sel.size && !picking) setPicking(true);
+  const card = $('grid').querySelector('.card[data-n="' + CSS.escape(name) + '"]');
+  if(card) card.classList.toggle('on', sel.has(name));
+  drawActbar();
+}
+function setPicking(on){
+  picking = on;
+  document.body.classList.toggle('picking', on);
+  if(!on){ sel.clear(); $('grid').querySelectorAll('.card.on').forEach(c => c.classList.remove('on')); }
+  drawActbar();
+}
+function drawActbar(){
+  $('actbar').classList.toggle('on', picking && !clip.names.length);
+  $('actmsg').textContent = sel.size + ' selected';
+  $('actCut').style.display = sel.size ? '' : 'none';
+  const pending = clip.names.length;
+  $('clipbar').classList.toggle('on', pending > 0);
+  $('clipmsg').textContent = pending + ' ready to move';
+  /* Nothing to do if we never left the folder they came from. */
+  $('clipPaste').style.display = (pending && clip.from !== state.path) ? '' : 'none';
+}
+async function moveTo(names, from, to){
+  try {
+    const r = await api('/move', {method:'POST', body: JSON.stringify({from, to, names})});
+    toast('Moved ' + r.moved + (r.moved === 1 ? ' file' : ' files'));
+    clip = { names: [], from: null };
+    setPicking(false);
+    load();
+  } catch(e){ toast(e.message); }
+}
+$('pickBtn').onclick = () => setPicking(!picking);
+$('actClear').onclick = () => setPicking(false);
+$('actCut').onclick = () => {
+  if(!sel.size) return;
+  clip = { names: Array.from(sel), from: state.path };
+  toast('Now open the folder you want them in');
+  drawActbar();
+};
+$('clipCancel').onclick = () => { clip = { names: [], from: null }; setPicking(false); };
+$('clipPaste').onclick = () => moveTo(clip.names, clip.from, state.path);
 
 /* ---------------- Organize ---------------- */
 let orgGroups = [];
