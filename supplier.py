@@ -105,6 +105,47 @@ SUP_CSS = r"""
     border-radius:var(--r-s);background:var(--card);color:var(--ink);padding:10px 13px;
     -webkit-appearance:none;appearance:none;}
   .ssearch:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
+  .syncline{margin-top:8px;}
+
+  /* Money, always visible — the owner's standing ask that the queue show
+     totals rather than making him open something else to find them. Costs
+     stay in the supplier's own currency; only "you owe" is converted, since
+     that's the figure that means something on our side of the table. */
+  .moneybar{display:flex;margin-top:10px;border:1px solid var(--border);
+    border-radius:var(--r-s);background:var(--card);overflow:hidden;}
+  .moneybar:empty{display:none;}
+  .mcell{flex:1;min-width:0;padding:8px 12px;}
+  .mcell + .mcell{border-left:1px solid var(--border);}
+  .mcell .ml{font-size:10.5px;color:var(--muted);white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;}
+  .mcell .mv{font-size:15px;font-weight:750;color:var(--ink);
+    font-variant-numeric:tabular-nums;line-height:1.25;}
+  .mcell.owe .mv{color:var(--accent);}
+
+  /* Desktop density. On a phone the stage cards are correctly-sized tap
+     targets; stretched across a laptop they became four ~450px boxes that
+     ate the whole first screen before a single build appeared. Above this
+     breakpoint they collapse to one segmented row sharing a line with
+     search, and the reclaimed height goes to the money strip. */
+  @media(min-width:760px){
+    #queue-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
+    .stagebar{margin-top:0;gap:0;width:max-content;max-width:100%;
+      border:1px solid var(--border);border-radius:999px;overflow:hidden;
+      background:var(--card);}
+    .stg{flex:none;flex-direction:row;gap:7px;justify-content:flex-start;
+      border:none;border-radius:0;padding:0 14px;min-height:36px;font-size:12.5px;}
+    .stg + .stg{border-left:1px solid var(--border);}
+    .stg svg{width:15px;height:15px;}
+    .stg b{font-size:12.5px;font-weight:750;}
+    .stg .lbl{font-size:12.5px;opacity:1;}
+    .stg.on{background:var(--accent-bg);color:var(--accent);}
+    .stg.attn.on{background:var(--accent);color:#fff;}
+    .fbar{margin-top:0;margin-left:auto;flex:none;}
+    .ssearch{flex:none;width:220px;font-size:13.5px;padding:8px 12px;}
+    .fbtn{min-height:36px;font-size:12.5px;}
+    .fpanel,.syncline,.moneybar{flex-basis:100%;margin-top:0;}
+    .syncline{order:99;}
+  }
 
   .fpanel{display:none;margin-top:10px;padding:13px;background:var(--card);
     border:1px solid var(--border);border-radius:var(--r);}
@@ -174,6 +215,17 @@ SUP_CSS = r"""
     padding-left:9px;border-left:2px solid var(--border-2);}
 
   /* tracking — a chip once set, a quiet "add" link until then */
+  .ocost{display:flex;align-items:center;gap:7px;margin-top:8px;flex-wrap:wrap;}
+  .ocost .cl{font-size:11px;color:var(--muted);}
+  .ocost b{font-size:14px;font-weight:750;color:var(--ink);font-variant-numeric:tabular-nums;}
+  .ocost button{border:none;background:none;color:var(--accent);font:inherit;font-size:12px;
+    font-weight:650;cursor:pointer;padding:4px 2px;min-height:30px;}
+  .ocost .addcost{border:1px dashed var(--border-2);border-radius:var(--r-s);
+    padding:5px 10px;color:var(--muted);}
+  .ocost .addcost:hover{border-color:var(--accent);color:var(--accent);}
+  .ocost.locked b{color:var(--muted);}
+  .ocost .lockic svg{width:13px;height:13px;stroke:var(--muted);fill:none;stroke-width:1.9;
+    stroke-linecap:round;stroke-linejoin:round;display:block;}
   .otrk{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;}
   .otrk .chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:650;
     color:var(--ink);background:var(--card-2);border-radius:6px;padding:3px 8px;
@@ -298,6 +350,33 @@ SUP_CSS = r"""
   .shiprow .st{margin-left:auto;font-size:11px;color:var(--muted);text-transform:uppercase;
     letter-spacing:.04em;font-weight:650;}
   /* what's owed — the headline the Shipments tab exists to answer */
+  /* bills */
+  .bcard{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+    padding:14px 15px;margin-bottom:10px;box-shadow:var(--shadow);}
+  .bcard.ack{border-color:var(--good);}
+  .btop{display:flex;align-items:flex-start;gap:10px;}
+  .bno{font-size:14px;font-weight:750;color:var(--ink);
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .bmeta{font-size:11.5px;color:var(--muted);margin-top:2px;}
+  .bright{margin-left:auto;text-align:right;}
+  .btot{font-size:17px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;}
+  .bstat{display:inline-block;font-size:10px;font-weight:750;text-transform:uppercase;
+    letter-spacing:.04em;padding:2px 7px;border-radius:5px;margin-top:3px;}
+  .bstat.draft{color:var(--muted);background:var(--card-2);}
+  .bstat.ok{color:var(--good);background:var(--good-bg);}
+  .blines{list-style:none;margin:11px 0 0;padding:0;border-top:1px solid var(--border);}
+  .blines li{display:flex;gap:10px;align-items:baseline;padding:6px 0;
+    border-bottom:1px solid var(--border);font-size:12.5px;}
+  .blines li:last-child{border-bottom:none;}
+  .blines li span{flex:1;min-width:0;color:var(--muted);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;}
+  .blines li b{color:var(--ink);font-variant-numeric:tabular-nums;font-weight:650;}
+  .blines li.ship span,.blines li.ship b{color:var(--ink);}
+  .blines li.paid span,.blines li.paid b{color:var(--good);}
+  .bnote{font-size:12px;color:var(--muted);margin-top:9px;font-style:italic;}
+  .backby{font-size:11px;color:var(--good);margin-top:7px;}
+  .bact{display:flex;gap:7px;margin-top:11px;flex-wrap:wrap;}
+  .bact .danger{color:var(--bad);}
   .owedcard{background:var(--card);border:1px solid var(--accent);border-radius:var(--r);
     box-shadow:var(--shadow);padding:16px 18px;margin-bottom:16px;}
   .owedtop{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}
@@ -473,6 +552,26 @@ function trackEl(o){
   }
   return '<div class="otrk"><button data-trk="'+o.id+'">+ Add tracking number</button></div>';
 }
+/* Cost sits on the card itself rather than behind a menu — it's the one
+   field the supplier fills in for every single build, so it shouldn't cost
+   a tap to reach. Once the bill carrying it is acknowledged it goes
+   read-only with a lock, matching what the server will enforce anyway. */
+function costEl(o){
+  if(o.locked){
+    return '<div class="ocost locked"><span class="cl">Cost</span>'+
+      '<b>'+rs(o.supplier_cost,o.supplier_cost_ccy)+'</b>'+
+      '<span class="lockic" title="On an acknowledged bill">'+
+      '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/>'+
+      '<path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span></div>';
+  }
+  if(o.supplier_cost!=null){
+    return '<div class="ocost"><span class="cl">Cost</span>'+
+      '<b>'+rs(o.supplier_cost,o.supplier_cost_ccy)+'</b>'+
+      '<button data-cost="'+o.id+'">Change</button></div>';
+  }
+  return '<div class="ocost"><button class="addcost" data-cost="'+o.id+'">+ Add cost</button></div>';
+}
+
 function cardEl(o){
   var nxt=nextOf(o.status), le=lastEvent(o), attn=bucket(o)==='attn';
   return '<article class="ocard'+(attn?' attn':'')+(selectMode?' selectable':'')+
@@ -486,6 +585,7 @@ function cardEl(o){
           (o.quantity>1?'<span class="oqty">x'+o.quantity+'</span>':'')+'</h3>'+
         specEl(o)+
         (o.notes?'<div class="onote">'+esc(o.notes)+'</div>':'')+
+        costEl(o)+
         trackEl(o)+
       '</div>'+
     '</div>'+
@@ -635,6 +735,32 @@ function wire(){
           o.tracking_code=v;
           toast(v?'Tracking saved':'Tracking cleared');
           render();
+        }).catch(function(err){ inp.disabled=false; toast(err.message); });
+      };
+    };
+  });
+  /* Inline edit, same pattern as tracking — typing a number in place beats
+     a modal for a field entered dozens of times a week. */
+  L.querySelectorAll('[data-cost]').forEach(function(b){
+    b.onclick=function(){
+      var id=+b.dataset.cost, o=byId(id);
+      var host=b.closest('.ocost');
+      host.outerHTML='<form class="trkform" data-costf="'+id+'">'+
+        '<input type="number" step="0.01" min="0" inputmode="decimal" value="'+
+        (o.supplier_cost!=null?o.supplier_cost:'')+
+        '" placeholder="Cost in ₹" aria-label="Cost in rupees">'+
+        '<button type="submit">Save</button></form>';
+      var f=L.querySelector('[data-costf="'+id+'"]');
+      var inp=f.querySelector('input'); inp.focus(); inp.select();
+      f.onsubmit=function(e){
+        e.preventDefault();
+        var v=inp.value.trim();
+        if(v===''){ render(); return; }
+        inp.disabled=true;
+        jpost('/supplier/cost',{order_id:id,cost:v,currency:'INR'}).then(function(){
+          o.supplier_cost=Number(v); o.supplier_cost_ccy='INR';
+          toast('Cost saved');
+          render(); drawMoney();
         }).catch(function(err){ inp.disabled=false; toast(err.message); });
       };
     };
@@ -792,11 +918,118 @@ document.querySelectorAll('.tabs button').forEach(function(t){
     var k=t.dataset.tab;
     document.querySelectorAll('.tabs button').forEach(function(x){x.classList.toggle('on',x===t);});
     $('pane-queue').classList.toggle('on',k==='queue');
+    $('pane-bills').classList.toggle('on',k==='bills');
     $('pane-ships').classList.toggle('on',k==='ships');
     $('queue-controls').style.display = k==='queue' ? '' : 'none';
     if(k==='ships')loadShips();
+    if(k==='bills')loadBills();
   };
 });
+
+/* ---- bills ---- */
+var BILLS=[], CAN_ACK=false;
+function billCard(b){
+  var ack=b.status==='acknowledged';
+  var paid=0, arr=(ARREARS&&ARREARS.bills||[]).filter(function(x){return x.id===b.id;})[0];
+  if(arr)paid=arr.paid_inr||0;
+  var totINR=b.total_inr!=null?b.total_inr:toINR(b.total,b.currency);
+  var lines=(b.items||[]).map(function(it){
+    return '<li><span>'+esc(it.ref_code||('#'+it.order_id))+' · '+
+      esc(it.description||'')+'</span><b>'+rs(it.cost,b.currency)+'</b></li>';
+  }).join('');
+  return '<article class="bcard'+(ack?' ack':'')+'">'+
+    '<div class="btop">'+
+      '<div><div class="bno">'+esc(b.bill_no)+'</div>'+
+        '<div class="bmeta">'+(b.items||[]).length+' build'+
+        ((b.items||[]).length===1?'':'s')+' · '+esc((b.created_at||'').slice(0,10))+'</div></div>'+
+      '<div class="bright"><div class="btot">'+inr(totINR)+'</div>'+
+        '<span class="bstat '+(ack?'ok':'draft')+'">'+(ack?'Acknowledged':'Draft')+'</span></div>'+
+    '</div>'+
+    '<ul class="blines">'+lines+
+      (b.shipping_cost?'<li class="ship"><span>Shipping</span><b>'+
+        rs(b.shipping_cost,b.currency)+'</b></li>':'')+
+      (paid>0.5?'<li class="paid"><span>Paid so far</span><b>-'+inr(paid)+'</b></li>':'')+
+    '</ul>'+
+    (b.notes?'<div class="bnote">'+esc(b.notes)+'</div>':'')+
+    (ack&&b.acknowledged_by?'<div class="backby">Acknowledged by '+
+      esc(String(b.acknowledged_by).split('@')[0])+'</div>':'')+
+    '<div class="bact">'+
+      '<button class="obtn ghost" data-billpdf="'+b.id+'">PDF</button>'+
+      (CAN_ACK&&!ack?'<button class="obtn" data-billack="'+b.id+'">Acknowledge</button>':'')+
+      (CAN_ACK&&ack?'<button class="obtn ghost" data-billpay="'+b.id+'">Record payment</button>':'')+
+      (CAN_ACK?'<button class="obtn danger" data-billdel="'+b.id+'">Delete</button>':'')+
+    '</div>'+
+  '</article>';
+}
+function drawBills(){
+  var L=$('billlist');
+  if(!BILLS.length){
+    L.innerHTML='<div class="sempty">No bills yet. Select builds in the queue, '+
+      'then use <b>Create bill</b>.</div>';
+  } else {
+    L.innerHTML=BILLS.map(billCard).join('');
+  }
+  if(ARREARS){
+    var owed=ARREARS.owed_inr||0;
+    $('bills-owed').innerHTML='<div class="owedcard">'+
+      '<div class="owedtop"><b>'+inr(Math.abs(owed))+'</b><span>'+
+        (owed>0.5?'currently owed':owed<-0.5?'in credit':'settled')+'</span></div>'+
+      '<div class="owedbar">'+
+        '<span class="b">Billed <b>'+inr(ARREARS.total_cost_inr)+'</b></span>'+
+        '<span class="b">Paid <b>'+inr(ARREARS.total_paid_inr)+'</b></span>'+
+        '<span class="b">Not yet billed <b>'+inr(ARREARS.unbilled_cost_inr||0)+'</b></span>'+
+      '</div></div>';
+  }
+  L.querySelectorAll('[data-billpdf]').forEach(function(b){
+    b.onclick=function(){
+      var name=localStorage.getItem('labs_bill_from')||'';
+      if(!name){
+        name=(prompt('Business name for the bill header:','')||'').trim();
+        if(name)localStorage.setItem('labs_bill_from',name);
+      }
+      window.open(API+'/supplier/bill?id='+b.dataset.billpdf+
+        '&from='+encodeURIComponent(name||'Supplier'),'_blank');
+    };
+  });
+  L.querySelectorAll('[data-billack]').forEach(function(b){
+    b.onclick=function(){
+      if(!confirm('Acknowledge this bill? Costs lock and it goes to the Ledger.'))return;
+      jpost('/supplier/bill/acknowledge',{id:+b.dataset.billack}).then(function(){
+        toast('Acknowledged — sent to the Ledger');
+        loadBills(); load(true);
+      }).catch(function(e){ toast(e.message); });
+    };
+  });
+  L.querySelectorAll('[data-billdel]').forEach(function(b){
+    b.onclick=function(){
+      if(!confirm('Delete this bill? Any Ledger entry is reversed and the '+
+                  'builds become editable again.'))return;
+      jpost('/supplier/bill/delete',{id:+b.dataset.billdel}).then(function(){
+        toast('Bill deleted and reversed');
+        loadBills(); load(true);
+      }).catch(function(e){ toast(e.message); });
+    };
+  });
+  L.querySelectorAll('[data-billpay]').forEach(function(b){
+    b.onclick=function(){
+      var amount=prompt('Amount paid, in ₹:');
+      if(!amount)return;
+      var note=prompt('Note (optional):')||'';
+      jpost('/supplier/payment/record',{amount:amount,currency:'INR',
+        bill_id:+b.dataset.billpay,note:note}).then(function(){
+        toast('Payment recorded'); loadBills();
+      }).catch(function(e){ toast(e.message); });
+    };
+  });
+}
+async function loadBills(){
+  try{
+    var d=await api('/supplier/bills');
+    BILLS=d.bills||[]; CAN_ACK=!!d.can_acknowledge;
+    try{ ARREARS=await api('/supplier/arrears'); }catch(e){}
+    drawBills();
+  }catch(e){ $('billlist').innerHTML='<div class="sempty">'+esc(e.message)+'</div>'; }
+}
 
 /* ---- shipments ---- */
 function money(n,cur){
@@ -806,57 +1039,66 @@ function money(n,cur){
 function inr(n){
   return '₹'+Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
+/* Everything on screen is rupees, per the owner. Anything quoted in dollars
+   is converted at the same flat 100 the Ledger and Home already use, so one
+   figure never disagrees with the same figure elsewhere in the OS. */
+var USD_INR=100;
+function toINR(n,cur){
+  if(n===null||n===undefined||n==='')return 0;
+  return Number(n)*(String(cur||'INR').toUpperCase()==='USD'?USD_INR:1);
+}
+function rs(n,cur){
+  if(n===null||n===undefined||n==='')return '—';
+  return inr(toINR(n,cur));
+}
 var ARREARS=null;
+
+/* The strip under the filters — the owner's standing ask that totals be
+   visible without opening anything else. Every figure is rupees. */
+function drawMoney(){
+  var box=$('moneybar'); if(!box)return;
+  if(!ARREARS){ box.innerHTML=''; return; }
+  var costed=ORDERS.filter(function(o){return o.supplier_cost!=null;});
+  var total=costed.reduce(function(a,o){
+    return a+toINR(o.supplier_cost,o.supplier_cost_ccy);},0);
+  var owed=ARREARS.owed_inr||0;
+  var cells=[
+    ['Builds', String(ORDERS.length)],
+    ['Costed', costed.length+' of '+ORDERS.length],
+    ['Priced up', inr(total)],
+    ['Not yet billed', inr(ARREARS.unbilled_cost_inr||0)]
+  ];
+  var html=cells.map(function(c){
+    return '<div class="mcell"><div class="ml">'+esc(c[0])+'</div>'+
+           '<div class="mv">'+esc(c[1])+'</div></div>';
+  }).join('');
+  html+='<div class="mcell owe"><div class="ml">'+
+        (owed<-0.5?'In credit':'You owe')+'</div><div class="mv">'+
+        inr(Math.abs(owed))+'</div></div>';
+  box.innerHTML=html;
+}
+
 function drawOwed(){
   if(!ARREARS){ $('owed-box').innerHTML=''; return; }
   var owed=ARREARS.owed_inr||0;
-  var billName=localStorage.getItem('labs_bill_from')||'';
+  /* Money lives on the Bills tab now that bills are what create the debt.
+     This stays as a summary so someone who opened Shipments looking for the
+     balance still finds it, and gets pointed at the right place. */
   $('owed-box').innerHTML='<div class="owedcard">'+
-    '<div class="owedtop"><b>'+inr(Math.max(owed,0))+'</b><span>'+
+    '<div class="owedtop"><b>'+inr(Math.abs(owed))+'</b><span>'+
       (owed>0.5?'currently owed':owed<-0.5?'in credit':'settled')+'</span></div>'+
     '<div class="owedbar">'+
-      '<span class="b">Shipment cost <b>'+inr(ARREARS.total_cost_inr)+'</b></span>'+
+      '<span class="b">Billed <b>'+inr(ARREARS.total_cost_inr)+'</b></span>'+
       '<span class="b">Paid so far <b>'+inr(ARREARS.total_paid_inr)+'</b></span>'+
     '</div>'+
     '<div class="owedactions">'+
-      (IS_ADMIN?'<button class="ghost" id="rec-pay">Record a payment</button>':'')+
-      '<button class="primary" id="gen-bill">Generate bill</button>'+
+      '<button class="primary" id="go-bills">Open bills</button>'+
     '</div>'+
   '</div>';
-  var b=$('gen-bill');
+  var b=$('go-bills');
   if(b)b.onclick=function(){
-    var name=prompt('Business name for the bill header:',billName);
-    if(name===null)return;
-    name=name.trim();
-    if(name){ localStorage.setItem('labs_bill_from',name); }
-    window.open(API+'/supplier/bill?from='+encodeURIComponent(name||'Supplier'),'_blank');
+    document.querySelector('.tabs button[data-tab="bills"]').click();
   };
-  var r=$('rec-pay');
-  if(r)r.onclick=openRecordPayment;
-}
-function openRecordPayment(){
-  var opts=SHIPS.map(function(s){
-    return '<button class="opt" data-s="'+s.id+'"><i></i>'+esc(s.code)+
-      ' <span style="opacity:.6">('+money(s.total_cost,s.currency)+')</span></button>';
-  }).join('')+'<button class="opt" data-s=""><i></i>Unallocated (not tied to a shipment)</button>';
-  $('sheet-title').textContent='Record a payment';
-  $('sheet-opts').innerHTML=opts;
-  $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
-    b.onclick=function(){
-      closeSheet();
-      var sid=b.dataset.s;
-      var amount=prompt('Amount paid:');
-      if(!amount)return;
-      var currency=(prompt('Currency (USD or INR):','USD')||'USD').trim().toUpperCase();
-      var note=prompt('Note (optional):')||'';
-      jpost('/supplier/payment/record',{amount:amount,currency:currency,
-        shipment_id:sid||null,note:note}).then(function(){
-        toast('Payment recorded');
-        loadShips();
-      }).catch(function(e){ toast(e.message); });
-    };
-  });
-  $('sheet').classList.add('on');
 }
 async function loadShips(){
   try{
@@ -866,7 +1108,6 @@ async function loadShips(){
     try{ ARREARS=await api('/supplier/arrears'); }catch(e){ ARREARS=null; }
     drawOwed();
     var byId={};
-    (ARREARS&&ARREARS.shipments||[]).forEach(function(a){ byId[a.id]=a; });
     if(!SHIPS.length){
       $('shiplist').innerHTML='<div class="sempty">No shipments yet. Add one above, then '+
         'select builds in the queue and use &ldquo;Add to shipment&rdquo;.</div>';
@@ -888,13 +1129,12 @@ async function loadShips(){
           '<span class="shipcode">'+esc(s.code||'')+'</span>'+
           '<span class="shipmeta">'+esc(s.carrier||'')+
             (s.order_count?' · '+s.order_count+' watch'+(s.order_count===1?'':'es'):' · empty')+'</span>'+
-          '<span class="shipcost"><b>'+esc(money(s.per_watch,s.currency))+'</b>'+
+          '<span class="shipcost"><b>'+esc(rs(s.per_watch,s.currency))+'</b>'+
             '<span>per watch</span></span>'+
         '</div>'+
-        '<div class="shipmeta" style="margin-top:4px">Total '+esc(money(s.total_cost,s.currency))+
+        '<div class="shipmeta" style="margin-top:4px">Total '+esc(rs(s.total_cost,s.currency))+
           (s.order_count?' ÷ '+s.order_count:'')+'</div>'+
         paidLine+
-        (IS_ADMIN?'<button class="shiprecord" data-payship="'+s.id+'">+ Record a payment for this shipment</button>':'')+
         (s.orders&&s.orders.length?'<div class="shiporders">'+s.orders.map(function(o){
           return '<div class="shiprow"><span class="n">#'+o.id+'</span>'+
             '<span>'+esc((o.product||'').slice(0,46))+'</span>'+
@@ -904,20 +1144,6 @@ async function loadShips(){
     }).join('')+
       (unassigned.length?'<p class="shipmeta" style="margin-top:6px">'+unassigned.length+
         ' build'+(unassigned.length===1?'':'s')+' not yet in a shipment.</p>':'');
-    $('shiplist').querySelectorAll('[data-payship]').forEach(function(b){
-      b.onclick=function(){
-        var sid=b.dataset.payship;
-        var amount=prompt('Amount paid:');
-        if(!amount)return;
-        var currency=(prompt('Currency (USD or INR):','USD')||'USD').trim().toUpperCase();
-        var note=prompt('Note (optional):')||'';
-        jpost('/supplier/payment/record',{amount:amount,currency:currency,
-          shipment_id:sid,note:note}).then(function(){
-          toast('Payment recorded');
-          loadShips();
-        }).catch(function(e){ toast(e.message); });
-      };
-    });
   }catch(e){ $('shiplist').innerHTML='<div class="sempty">'+esc(e.message)+'</div>'; }
 }
 $('shipform').onsubmit=async function(e){
@@ -926,7 +1152,7 @@ $('shipform').onsubmit=async function(e){
   if(!code){toast('A shipment number is needed');return;}
   try{
     await jpost('/supplier/shipment/save',{code:code,carrier:$('s-carrier').value.trim(),
-      total_cost:$('s-cost').value,currency:$('s-cur').value.trim()||'USD'});
+      total_cost:$('s-cost').value,currency:$('s-cur').value.trim()||'INR'});
     toast('Shipment '+code+' saved');
     $('s-code').value='';$('s-carrier').value='';$('s-cost').value='';
     loadShips();
@@ -935,6 +1161,32 @@ $('shipform').onsubmit=async function(e){
 
 /* ---- bulk buttons ---- */
 $('bulk-clear').onclick=clearSel;
+$('bulk-cost').onclick=function(){
+  var ids=selIds();
+  if(!ids.length){toast('Nothing selected');return;}
+  var v=prompt('Cost per build, in ₹ (applies to all '+ids.length+'):');
+  if(v===null)return;
+  v=v.trim(); if(v==='')return;
+  jpost('/supplier/cost/bulk',{ids:ids,cost:v,currency:'INR'}).then(function(d){
+    toast(d.updated+' updated'+(d.skipped&&d.skipped.length?', '+d.skipped.length+' locked':''));
+    clearSel(); load(true);
+  }).catch(function(e){ toast(e.message); });
+};
+$('bulk-bill').onclick=function(){
+  var ids=selIds();
+  if(!ids.length){toast('Nothing selected');return;}
+  var missing=ids.filter(function(i){var o=byId(i);return !o||o.supplier_cost==null;});
+  if(missing.length){toast('Set a cost first on '+missing.length+' build(s)');return;}
+  var ship=prompt('Shipping / freight for this bill, in ₹ (0 if none):','0');
+  if(ship===null)return;
+  var note=prompt('Note on the bill (optional):')||'';
+  jpost('/supplier/bill/create',{ids:ids,shipping_cost:ship||0,currency:'INR',notes:note})
+    .then(function(d){
+      toast('Bill '+d.bill_no+' created — '+inr(d.total));
+      clearSel(); load(true); loadBills();
+      document.querySelector('.tabs button[data-tab="bills"]').click();
+    }).catch(function(e){ toast(e.message); });
+};
 $('bulk-status').onclick=function(){
   $('sheet-title').textContent=selIds().length+' orders — set status';
   $('sheet-opts').innerHTML=STATUSES.map(function(s){
@@ -1019,6 +1271,10 @@ async function load(quiet){
     $('sync').textContent='Updated '+new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
     $('sync').classList.remove('err');
     render();
+    /* Arrears rides along with the queue load so the money strip is right
+       on first paint, not a beat later. Failure is silent and non-fatal —
+       a build queue that works without totals beats one that won't load. */
+    try{ ARREARS=await api('/supplier/arrears'); drawMoney(); }catch(e){}
   }catch(e){
     $('sync').textContent=e.message;
     $('sync').classList.add('err');
@@ -1058,6 +1314,7 @@ def build():
     </div>
     <div class="tabs">
       <button class="on" data-tab="queue">Build queue</button>
+      <button data-tab="bills">Bills</button>
       <button data-tab="ships">Shipments</button>
     </div>
 
@@ -1104,7 +1361,8 @@ def build():
           <button class="fclear" id="fclear">Reset filters</button>
         </div>
       </div>
-      <div style="margin-top:8px"><span class="sync" id="sync">Loading&hellip;</span></div>
+      <div class="syncline"><span class="sync" id="sync">Loading&hellip;</span></div>
+      <div class="moneybar" id="moneybar"></div>
     </div>
   </div>
 
@@ -1113,12 +1371,19 @@ def build():
     <div class="bulkbar" id="bulkbar">
       <b id="bulkn">0 selected</b>
       <span class="sp"></span>
+      <button id="bulk-cost">Set cost</button>
       <button id="bulk-status">Set status</button>
       <button id="bulk-track">Tracking</button>
       <button id="bulk-ship">Add to shipment</button>
-      <button class="primary" id="bulk-pdf">Build request PDF</button>
+      <button class="primary" id="bulk-bill">Create bill</button>
+      <button id="bulk-pdf">Build request PDF</button>
       <button id="bulk-clear">Clear</button>
     </div>
+  </section>
+
+  <section class="pane" id="pane-bills">
+    <div id="bills-owed"></div>
+    <div id="billlist"><div class="sempty">Loading&hellip;</div></div>
   </section>
 
   <section class="pane" id="pane-ships">
@@ -1127,7 +1392,7 @@ def build():
       <input id="s-code" placeholder="Shipment number" aria-label="Shipment number" autocomplete="off" required>
       <input id="s-carrier" placeholder="Carrier (DHL, EMS&hellip;)" aria-label="Carrier" autocomplete="off">
       <input id="s-cost" type="number" step="0.01" min="0" placeholder="Total cost" aria-label="Total cost">
-      <input id="s-cur" placeholder="USD" aria-label="Currency" value="USD" autocomplete="off">
+      <input id="s-cur" placeholder="INR" aria-label="Currency" value="INR" autocomplete="off">
       <button type="submit">Save shipment</button>
     </form>
     <div id="shiplist"><div class="sempty">Loading&hellip;</div></div>

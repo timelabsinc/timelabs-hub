@@ -25,6 +25,9 @@ import urllib.request
 
 HOST, PORT = "127.0.0.1", 8901
 DB = "/root/ops-dashboard/data/hermes.db"
+# The Ledger's own database — acknowledged supplier bills are written through
+# to it as invoices, so build spend lands where cost/margin already lives.
+SUPPLIERS_DB = "/root/ops-dashboard/data/suppliers.db"
 UPLOAD_DIR = "/root/ops-dashboard/data/uploads"
 # Where an order's reference photos actually live. Under /root deliberately:
 # nginx can't reach it, so the only way to a photo is through a role-checked
@@ -333,11 +336,77 @@ def _ensure_reddit_schema():
         print(f"[reddit] schema check: {e}", flush=True)
 
 
+def _ensure_billing_schema():
+    """What the supplier charges us, per build, and the bills that collect it.
+
+    Two things worth being explicit about, because they look similar and are
+    not: orders.price_inr is what the CUSTOMER pays and must never reach the
+    supplier role; orders.supplier_cost is what the supplier charges US for
+    that build, which they enter themselves. Different numbers, different
+    direction, different audience.
+
+    Bill line items carry their own copy of the cost rather than reading
+    through to the order. An acknowledged bill is a record of what was agreed
+    at that moment — if someone later corrects a build's cost, history must
+    not silently rewrite itself. Freight lives on the bill, not the build
+    (the owner's call), which also matches how suppliers.db invoices already
+    separate subtotal from shipping_cost.
+    """
+    try:
+        conn = sqlite3.connect(DB, timeout=5)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
+        if cols:
+            if "supplier_cost" not in cols:
+                conn.execute("ALTER TABLE orders ADD COLUMN supplier_cost REAL")
+            if "supplier_cost_ccy" not in cols:
+                conn.execute("ALTER TABLE orders ADD COLUMN supplier_cost_ccy TEXT DEFAULT 'USD'")
+            if "bill_id" not in cols:
+                conn.execute("ALTER TABLE orders ADD COLUMN bill_id INTEGER")
+        conn.execute("""CREATE TABLE IF NOT EXISTS supplier_bills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bill_no TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_by TEXT,
+            status TEXT NOT NULL DEFAULT 'draft',
+            currency TEXT DEFAULT 'USD',
+            subtotal REAL DEFAULT 0,
+            shipping_cost REAL DEFAULT 0,
+            total REAL DEFAULT 0,
+            shipment_id INTEGER REFERENCES shipments(id),
+            notes TEXT,
+            acknowledged_at TEXT,
+            acknowledged_by TEXT,
+            ledger_invoice_id INTEGER)""")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_supplier_bills_no "
+                     "ON supplier_bills(bill_no)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_supplier_bills_status "
+                     "ON supplier_bills(status)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS supplier_bill_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bill_id INTEGER NOT NULL REFERENCES supplier_bills(id),
+            order_id INTEGER,
+            description TEXT,
+            ref_code TEXT,
+            cost REAL NOT NULL DEFAULT 0)""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_supplier_bill_items_bill "
+                     "ON supplier_bill_items(bill_id)")
+        # A payment can now settle a bill as well as a shipment (or neither,
+        # if it's just money sent on account).
+        pcols = {r[1] for r in conn.execute("PRAGMA table_info(supplier_payments)")}
+        if pcols and "bill_id" not in pcols:
+            conn.execute("ALTER TABLE supplier_payments ADD COLUMN bill_id INTEGER")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[billing] schema check: {e}", flush=True)
+
+
 _ensure_orders_schema()
 _ensure_order_items_schema()
 _ensure_order_events_schema()
 _ensure_shipments_schema()
 _ensure_reddit_schema()
+_ensure_billing_schema()
 
 
 def _fs_resolve(p):
@@ -941,6 +1010,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/supplier/bill":
             self._handle_supplier_bill(query)
+            return
+        if path == "/supplier/bills":
+            self._handle_supplier_bills()
             return
         if path == "/reddit/threads":
             self._handle_reddit_threads(query)
@@ -2505,9 +2577,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn = db()
         try:
             rows = conn.execute(
+                # supplier_cost is the supplier's OWN price to us — safe to
+                # return here, unlike price_inr (what the customer pays),
+                # which stays absent from this SELECT entirely.
                 "SELECT id, received_at, product, quantity, status, notes, "
                 "case_style, dial_colour, dial_style, case_colour, movement, "
-                "watch_size, local_photos, tracking_code, ref_code FROM orders "
+                "watch_size, local_photos, tracking_code, ref_code, "
+                "supplier_cost, supplier_cost_ccy, bill_id FROM orders "
                 "WHERE supplier_visible=1 AND status != 'cancelled' "
                 "ORDER BY id ASC").fetchall()
             events = {}
@@ -2520,6 +2596,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     # Who acted matters (did we pay, or did they mark it?) but
                     # a full email address doesn't need to travel here.
                     "by": (e["actor"] or "").split("@")[0]})
+            locked_bills = {b["id"] for b in conn.execute(
+                "SELECT id FROM supplier_bills WHERE status='acknowledged'")}
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
@@ -2534,6 +2612,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 n = 0
             d["photos"] = n
             d["timeline"] = events.get(d["id"], [])
+            # Once the bill carrying this build has been acknowledged, its
+            # cost is settled history and the UI shows it read-only.
+            d["locked"] = d.get("bill_id") in locked_bills
             out.append(d)
         self._json(200, {"orders": out, "statuses": STATUSES})
 
@@ -2591,45 +2672,403 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return 0.0
         return float(amount) * (self._USD_INR if (currency or "USD").upper() == "USD" else 1.0)
 
+    # ------------------------------------------------- per-build supplier cost
+    def _cost_editable(self, conn, order_id):
+        """A build's cost is editable until the bill carrying it is
+        acknowledged. After that the number is settled history — the check
+        lives here rather than in the UI so it holds for a direct API call."""
+        row = conn.execute(
+            "SELECT o.bill_id, b.status FROM orders o "
+            "LEFT JOIN supplier_bills b ON b.id = o.bill_id "
+            "WHERE o.id=?", (order_id,)).fetchone()
+        if not row:
+            return False, "no such build"
+        if row["status"] == "acknowledged":
+            return False, "this build is on a bill you've already acknowledged"
+        return True, ""
+
+    def _set_costs(self, ids, cost, currency, actor):
+        """Shared by the single and bulk paths — one build or forty, the
+        validation and the audit trail are identical, so they're not two
+        different code paths that can drift apart."""
+        conn = db()
+        done, skipped = [], []
+        for oid in ids:
+            ok, why = self._cost_editable(conn, oid)
+            if not ok:
+                skipped.append({"id": oid, "reason": why})
+                continue
+            conn.execute("UPDATE orders SET supplier_cost=?, supplier_cost_ccy=? "
+                         "WHERE id=? AND supplier_visible=1", (cost, currency, oid))
+            order_event(conn, oid, "cost",
+                        f"supplier cost set to {currency} {cost:,.2f}", actor)
+            done.append(oid)
+        conn.commit()
+        conn.close()
+        return done, skipped
+
+    def _handle_supplier_cost(self):
+        """Set what the supplier charges for one build. Supplier and admin
+        both, per the owner's call — he wants to be able to fix a typo
+        without going back to Hannan, but neither side can touch it once the
+        bill is acknowledged."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 8192)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            oid = int(p.get("order_id") or 0)
+            cost = float(p.get("cost"))
+        except (TypeError, ValueError):
+            self._json(400, {"error": "a build and a cost are needed"})
+            return
+        if oid <= 0 or cost < 0:
+            self._json(400, {"error": "a build and a cost are needed"})
+            return
+        currency = (str(p.get("currency") or "INR").strip().upper())[:8] or "INR"
+        done, skipped = self._set_costs([oid], cost, currency, actor)
+        if not done:
+            self._json(400, {"error": skipped[0]["reason"] if skipped else "couldn't save"})
+            return
+        self._json(200, {"ok": True, "order_id": oid, "cost": cost, "currency": currency})
+
+    def _handle_supplier_cost_bulk(self):
+        """Same cost across a selection — the common case when a batch of
+        identical builds is quoted at one price."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 65536)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        ids = [int(i) for i in (p.get("ids") or []) if str(i).strip().isdigit()][:200]
+        try:
+            cost = float(p.get("cost"))
+        except (TypeError, ValueError):
+            self._json(400, {"error": "a cost is needed"})
+            return
+        if not ids or cost < 0:
+            self._json(400, {"error": "pick at least one build and a cost"})
+            return
+        currency = (str(p.get("currency") or "INR").strip().upper())[:8] or "INR"
+        done, skipped = self._set_costs(ids, cost, currency, actor)
+        hub_event("supplier_cost", f"cost set on {len(done)} build(s)", actor, "supplier")
+        self._json(200, {"ok": True, "updated": len(done), "skipped": skipped})
+
+    # ------------------------------------------------------------------- bills
+    def _next_bill_no(self, conn):
+        stamp = time.strftime("%Y%m")
+        n = conn.execute("SELECT COUNT(*) FROM supplier_bills "
+                         "WHERE bill_no LIKE ?", (f"TLB-{stamp}-%",)).fetchone()[0]
+        # Collisions are possible if a bill was deleted, so step past any
+        # number already taken rather than trusting the count alone.
+        while True:
+            n += 1
+            candidate = f"TLB-{stamp}-{n:03d}"
+            if not conn.execute("SELECT 1 FROM supplier_bills WHERE bill_no=?",
+                                (candidate,)).fetchone():
+                return candidate
+
+    def _handle_supplier_bills(self):
+        """Every bill, newest first, with its lines. Both roles see this —
+        it's the supplier's own pricing, not ours."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        conn = db()
+        bills = [dict(b) for b in conn.execute(
+            "SELECT * FROM supplier_bills ORDER BY id DESC LIMIT 100")]
+        items = {}
+        for it in conn.execute("SELECT * FROM supplier_bill_items ORDER BY id ASC"):
+            items.setdefault(it["bill_id"], []).append(dict(it))
+        conn.close()
+        for b in bills:
+            b["items"] = items.get(b["id"], [])
+            b["total_inr"] = round(self._to_inr(b["total"], b["currency"]), 2)
+        self._json(200, {"bills": bills, "can_acknowledge": self._has_tool("orders")})
+
+    def _handle_supplier_bill_create(self):
+        """Turn a selection of costed builds into a bill. Freight is one line
+        on the bill rather than smeared across the builds, so per-build cost
+        stays the true build cost."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 65536)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        ids = [int(i) for i in (p.get("ids") or []) if str(i).strip().isdigit()][:200]
+        if not ids:
+            self._json(400, {"error": "pick at least one build"})
+            return
+        try:
+            shipping = float(p.get("shipping_cost") or 0)
+        except (TypeError, ValueError):
+            shipping = 0.0
+        currency = (str(p.get("currency") or "INR").strip().upper())[:8] or "INR"
+        notes = str(p.get("notes") or "").strip()[:400]
+
+        conn = db()
+        rows = conn.execute(
+            "SELECT id, product, ref_code, supplier_cost, supplier_cost_ccy, bill_id "
+            "FROM orders WHERE id IN ({}) AND supplier_visible=1".format(
+                ",".join("?" * len(ids))), ids).fetchall()
+        if not rows:
+            conn.close()
+            self._json(400, {"error": "none of those builds are in the queue"})
+            return
+        uncosted = [r["id"] for r in rows if r["supplier_cost"] is None]
+        if uncosted:
+            conn.close()
+            self._json(400, {"error": "set a cost first on build "
+                                      + ", ".join(f"#{i}" for i in uncosted)})
+            return
+        already = [r["id"] for r in rows if r["bill_id"]]
+        if already:
+            conn.close()
+            self._json(400, {"error": "already on a bill: "
+                                      + ", ".join(f"#{i}" for i in already)})
+            return
+
+        bill_no = self._next_bill_no(conn)
+        subtotal = sum(float(r["supplier_cost"] or 0) for r in rows)
+        total = subtotal + shipping
+        cur = conn.execute(
+            "INSERT INTO supplier_bills (bill_no, created_by, status, currency, "
+            "subtotal, shipping_cost, total, shipment_id, notes) "
+            "VALUES (?,?,'draft',?,?,?,?,?,?)",
+            (bill_no, actor, currency, subtotal, shipping, total,
+             p.get("shipment_id") or None, notes))
+        bill_id = cur.lastrowid
+        for r in rows:
+            conn.execute(
+                "INSERT INTO supplier_bill_items (bill_id, order_id, description, "
+                "ref_code, cost) VALUES (?,?,?,?,?)",
+                (bill_id, r["id"], r["product"], r["ref_code"], r["supplier_cost"]))
+            conn.execute("UPDATE orders SET bill_id=? WHERE id=?", (bill_id, r["id"]))
+            order_event(conn, r["id"], "billed", f"added to bill {bill_no}", actor)
+        conn.commit()
+        conn.close()
+        hub_event("supplier_bill", f"{bill_no} drafted — {currency} {total:,.2f} "
+                                   f"across {len(rows)} build(s)", actor, "supplier")
+        self._json(200, {"ok": True, "bill_id": bill_id, "bill_no": bill_no,
+                         "subtotal": subtotal, "shipping_cost": shipping, "total": total})
+
+    def _ledger_supplier_id(self, lconn):
+        """Hannan builds the watches; the 31 invoices already in the Ledger
+        are parts from a different company in China. Keeping him as his own
+        supplier row is what stops build spend and parts spend from being
+        averaged into one meaningless per-supplier number."""
+        row = lconn.execute("SELECT id FROM suppliers WHERE name=?",
+                            ("TimeLabsCo x Sunesra",)).fetchone()
+        if row:
+            return row[0]
+        cur = lconn.execute(
+            "INSERT INTO suppliers (name, country, platform, default_currency, notes) "
+            "VALUES (?,?,?,?,?)",
+            ("TimeLabsCo x Sunesra", "India", "whatsapp", "USD",
+             "Build partner (Hannan) — assembles the watches. Invoices here are "
+             "written through from acknowledged bills in the supplier build queue."))
+        return cur.lastrowid
+
+    def _handle_supplier_bill_acknowledge(self):
+        """Acknowledging is the moment a bill becomes real: the costs freeze,
+        the Ledger gets an invoice, and this is what counts toward what we
+        owe. Admin/orders only — the supplier can't sign off their own bill,
+        the same boundary that already applies to recording a payment."""
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            bid = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            bid = 0
+        conn = db()
+        bill = conn.execute("SELECT * FROM supplier_bills WHERE id=?", (bid,)).fetchone()
+        if not bill:
+            conn.close()
+            self._json(404, {"error": "no such bill"})
+            return
+        if bill["status"] == "acknowledged":
+            conn.close()
+            self._json(400, {"error": "already acknowledged"})
+            return
+        items = conn.execute("SELECT * FROM supplier_bill_items WHERE bill_id=?",
+                             (bid,)).fetchall()
+
+        rate = self._USD_INR if (bill["currency"] or "USD").upper() == "USD" else 1.0
+        invoice_id = None
+        try:
+            lconn = sqlite3.connect(SUPPLIERS_DB, timeout=5)
+            lconn.row_factory = sqlite3.Row
+            sup_id = self._ledger_supplier_id(lconn)
+            cur = lconn.execute(
+                "INSERT INTO invoices (supplier_id, invoice_no, order_date, currency, "
+                "subtotal, shipping_cost, discount, total, exchange_rate, total_inr, "
+                "payment_status, parsed_by, notes) "
+                "VALUES (?,?,?,?,?,?,0,?,?,?,?,?,?)",
+                (sup_id, bill["bill_no"], time.strftime("%Y-%m-%d"), bill["currency"],
+                 bill["subtotal"], bill["shipping_cost"], bill["total"], rate,
+                 bill["total"] * rate, "unpaid", "supplier-queue",
+                 f"Acknowledged by {actor}"))
+            invoice_id = cur.lastrowid
+            for it in items:
+                lconn.execute(
+                    "INSERT INTO invoice_items (invoice_id, description_raw, "
+                    "description_en, part_category, quantity, unit_price, line_total, "
+                    "unit_price_inr) VALUES (?,?,?,?,1,?,?,?)",
+                    (invoice_id, it["description"], it["description"], "build",
+                     it["cost"], it["cost"], (it["cost"] or 0) * rate))
+            lconn.commit()
+            lconn.close()
+        except Exception as e:
+            conn.close()
+            self._json(500, {"error": f"couldn't write to the Ledger: {e}"})
+            return
+
+        conn.execute("UPDATE supplier_bills SET status='acknowledged', "
+                     "acknowledged_at=datetime('now'), acknowledged_by=?, "
+                     "ledger_invoice_id=? WHERE id=?", (actor, invoice_id, bid))
+        for it in items:
+            if it["order_id"]:
+                order_event(conn, it["order_id"], "bill_acknowledged",
+                            f"bill {bill['bill_no']} acknowledged — cost locked", actor)
+        conn.commit()
+        conn.close()
+        hub_event("supplier_bill", f"{bill['bill_no']} acknowledged — "
+                                   f"{bill['currency']} {bill['total']:,.2f} to Ledger",
+                  actor, "supplier")
+        self._json(200, {"ok": True, "ledger_invoice_id": invoice_id})
+
+    def _handle_supplier_bill_delete(self):
+        """The escape hatch the owner asked for. A bill raised in error has to
+        be removable even after acknowledgement, which means undoing all three
+        of its effects — the Ledger invoice, the lock on the builds, and the
+        debt — not just hiding the row."""
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            bid = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            bid = 0
+        conn = db()
+        bill = conn.execute("SELECT * FROM supplier_bills WHERE id=?", (bid,)).fetchone()
+        if not bill:
+            conn.close()
+            self._json(404, {"error": "no such bill"})
+            return
+        if bill["ledger_invoice_id"]:
+            try:
+                lconn = sqlite3.connect(SUPPLIERS_DB, timeout=5)
+                lconn.execute("DELETE FROM invoice_items WHERE invoice_id=?",
+                              (bill["ledger_invoice_id"],))
+                lconn.execute("DELETE FROM invoices WHERE id=?",
+                              (bill["ledger_invoice_id"],))
+                lconn.commit()
+                lconn.close()
+            except Exception as e:
+                conn.close()
+                self._json(500, {"error": f"couldn't reverse the Ledger entry: {e}"})
+                return
+        items = conn.execute("SELECT order_id FROM supplier_bill_items WHERE bill_id=?",
+                             (bid,)).fetchall()
+        for it in items:
+            if it["order_id"]:
+                conn.execute("UPDATE orders SET bill_id=NULL WHERE id=?", (it["order_id"],))
+                order_event(conn, it["order_id"], "bill_deleted",
+                            f"bill {bill['bill_no']} deleted — cost editable again", actor)
+        # Payments pointed at this bill go back to being general credit rather
+        # than vanishing with it — the money was still sent.
+        conn.execute("UPDATE supplier_payments SET bill_id=NULL WHERE bill_id=?", (bid,))
+        conn.execute("DELETE FROM supplier_bill_items WHERE bill_id=?", (bid,))
+        conn.execute("DELETE FROM supplier_bills WHERE id=?", (bid,))
+        conn.commit()
+        conn.close()
+        hub_event("supplier_bill", f"{bill['bill_no']} deleted and reversed", actor, "supplier")
+        self._json(200, {"ok": True})
+
     def _handle_supplier_arrears(self):
-        """What's currently owed to the supplier, and the shipment-by-shipment
-        breakdown behind it. 'Owed' = every shipment's cost minus every
-        payment recorded against it, whether tied to one shipment or left
+        """What's currently owed to the supplier, and the bill-by-bill
+        breakdown behind it. 'Owed' = every acknowledged bill minus every
+        payment recorded against it, whether tied to one bill or left
         general — a running balance, not a paid/unpaid flag, because partial
-        payments are real here."""
+        payments are real here. Draft bills deliberately don't count: nothing
+        is owed until it's been agreed."""
         if not self._supplier_ok():
             self._json(403, {"error": "not available for this account"})
             return
         conn = db()
         try:
-            ships = conn.execute(
-                "SELECT id, code, carrier, total_cost, currency FROM shipments "
-                "ORDER BY id DESC").fetchall()
+            bills = conn.execute(
+                "SELECT id, bill_no, currency, total, acknowledged_at FROM supplier_bills "
+                "WHERE status='acknowledged' ORDER BY id DESC").fetchall()
             pays = conn.execute(
-                "SELECT shipment_id, amount, currency FROM supplier_payments").fetchall()
+                "SELECT bill_id, amount, currency FROM supplier_payments").fetchall()
+            draft = conn.execute(
+                "SELECT COALESCE(SUM(total),0) t, COUNT(*) n FROM supplier_bills "
+                "WHERE status='draft'").fetchone()
+            # What's been costed but not yet put on any bill at all — the
+            # gap between work priced and money actually claimed. Summed
+            # through _to_inr rather than in SQL, because a plain SUM() would
+            # silently add dollars to rupees.
+            unbilled_rows = conn.execute(
+                "SELECT supplier_cost, supplier_cost_ccy FROM orders "
+                "WHERE supplier_visible=1 AND bill_id IS NULL "
+                "AND supplier_cost IS NOT NULL").fetchall()
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
             return
         conn.close()
 
-        paid_by_ship, unallocated_inr = {}, 0.0
+        unbilled_inr = sum(self._to_inr(r["supplier_cost"], r["supplier_cost_ccy"])
+                           for r in unbilled_rows)
+        paid_by_bill, unallocated_inr = {}, 0.0
         for p in pays:
             inr = self._to_inr(p["amount"], p["currency"])
-            if p["shipment_id"] is None:
+            if p["bill_id"] is None:
                 unallocated_inr += inr
             else:
-                paid_by_ship[p["shipment_id"]] = paid_by_ship.get(p["shipment_id"], 0.0) + inr
+                paid_by_bill[p["bill_id"]] = paid_by_bill.get(p["bill_id"], 0.0) + inr
 
-        out_ships, total_cost_inr, total_paid_inr = [], 0.0, 0.0
-        for s in ships:
-            cost_inr = self._to_inr(s["total_cost"], s["currency"])
-            paid_inr = paid_by_ship.get(s["id"], 0.0)
+        out_bills, total_cost_inr, total_paid_inr = [], 0.0, 0.0
+        for b in bills:
+            cost_inr = self._to_inr(b["total"], b["currency"])
+            paid_inr = paid_by_bill.get(b["id"], 0.0)
             total_cost_inr += cost_inr
             total_paid_inr += paid_inr
-            out_ships.append({
-                "id": s["id"], "code": s["code"], "carrier": s["carrier"],
-                "total_cost": s["total_cost"], "currency": s["currency"],
+            out_bills.append({
+                "id": b["id"], "bill_no": b["bill_no"], "total": b["total"],
+                "currency": b["currency"], "acknowledged_at": b["acknowledged_at"],
                 "cost_inr": round(cost_inr, 2), "paid_inr": round(paid_inr, 2),
                 "balance_inr": round(cost_inr - paid_inr, 2)})
         total_paid_inr += unallocated_inr
@@ -2638,7 +3077,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "total_cost_inr": round(total_cost_inr, 2),
             "total_paid_inr": round(total_paid_inr, 2),
             "unallocated_paid_inr": round(unallocated_inr, 2),
-            "shipments": out_ships})
+            "draft_total": round(draft["t"] or 0, 2),
+            "draft_count": draft["n"] or 0,
+            "unbilled_cost_inr": round(unbilled_inr, 2),
+            "bills": out_bills})
 
     def _handle_supplier_payment_record(self):
         """Log a payment toward what's owed. Admin/orders-role only — the
@@ -2663,38 +3105,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if amount <= 0:
             self._json(400, {"error": "amount should be positive"})
             return
-        currency = (str(p.get("currency", "USD")).strip()[:8] or "USD").upper()
+        currency = (str(p.get("currency", "INR")).strip()[:8] or "INR").upper()
         note = str(p.get("note", "")).strip()[:300]
-        raw_sid = p.get("shipment_id")
+        # Payments settle a bill now that bills are what create the debt.
+        # Leaving it unset is still valid — money sent on account, before
+        # anyone has agreed which bill it belongs to.
+        raw_bid = p.get("bill_id")
         conn = db()
-        shipment_id, code = None, None
-        if raw_sid not in (None, "", 0):
+        bill_id, code = None, None
+        if raw_bid not in (None, "", 0):
             try:
-                shipment_id = int(raw_sid)
+                bill_id = int(raw_bid)
             except (TypeError, ValueError):
                 conn.close()
-                self._json(400, {"error": "bad shipment"})
+                self._json(400, {"error": "bad bill"})
                 return
-            row = conn.execute("SELECT code FROM shipments WHERE id=?",
-                              (shipment_id,)).fetchone()
+            row = conn.execute("SELECT bill_no FROM supplier_bills WHERE id=?",
+                              (bill_id,)).fetchone()
             if not row:
                 conn.close()
-                self._json(404, {"error": "no such shipment"})
+                self._json(404, {"error": "no such bill"})
                 return
-            code = row["code"]
+            code = row["bill_no"]
         cur = conn.execute(
-            "INSERT INTO supplier_payments (shipment_id, amount, currency, note, actor) "
-            "VALUES (?,?,?,?,?)", (shipment_id, amount, currency, note, actor))
+            "INSERT INTO supplier_payments (bill_id, amount, currency, note, actor) "
+            "VALUES (?,?,?,?,?)", (bill_id, amount, currency, note, actor))
         pid = cur.lastrowid
-        if shipment_id:
-            for oid in [r["id"] for r in conn.execute(
-                    "SELECT id FROM orders WHERE shipment_id=?", (shipment_id,))]:
+        if bill_id:
+            for oid in [r["order_id"] for r in conn.execute(
+                    "SELECT order_id FROM supplier_bill_items WHERE bill_id=?", (bill_id,))
+                    if r["order_id"]]:
                 order_event(conn, oid, "payment",
-                           f"{currency} {amount:.2f} recorded for {code}", actor)
+                           f"{currency} {amount:.2f} recorded against {code}", actor)
         conn.commit()
         conn.close()
         hub_event("supplier_payment", f"{currency} {amount:.2f}" +
-                 (f" -> shipment {code}" if shipment_id else " (unallocated)"),
+                 (f" -> bill {code}" if bill_id else " (on account)"),
                  actor, app="orders")
         self._json(200, {"ok": True, "id": pid})
 
@@ -2818,60 +3264,65 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return None
 
     def _handle_supplier_bill(self, query):
-        """A statement of what's currently owed, as a PDF the supplier can
-        send to request payment. Deliberately plain — no GST/GSTIN/HSN,
-        no tax breakdown, this is a working-arrangement payment request, not
-        a compliance document. Every figure comes straight from
-        _handle_supplier_arrears()'s own math, so the bill and the on-screen
-        balance can never disagree about what's owed."""
+        """One bill as a PDF, for the supplier to send us and for our own
+        records. Deliberately plain — no GST/GSTIN/HSN, no tax breakdown;
+        this is a working-arrangement payment request, not a compliance
+        document (the owner's explicit call).
+
+        Figures come from the bill's own stored line items rather than being
+        recomputed from the builds, so a PDF printed today and one printed
+        after an acknowledged bill's underlying order was edited say exactly
+        the same thing.
+        """
         if not self._supplier_ok():
             self._json(403, {"error": "not available for this account"})
             return
         params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
         from_name = urllib.parse.unquote(params.get("from", "")).strip()[:80] or "Supplier"
+        try:
+            bid = int(params.get("id") or 0)
+        except (TypeError, ValueError):
+            bid = 0
 
         conn = db()
-        ships = conn.execute(
-            "SELECT id, code, carrier, total_cost, currency FROM shipments "
-            "ORDER BY id ASC").fetchall()
-        pays = conn.execute(
-            "SELECT shipment_id, amount, currency FROM supplier_payments").fetchall()
+        bill = conn.execute("SELECT * FROM supplier_bills WHERE id=?", (bid,)).fetchone()
+        if not bill:
+            conn.close()
+            self._json(404, {"error": "no such bill"})
+            return
+        items = conn.execute(
+            "SELECT * FROM supplier_bill_items WHERE bill_id=? ORDER BY id ASC",
+            (bid,)).fetchall()
+        paid = conn.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM supplier_payments WHERE bill_id=?",
+            (bid,)).fetchone()[0] or 0.0
         conn.close()
 
-        paid_by_ship, unallocated_inr = {}, 0.0
-        for p in pays:
-            inr = self._to_inr(p["amount"], p["currency"])
-            if p["shipment_id"] is None:
-                unallocated_inr += inr
-            else:
-                paid_by_ship[p["shipment_id"]] = paid_by_ship.get(p["shipment_id"], 0.0) + inr
-
-        rows, total_due = [], 0.0
-        for s in ships:
-            cost_inr = self._to_inr(s["total_cost"], s["currency"])
-            paid_inr = paid_by_ship.get(s["id"], 0.0)
-            balance = cost_inr - paid_inr
-            if balance <= 0.5:
-                continue
-            total_due += balance
-            rows.append(
-                '<tr><td><b>' + html_mod.escape(s["code"] or f'#{s["id"]}') + '</b>'
-                + (f'<br><span class="sub">{html_mod.escape(s["carrier"])}</span>'
-                   if s["carrier"] else "") + '</td>'
-                + f'<td class="n">{html_mod.escape(s["currency"])} {s["total_cost"]:,.2f}</td>'
-                + f'<td class="n">{"₹" + format(paid_inr, ",.2f") if paid_inr else "—"}</td>'
-                + f'<td class="n"><b>₹{balance:,.2f}</b></td></tr>')
-        total_due -= unallocated_inr
-        credit_row = ""
-        if unallocated_inr > 0.5:
-            credit_row = (f'<tr><td colspan="3" class="credit">Advance / unallocated payment '
-                          f'on file</td><td class="n credit">−₹{unallocated_inr:,.2f}</td></tr>')
-
-        if not rows and unallocated_inr <= 0.5:
-            self._json(200, {"empty": True, "message": "Nothing outstanding right now."})
-            return
+        raw_ccy = (bill["currency"] or "INR").upper()
+        # A rupee sign reads as money; "INR 12,500.00" reads as a database row.
+        ccy = "\u20b9" if raw_ccy == "INR" else html_mod.escape(raw_ccy) + " "
+        rows = ""
+        for it in items:
+            label = it["ref_code"] or (f"#{it['order_id']}" if it["order_id"] else "")
+            rows += ('<tr><td><b>' + html_mod.escape(str(label)) + '</b>'
+                     + (f'<br><span class="sub">{html_mod.escape(it["description"] or "")}</span>'
+                        if it["description"] else "")
+                     + '</td>'
+                     + f'<td class="n">{ccy}{it["cost"]:,.2f}</td></tr>')
+        if bill["shipping_cost"]:
+            rows += ('<tr><td>Shipping</td>'
+                     f'<td class="n">{ccy}{bill["shipping_cost"]:,.2f}</td></tr>')
+        paid_row = ""
+        if paid:
+            paid_row = (f'<tr class="credit"><td>Already paid</td>'
+                        f'<td class="n">-{ccy}{paid:,.2f}</td></tr>')
+        due = (bill["total"] or 0) - paid
 
         import datetime as _dt
+        ack = ""
+        if bill["status"] == "acknowledged":
+            ack = (f'<div class="ack">Acknowledged {(bill["acknowledged_at"] or "")[:10]}'
+                   f' by {html_mod.escape((bill["acknowledged_by"] or "").split("@")[0])}</div>')
         doc = (
             "<html><head><meta charset='utf-8'><style>"
             "@page{size:A4;margin:1.9cm 1.7cm;}"
@@ -2879,28 +3330,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ".mark{font-size:7.5pt;letter-spacing:2.5pt;text-transform:uppercase;color:#8a6a2c;}"
             "h1{font-size:17pt;margin:3pt 0 2pt;}"
             ".meta{color:#777;font-size:9pt;margin-bottom:22pt;}"
+            ".ack{display:inline-block;font-size:8.5pt;color:#3f7d4f;border:1pt solid #cfe3d4;"
+            "background:#f2f9f4;padding:3pt 8pt;border-radius:3pt;margin-bottom:14pt;}"
             "table{width:100%;border-collapse:collapse;margin-top:6pt;}"
             "th{text-align:left;font-size:8pt;text-transform:uppercase;letter-spacing:.5pt;"
             "color:#777;border-bottom:1pt solid #999;padding:0 8pt 6pt;}"
             "td{padding:9pt 8pt;border-bottom:1pt solid #eee;vertical-align:top;}"
             "td.n{text-align:right;font-variant-numeric:tabular-nums;}"
             ".sub{color:#888;font-size:8.5pt;}"
-            "tr.credit td{color:#3f7d4f;font-style:italic;border-bottom:none;padding-top:4pt;}"
+            "tr.credit td{color:#3f7d4f;font-style:italic;}"
             ".total-row td{border-top:1.5pt solid #1a1f1b;border-bottom:none;padding-top:12pt;"
             "font-size:13pt;font-weight:bold;}"
             ".stamp{color:#888;font-size:8pt;margin-top:26pt;border-top:1pt solid #ddd;padding-top:7pt;}"
             "</style></head><body>"
             f"<div class='mark'>{html_mod.escape(from_name)}</div>"
-            "<h1>Payment request</h1>"
+            f"<h1>Bill {html_mod.escape(bill['bill_no'])}</h1>"
             f"<div class='meta'>To Timelabs Co &middot; "
-            f"{_dt.datetime.now().strftime('%d %b %Y')}</div>"
-            "<table><thead><tr><th>Shipment</th><th class='n'>Cost</th>"
-            "<th class='n'>Paid so far</th><th class='n'>Balance due</th></tr></thead><tbody>"
-            + "".join(rows) + credit_row
-            + f"<tr class='total-row'><td colspan='3'>Total due</td>"
-              f"<td class='n'>₹{total_due:,.2f}</td></tr>"
+            f"{_dt.datetime.now().strftime('%d %b %Y')} &middot; "
+            f"{len(items)} build(s)</div>"
+            + ack +
+            "<table><thead><tr><th>Build</th>"
+            "<th class='n'>Cost</th></tr></thead><tbody>"
+            + rows + paid_row
+            + f"<tr class='total-row'><td>{'Balance due' if paid else 'Total due'}</td>"
+              f"<td class='n'>{ccy}{due:,.2f}</td></tr>"
             "</tbody></table>"
-            "<div class='stamp'>Generated from the Timelabs build queue &middot; "
+            + (f"<p class='sub'>{html_mod.escape(bill['notes'])}</p>" if bill["notes"] else "")
+            + "<div class='stamp'>Generated from the Timelabs build queue &middot; "
             f"{_dt.datetime.now().strftime('%d %b %Y, %H:%M')}</div>"
             "</body></html>")
         try:
@@ -2911,7 +3367,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
-        self.send_header("Content-Disposition", 'attachment; filename="payment-request.pdf"')
+        self.send_header("Content-Disposition",
+                         f'attachment; filename="{bill["bill_no"]}.pdf"')
         self.send_header("Content-Length", str(len(pdf)))
         self.end_headers()
         self.wfile.write(pdf)
@@ -3256,7 +3713,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         carrier = str(p.get("carrier", "")).strip()[:60]
         notes = str(p.get("notes", "")).strip()[:400]
-        currency = (str(p.get("currency", "USD")).strip()[:8] or "USD").upper()
+        currency = (str(p.get("currency", "INR")).strip()[:8] or "INR").upper()
         try:
             total = float(p["total_cost"]) if str(p.get("total_cost", "")).strip() else None
         except (TypeError, ValueError):
@@ -3763,6 +4220,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_shipment_save()
         elif path == "/supplier/shipment/assign":
             self._handle_supplier_shipment_assign()
+        elif path == "/supplier/cost":
+            self._handle_supplier_cost()
+        elif path == "/supplier/cost/bulk":
+            self._handle_supplier_cost_bulk()
+        elif path == "/supplier/bill/create":
+            self._handle_supplier_bill_create()
+        elif path == "/supplier/bill/acknowledge":
+            self._handle_supplier_bill_acknowledge()
+        elif path == "/supplier/bill/delete":
+            self._handle_supplier_bill_delete()
         elif path == "/reddit/sync":
             self._handle_reddit_sync()
         elif path == "/supplier/payment/record":
