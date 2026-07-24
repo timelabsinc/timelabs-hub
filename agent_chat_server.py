@@ -20,6 +20,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import urllib.parse
 import urllib.request
 
 HOST, PORT = "127.0.0.1", 8901
@@ -244,9 +245,39 @@ def order_event(conn, order_id, kind, detail, actor):
         print(f"[order_events] {e}", flush=True)
 
 
+def _ensure_shipments_schema():
+    """A shipment is one physical consignment carrying several builds.
+
+    Cost is held as one number for the whole consignment and divided evenly
+    across the orders in it, which is what the owner asked for: one figure to
+    type per shipment instead of a per-item breakdown. It is worth being
+    honest that even splitting charges a cheap strap the same freight as an
+    expensive build, so per-unit cost here is an allocation for visibility,
+    not a precise landed cost — the Ledger remains the place where real
+    invoice-level costs live.
+    """
+    try:
+        conn = sqlite3.connect(DB, timeout=5)
+        conn.execute("""CREATE TABLE IF NOT EXISTS shipments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            code TEXT, carrier TEXT, total_cost REAL, currency TEXT DEFAULT 'USD',
+            notes TEXT, status TEXT DEFAULT 'open')""")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_code "
+                     "ON shipments(code)")
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
+        if cols and "shipment_id" not in cols:
+            conn.execute("ALTER TABLE orders ADD COLUMN shipment_id INTEGER")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[shipments] schema check: {e}", flush=True)
+
+
 _ensure_orders_schema()
 _ensure_order_items_schema()
 _ensure_order_events_schema()
+_ensure_shipments_schema()
 
 
 def _fs_resolve(p):
@@ -838,6 +869,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/supplier/card":
             self._handle_supplier_card(query)
+            return
+        if path == "/supplier/ledger":
+            self._handle_supplier_ledger(query)
+            return
+        if path == "/supplier/shipments":
+            self._handle_supplier_shipments()
             return
         if path == "/orders/photo":
             self._handle_order_photo(query)
@@ -2531,6 +2568,123 @@ class Handler(http.server.BaseHTTPRequestHandler):
             lines.extend(hist)
         return dict(o), "\n".join(lines)
 
+    def _photo_data_uri(self, oid, max_px=560):
+        """First reference photo as an inline data: URI, downscaled.
+
+        Embedding beats linking here: the PDF gets forwarded on — to a
+        supplier's own supplier — and a link back to this server would 404 for
+        anyone without an account, which is the one context where the image
+        matters most. Downscaled because a 4MB phone photo per row makes a
+        document nobody can email."""
+        conn = db()
+        names = self._photo_names(conn, oid, supplier_only=True)
+        conn.close()
+        if not names:
+            return None
+        path = os.path.join(ORDER_PHOTOS, str(oid), os.path.basename(names[0]))
+        if not os.path.isfile(path):
+            return None
+        import base64
+        try:
+            # Pillow is present on the interpreter this server runs on, so no
+            # subprocess is needed. (An earlier version shelled out to the
+            # wrong venv, which has no PIL — it failed silently and produced
+            # PDFs with no photo in them, which is why this now falls back
+            # rather than returning None on any error.)
+            import io
+            from PIL import Image
+            im = Image.open(path)
+            im.thumbnail((max_px, max_px))
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=72)
+            return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+        except Exception as e:
+            print(f"[pdf-photo] resize skipped ({e}) — embedding the original", flush=True)
+        try:
+            # Worst case, embed the file as-is: a heavier PDF still beats one
+            # with the reference photo missing.
+            with open(path, "rb") as f:
+                data = f.read(6 * 1024 * 1024)
+            ext = os.path.splitext(path)[1].lower()
+            mime = {".png": "image/png", ".webp": "image/webp"}.get(ext, "image/jpeg")
+            return f"data:{mime};base64," + base64.b64encode(data).decode()
+        except OSError as e:
+            print(f"[pdf-photo] {e}", flush=True)
+            return None
+
+    def _handle_supplier_ledger(self, query):
+        """An order-request sheet for a batch of builds, so the supplier can
+        forward the job to their own supplier. Photo, spec and quantity only —
+        deliberately no prices, since this document leaves the business and a
+        manufacturing brief has no reason to carry cost."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+        raw = urllib.parse.unquote(params.get("ids", ""))
+        ids = [int(x) for x in raw.split(",") if x.strip().isdigit()][:60]
+        if not ids:
+            self._json(400, {"error": "select some orders first"})
+            return
+        conn = db()
+        marks = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT id, product, quantity, case_style, dial_colour, dial_style, "
+            f"case_colour, movement, watch_size, notes FROM orders "
+            f"WHERE id IN ({marks}) AND supplier_visible=1 ORDER BY id ASC", ids).fetchall()
+        conn.close()
+        if not rows:
+            self._json(404, {"error": "none of those orders are in your queue"})
+            return
+        cards = []
+        for r in rows:
+            spec = " · ".join(str(r[k]) for k in
+                              ("case_style", "dial_colour", "dial_style", "case_colour",
+                               "movement", "watch_size") if r[k])
+            img = self._photo_data_uri(r["id"], 420)
+            cards.append(
+                '<tr>'
+                f'<td class="imgcell">{f"<img src=\"{img}\">" if img else "&nbsp;"}</td>'
+                f'<td><b>#{r["id"]}</b><br>{html_mod.escape(r["product"] or "")}'
+                + (f'<br><span class="spec">{html_mod.escape(spec)}</span>' if spec else "")
+                + (f'<br><span class="spec">{html_mod.escape(r["notes"] or "")}</span>'
+                   if r["notes"] else "")
+                + f'</td><td class="qty">{r["quantity"] or 1}</td></tr>')
+        import datetime as _dt
+        doc = (
+            "<html><head><meta charset='utf-8'><style>"
+            "@page{size:A4;margin:1.6cm 1.4cm;}"
+            "body{font-family:Helvetica,Arial,sans-serif;font-size:10pt;color:#1a1f1b;}"
+            "h1{font-size:15pt;margin:0 0 2pt;}"
+            ".sub{color:#777;font-size:8.5pt;margin-bottom:14pt;}"
+            "table{width:100%;border-collapse:collapse;}"
+            "th{text-align:left;font-size:8pt;text-transform:uppercase;letter-spacing:.5pt;"
+            "color:#777;border-bottom:1pt solid #ccc;padding:0 6pt 5pt;}"
+            "td{border-bottom:1pt solid #eee;padding:8pt 6pt;vertical-align:top;}"
+            ".imgcell{width:110pt;}.imgcell img{width:100pt;height:100pt;object-fit:cover;"
+            "border-radius:5pt;border:1pt solid #ddd;}"
+            ".spec{color:#666;font-size:8.5pt;}.qty{text-align:right;font-weight:bold;width:40pt;}"
+            "</style></head><body>"
+            f"<h1>Build request &mdash; {len(rows)} watch{'es' if len(rows) != 1 else ''}</h1>"
+            f"<div class='sub'>Timelabs Co &middot; {_dt.datetime.now().strftime('%d %b %Y')}"
+            "</div><table><thead><tr><th>Reference</th><th>Build</th><th>Qty</th></tr></thead>"
+            "<tbody>" + "".join(cards) + "</tbody></table></body></html>")
+        try:
+            from weasyprint import HTML
+            pdf = HTML(string=doc).write_pdf()
+        except Exception as e:
+            self._json(500, {"error": f"couldn't build the PDF: {e}"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Disposition",
+                        f'attachment; filename="build-request-{len(rows)}-items.pdf"')
+        self.send_header("Content-Length", str(len(pdf)))
+        self.end_headers()
+        self.wfile.write(pdf)
+
     def _handle_supplier_card(self, query):
         """text=1 returns the summary as plain text (for copy / a wa.me link);
         otherwise a PDF, using the same generator the agent's exports use."""
@@ -2552,9 +2706,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if params.get("text") == "1":
             self._json(200, {"id": oid, "text": text})
             return
-        md = text.replace("\n", "\n\n").replace("History:\n\n", "### History\n\n")
+        # Built as HTML directly rather than through make_pdf(), which escapes
+        # its input before converting — correct for untrusted markdown, but it
+        # would render the photo tag as literal text.
+        img = self._photo_data_uri(oid, 560)
+        lines = text.split("\n")
+        head, body = lines[0], lines[1:]
+        rows = "".join(
+            f"<div class='ln'>{html_mod.escape(l.strip())}</div>" if not l.startswith("  ")
+            else f"<div class='ev'>{html_mod.escape(l.strip())}</div>"
+            for l in body if l.strip())
+        import datetime as _dt
+        doc = (
+            "<html><head><meta charset='utf-8'><style>"
+            "@page{size:A4;margin:1.8cm 1.6cm;}"
+            "body{font-family:Helvetica,Arial,sans-serif;font-size:10.5pt;color:#1a1f1b;}"
+            ".mark{font-size:7.5pt;letter-spacing:2.5pt;text-transform:uppercase;color:#8a6a2c;}"
+            "h1{font-size:14pt;margin:3pt 0 10pt;}"
+            "img{width:7cm;height:7cm;object-fit:cover;border-radius:6pt;"
+            "border:1pt solid #ddd;margin-bottom:12pt;}"
+            ".ln{font-size:11pt;margin:3pt 0;}"
+            ".ev{font-size:9pt;color:#666;margin:2pt 0 2pt 10pt;}"
+            ".stamp{color:#888;font-size:8pt;margin-top:16pt;border-top:1pt solid #ddd;"
+            "padding-top:6pt;}"
+            "</style></head><body>"
+            "<div class='mark'>Timelabs Co</div>"
+            f"<h1>{html_mod.escape(head)}</h1>"
+            + (f"<img src='{img}'>" if img else "")
+            + rows
+            + f"<div class='stamp'>Generated {_dt.datetime.now().strftime('%d %b %Y, %H:%M')}</div>"
+            "</body></html>")
         try:
-            pdf = make_pdf(md, f"Order #{oid} — status")
+            from weasyprint import HTML
+            pdf = HTML(string=doc).write_pdf()
         except Exception as e:
             self._json(500, {"error": f"couldn't build the PDF: {e}"})
             return
@@ -2639,6 +2823,198 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
         hub_event("order_shared", f"#{oid} status -> WhatsApp", actor, app="orders")
         self._json(200, {"ok": True, "id": oid, "target": target})
+
+    def _handle_supplier_shipments(self):
+        """Shipments with the builds they carry and what each one costs.
+
+        Per-watch cost is the consignment total divided evenly by how many
+        orders are in it, so it moves as builds are added or removed — it's a
+        live view of the split, not a number frozen at entry time that goes
+        stale the moment the shipment changes."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        conn = db()
+        try:
+            ships = [dict(r) for r in conn.execute(
+                "SELECT id, created_at, code, carrier, total_cost, currency, notes, status "
+                "FROM shipments ORDER BY id DESC")]
+            rows = conn.execute(
+                "SELECT id, shipment_id, product, quantity, status, local_photos "
+                "FROM orders WHERE shipment_id IS NOT NULL AND supplier_visible=1 "
+                "ORDER BY id ASC").fetchall()
+            unassigned = [dict(r) for r in conn.execute(
+                "SELECT id, product, quantity, status FROM orders "
+                "WHERE shipment_id IS NULL AND supplier_visible=1 "
+                "AND status NOT IN ('cancelled','delivered') ORDER BY id ASC")]
+        except sqlite3.OperationalError as e:
+            conn.close()
+            self._json(500, {"error": str(e)})
+            return
+        conn.close()
+        by_ship = {}
+        for r in rows:
+            d = dict(r)
+            try:
+                d["photos"] = len(json.loads(d.pop("local_photos") or "[]"))
+            except (json.JSONDecodeError, TypeError):
+                d["photos"] = 0
+            by_ship.setdefault(d["shipment_id"], []).append(d)
+        for s in ships:
+            items = by_ship.get(s["id"], [])
+            s["orders"] = items
+            n = len(items)
+            s["order_count"] = n
+            s["per_watch"] = round((s["total_cost"] or 0) / n, 2) if n else None
+        self._json(200, {"shipments": ships, "unassigned": unassigned})
+
+    def _handle_supplier_shipment_save(self):
+        """Create or update a consignment. Matched on code so re-entering the
+        same shipment number updates it rather than making a duplicate."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        code = str(p.get("code", "")).strip()[:80]
+        if not code:
+            self._json(400, {"error": "a shipment number is needed"})
+            return
+        carrier = str(p.get("carrier", "")).strip()[:60]
+        notes = str(p.get("notes", "")).strip()[:400]
+        currency = (str(p.get("currency", "USD")).strip()[:8] or "USD").upper()
+        try:
+            total = float(p["total_cost"]) if str(p.get("total_cost", "")).strip() else None
+        except (TypeError, ValueError):
+            self._json(400, {"error": "the total cost should be a number"})
+            return
+        conn = db()
+        row = conn.execute("SELECT id FROM shipments WHERE code=?", (code,)).fetchone()
+        if row:
+            sid = row["id"]
+            conn.execute("UPDATE shipments SET carrier=?, total_cost=?, currency=?, "
+                        "notes=? WHERE id=?", (carrier, total, currency, notes, sid))
+        else:
+            cur = conn.execute(
+                "INSERT INTO shipments (code, carrier, total_cost, currency, notes) "
+                "VALUES (?,?,?,?,?)", (code, carrier, total, currency, notes))
+            sid = cur.lastrowid
+        conn.commit()
+        conn.close()
+        hub_event("shipment_saved", f"{code} ({currency} {total or 0})", actor, app="orders")
+        self._json(200, {"ok": True, "id": sid, "code": code})
+
+    def _handle_supplier_shipment_assign(self):
+        """Put builds into a consignment (or pull them out with shipment=null).
+        Also stamps each order's tracking with the shipment code, so an order
+        looked at on its own still says how it travelled."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 8192)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        ids = [int(i) for i in (p.get("ids") or []) if str(i).strip().isdigit()][:200]
+        if not ids:
+            self._json(400, {"error": "no orders selected"})
+            return
+        sid = p.get("shipment_id")
+        conn = db()
+        code = None
+        if sid in (None, "", 0):
+            sid = None
+        else:
+            try:
+                sid = int(sid)
+            except (TypeError, ValueError):
+                conn.close()
+                self._json(400, {"error": "bad shipment"})
+                return
+            row = conn.execute("SELECT code FROM shipments WHERE id=?", (sid,)).fetchone()
+            if not row:
+                conn.close()
+                self._json(404, {"error": "no such shipment"})
+                return
+            code = row["code"]
+        marks = ",".join("?" for _ in ids)
+        conn.execute(f"UPDATE orders SET shipment_id=? WHERE id IN ({marks}) "
+                     f"AND supplier_visible=1", [sid] + ids)
+        if code:
+            conn.execute(f"UPDATE orders SET tracking_code=? WHERE id IN ({marks}) "
+                        f"AND supplier_visible=1 AND (tracking_code IS NULL OR tracking_code='')",
+                        [code] + ids)
+        for oid in ids:
+            order_event(conn, oid, "shipment",
+                       f"added to shipment {code}" if code else "removed from its shipment",
+                       actor)
+        conn.commit()
+        conn.close()
+        hub_event("shipment_assign",
+                 f"{len(ids)} order(s) -> {code or 'no shipment'}", actor, app="orders")
+        self._json(200, {"ok": True, "count": len(ids), "shipment_id": sid})
+
+    def _handle_supplier_bulk(self):
+        """One action across many builds — the point of the checkboxes. Status
+        and tracking only: the things a supplier legitimately changes for a
+        whole batch at once ("these six all shipped today")."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        from order_form import STATUSES
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 8192)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        ids = [int(i) for i in (p.get("ids") or []) if str(i).strip().isdigit()][:200]
+        if not ids:
+            self._json(400, {"error": "no orders selected"})
+            return
+        status = str(p.get("status", "")).strip()[:40]
+        tracking = p.get("tracking_code")
+        if status and status not in STATUSES:
+            self._json(400, {"error": "unrecognised status"})
+            return
+        if not status and tracking is None:
+            self._json(400, {"error": "nothing to change"})
+            return
+        conn = db()
+        marks = ",".join("?" for _ in ids)
+        owned = [r["id"] for r in conn.execute(
+            f"SELECT id FROM orders WHERE id IN ({marks}) AND supplier_visible=1", ids)]
+        if not owned:
+            conn.close()
+            self._json(404, {"error": "none of those orders are in your queue"})
+            return
+        m2 = ",".join("?" for _ in owned)
+        if status:
+            conn.execute(f"UPDATE orders SET status=? WHERE id IN ({m2})", [status] + owned)
+            for oid in owned:
+                order_event(conn, oid, "status", f"-> {status} (bulk)", actor)
+        if tracking is not None:
+            code = str(tracking).strip()[:80]
+            conn.execute(f"UPDATE orders SET tracking_code=? WHERE id IN ({m2})",
+                        [code or None] + owned)
+            for oid in owned:
+                order_event(conn, oid, "tracking",
+                           f"tracking {code}" if code else "tracking cleared", actor)
+        conn.commit()
+        conn.close()
+        what = " and ".join(x for x in [f"status {status}" if status else "",
+                                        "tracking" if tracking is not None else ""] if x)
+        hub_event("orders_bulk_update", f"{len(owned)} order(s): {what}", actor, app="orders")
+        self._json(200, {"ok": True, "count": len(owned)})
 
     def _handle_supplier_note(self):
         """Let the supplier say something back — 'dial is out of stock', 'sent
@@ -3012,6 +3388,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_tracking()
         elif path == "/supplier/whatsapp":
             self._handle_supplier_whatsapp()
+        elif path == "/supplier/bulk":
+            self._handle_supplier_bulk()
+        elif path == "/supplier/shipment/save":
+            self._handle_supplier_shipment_save()
+        elif path == "/supplier/shipment/assign":
+            self._handle_supplier_shipment_assign()
         elif path == "/orders/delete":
             self._handle_orders_delete()
         elif path == "/orders/bulk":
