@@ -296,10 +296,48 @@ def _ensure_shipments_schema():
         print(f"[shipments] schema check: {e}", flush=True)
 
 
+def _ensure_reddit_schema():
+    """The Reddit Listener: read-only threads surfaced from the target
+    subreddits, ranked/tagged for review, plus a drafts table for phase-2
+    (a suggested reply a human approves before it ever reaches Reddit — see
+    reference_reddit_timelabs memory for the full phased plan). Both tables
+    exist now even though reddit_api.py can't populate them yet, so the UI,
+    endpoints and schema are all ready the moment the OAuth app is approved."""
+    try:
+        conn = sqlite3.connect(DB, timeout=5)
+        conn.execute("""CREATE TABLE IF NOT EXISTS reddit_threads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT NOT NULL,
+            subreddit TEXT NOT NULL,
+            title TEXT, permalink TEXT, author TEXT,
+            created_utc INTEGER, score INTEGER, num_comments INTEGER,
+            tag TEXT, opportunity_score REAL DEFAULT 0,
+            status TEXT DEFAULT 'new',
+            fetched_at TEXT NOT NULL DEFAULT (datetime('now')))""")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reddit_threads_tid "
+                     "ON reddit_threads(thread_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reddit_threads_status "
+                     "ON reddit_threads(status)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS reddit_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id INTEGER NOT NULL REFERENCES reddit_threads(id),
+            draft_text TEXT NOT NULL,
+            status TEXT DEFAULT 'draft',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_by TEXT)""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reddit_drafts_thread "
+                     "ON reddit_drafts(thread_id)")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[reddit] schema check: {e}", flush=True)
+
+
 _ensure_orders_schema()
 _ensure_order_items_schema()
 _ensure_order_events_schema()
 _ensure_shipments_schema()
+_ensure_reddit_schema()
 
 
 def _fs_resolve(p):
@@ -903,6 +941,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/supplier/bill":
             self._handle_supplier_bill(query)
+            return
+        if path == "/reddit/threads":
+            self._handle_reddit_threads(query)
             return
         if path == "/orders/photo":
             self._handle_order_photo(query)
@@ -2875,6 +2916,68 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(pdf)
 
+    # ------------------------------------------------------------- reddit
+    def _handle_reddit_threads(self, query):
+        """Read-only list of threads the Listener has already fetched, plus
+        whether the account is even connected yet — the UI uses `connected`
+        to draw the setup banner instead of an empty list, which look
+        identical otherwise."""
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        params = dict(p.split("=", 1) for p in query.split("&") if "=" in p) if query else {}
+        tag = urllib.parse.unquote(params.get("tag", "")).strip()
+        sql = "SELECT * FROM reddit_threads"
+        args = []
+        if tag and tag != "all":
+            sql += " WHERE tag=?"
+            args.append(tag)
+        sql += " ORDER BY opportunity_score DESC, created_utc DESC LIMIT 100"
+        conn = db()
+        rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
+        conn.close()
+        import reddit_api
+        self._json(200, {"connected": reddit_api.configured(), "threads": rows})
+
+    def _handle_reddit_sync(self):
+        """Pull fresh threads from the target subreddits and upsert them.
+        Read-only against Reddit itself — this never posts or comments,
+        it only fills the Listener's inbox for a human to review."""
+        actor = self._order_user()
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        import reddit_api
+        try:
+            threads = reddit_api.fetch_new_threads()
+        except reddit_api.RedditError as e:
+            self._json(400, {"error": str(e)})
+            return
+        conn = db()
+        added = 0
+        for t in threads:
+            cur = conn.execute("SELECT id FROM reddit_threads WHERE thread_id=?",
+                               (t["thread_id"],)).fetchone()
+            if cur:
+                conn.execute(
+                    "UPDATE reddit_threads SET score=?, num_comments=?, "
+                    "opportunity_score=? WHERE thread_id=?",
+                    (t["score"], t["num_comments"], t["opportunity_score"], t["thread_id"]))
+            else:
+                conn.execute(
+                    "INSERT INTO reddit_threads (thread_id, subreddit, title, permalink, "
+                    "author, created_utc, score, num_comments, tag, opportunity_score) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (t["thread_id"], t["subreddit"], t["title"], t["permalink"], t["author"],
+                     t["created_utc"], t["score"], t["num_comments"], t["tag"],
+                     t["opportunity_score"]))
+                added += 1
+        conn.commit()
+        conn.close()
+        hub_event("reddit_sync", f"{added} new thread(s) from {len(reddit_api.TARGET_SUBS)} subs",
+                  actor, "agent")
+        self._json(200, {"ok": True, "fetched": len(threads), "added": added})
+
     def _handle_supplier_ledger(self, query):
         """An order-request sheet for a batch of builds, so the supplier can
         forward the job to their own supplier. Photo, spec and quantity only —
@@ -3655,6 +3758,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_shipment_save()
         elif path == "/supplier/shipment/assign":
             self._handle_supplier_shipment_assign()
+        elif path == "/reddit/sync":
+            self._handle_reddit_sync()
         elif path == "/supplier/payment/record":
             self._handle_supplier_payment_record()
         elif path == "/orders/delete":

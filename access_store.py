@@ -39,7 +39,7 @@ ROLES = {
         "blurb": "Every day-to-day tool — dashboard, orders, Drop, Ledger, Shopify tools. No admin.",
         "home": "/ops/",
         "tools": ["face", "drop", "ledger", "chat", "blog", "content",
-                  "theme", "price", "product", "orders"],
+                  "theme", "price", "product", "orders", "reddit"],
     },
     "orders": {
         "label": "Orders",

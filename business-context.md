@@ -31,7 +31,7 @@ Design language is **"Meridian"** — clean, modern, light + dark, gold accent (
 
 ---
 
-## 3. Tools (15)
+## 3. Tools (16)
 
 ### Daily
 | Tool | URL | What it does |
@@ -48,6 +48,7 @@ Design language is **"Meridian"** — clean, modern, light + dark, gold accent (
 | **Blog builder** | `/ops/blog.html` | Queued topics → a content plan, in the brand voice. |
 | **Blog uploader** | `/ops/blog-uploader.html` | Write a post in a rich editor and publish it to the store. |
 | **Content updater** | `/ops/content-updater.html` | Bulk-refresh product copy and edit store pages, with a dry-run preview. |
+| **Reddit listener** | `/ops/reddit.html` | Surfaces watch-hobbyist threads worth a genuine reply — read-only, nothing auto-posts. *(Setup pending — see Roadmap.)* |
 
 ### Shopify
 | Tool | URL | What it does |
@@ -153,9 +154,13 @@ in `generate.py`'s refresh loop.
 
 ## 7. Roadmap
 
-- **Reddit assistant** — comment-finder first (surface watch threads worth replying to), then
-  a draft-and-approve poster. The **one** integration that needs its own new API key (Reddit
-  blocks datacenter IPs, so the official API is mandatory).
+- **Reddit listener** — `/ops/reddit.html`, scaffolding built 2026-07-24. Read-only: surfaces
+  watch-hobbyist threads worth a genuine reply, tagged (buying intent / question / complaint /
+  style) and ranked. Schema, endpoints and UI are all live; blocked only on Reddit's manual app
+  approval (self-service closed Nov 2025 — a Developer Support ticket was filed 2026-07-24, ~7
+  day review). Drop the client_id/secret into `.env` and Sync goes live with no further build.
+  Phase 2 (draft-and-approve replies, human-approved, never auto-posted) is scoped but not
+  built — see `reddit_drafts` table.
 - **Google Sheets mirror** — order & customer tabs, reordered and auto-formatted; written and
   tested, waiting on Drive being reconnected.
 - **Scheduling & automation** — moving from an assistant that acts when asked to one that acts
