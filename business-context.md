@@ -157,8 +157,9 @@ in `generate.py`'s refresh loop.
 - **Reddit listener** — `/ops/reddit.html`, scaffolding built 2026-07-24. Read-only: surfaces
   watch-hobbyist threads worth a genuine reply, tagged (buying intent / question / complaint /
   style) and ranked. Schema, endpoints and UI are all live; blocked only on Reddit's manual app
-  approval (self-service closed Nov 2025 — a Developer Support ticket was filed 2026-07-24, ~7
-  day review). Drop the client_id/secret into `.env` and Sync goes live with no further build.
+  approval (self-service closed Nov 2025 — a Developer Support ticket at support.reddithelp.com
+  still needs to be submitted, ~7 day review once it is). Drop the client_id/secret into `.env`
+  and Sync goes live with no further build.
   Phase 2 (draft-and-approve replies, human-approved, never auto-posted) is scoped but not
   built — see `reddit_drafts` table.
 - **Google Sheets mirror** — order & customer tabs, reordered and auto-formatted; written and

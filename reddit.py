@@ -183,9 +183,10 @@ def build():
     </div>
     <div class="rd-banner" id="rd-banner">
       <b>Waiting on Reddit API access</b>
-      <p>Reddit closed self-service app creation — a Developer Support ticket was filed
-        2026-07-24 requesting manual approval (usually about a week). Once the client ID
-        and secret are added to .env, Sync will start pulling threads automatically.</p>
+      <p>Reddit closed self-service app creation — a Developer Support ticket at
+        support.reddithelp.com still needs to be submitted, requesting manual approval
+        (usually about a week once it is). Once the client ID and secret are added to
+        .env, Sync will start pulling threads automatically.</p>
     </div>
     <div class="rd-kpirow">
       <div class="rd-kpi"><div class="v" id="rd-total">&mdash;</div><div class="l">threads tracked</div></div>

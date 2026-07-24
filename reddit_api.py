@@ -9,14 +9,15 @@ breaking the build.
 
 Why these particular credentials: Reddit closed self-service OAuth app
 creation in Nov 2025 — a "script" app now requires manual approval via
-Reddit's Developer Support (ticket filed 2026-07-24, ~7 day review). A script
-app authenticates as the account itself (password grant), which is the
+a Reddit Developer Support ticket (support.reddithelp.com, ~7 day review
+once submitted — not yet submitted as of 2026-07-24). A script app
+authenticates as the account itself (password grant), which is the
 simplest flow for a single-account bot like this one. Datacenter IPs are
 hard-blocked from Reddit's public pages (verified directly from this VPS),
 so oauth.reddit.com is the only reachable path — there is no scraping
 fallback if these credentials are ever missing.
 
-Create the app: reddit.com/prefs/apps (once support approves the request) →
+Create the app: reddit.com/prefs/apps (once the support ticket is approved) →
 "script" type → note the client_id (under the app name) and client_secret →
 add to .env as:
   REDDIT_CLIENT_ID=xxxxx
