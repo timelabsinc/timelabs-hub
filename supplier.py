@@ -223,7 +223,32 @@ SUP_CSS = r"""
   .ocost .addcost{border:1px dashed var(--border-2);border-radius:var(--r-s);
     padding:5px 10px;color:var(--muted);}
   .ocost .addcost:hover{border-color:var(--accent);color:var(--accent);}
+  .ocost .defc{font-size:11px;color:var(--muted);}
   .ocost.locked b{color:var(--muted);}
+  .btrk{display:flex;align-items:center;gap:7px;margin-top:9px;flex-wrap:wrap;}
+  .btrk .chip{font-size:11.5px;font-weight:650;color:var(--ink);background:var(--card-2);
+    border-radius:6px;padding:3px 8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .btrk button{border:none;background:none;color:var(--accent);font:inherit;font-size:12px;
+    font-weight:650;cursor:pointer;padding:4px 2px;min-height:30px;}
+
+  /* How the numbers are worked out. Collapsed by default — it's reference,
+     not something to read every visit — but present, because the owner
+     asked for the calculation to be explainable rather than trusted. */
+  .helpbox{margin-top:10px;}
+  .helpbox summary{cursor:pointer;font-size:12px;color:var(--muted);
+    padding:6px 0;list-style:none;}
+  .helpbox summary::-webkit-details-marker{display:none;}
+  .helpbox summary::before{content:'?';display:inline-flex;align-items:center;
+    justify-content:center;width:15px;height:15px;border-radius:50%;
+    border:1px solid var(--border-2);font-size:10px;font-weight:700;margin-right:6px;
+    vertical-align:-2px;}
+  .helpbox[open] summary{color:var(--ink);}
+  .helpbox .hb{background:var(--card);border:1px solid var(--border);
+    border-radius:var(--r-s);padding:12px 14px;font-size:12.5px;line-height:1.65;
+    color:var(--muted);}
+  .helpbox .hb b{color:var(--ink);font-weight:650;}
+  .helpbox .hb ul{margin:6px 0 0;padding-left:18px;}
+  .helpbox .hb li{margin:3px 0;}
   .ocost .lockic svg{width:13px;height:13px;stroke:var(--muted);fill:none;stroke-width:1.9;
     stroke-linecap:round;stroke-linejoin:round;display:block;}
   .otrk{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;}
@@ -335,48 +360,6 @@ SUP_CSS = r"""
   .bulkbar button.primary{background:var(--bg);color:var(--ink);border-color:var(--bg);}
 
   /* shipments */
-  .shipcard{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
-    box-shadow:var(--shadow);padding:15px;margin-bottom:12px;}
-  .shiptop{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
-  .shipcode{font-size:15.5px;font-weight:750;color:var(--ink);
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
-  .shipmeta{font-size:12.5px;color:var(--muted);}
-  .shipcost{margin-left:auto;text-align:right;}
-  .shipcost b{display:block;font-size:17px;font-weight:750;color:var(--ink);letter-spacing:-.01em;}
-  .shipcost span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:650;}
-  .shiporders{margin-top:11px;border-top:1px solid var(--border);padding-top:10px;}
-  .shiprow{display:flex;gap:9px;align-items:center;font-size:13px;padding:5px 0;color:var(--ink);}
-  .shiprow .n{color:var(--muted);font-size:12px;min-width:38px;}
-  .shiprow .st{margin-left:auto;font-size:11px;color:var(--muted);text-transform:uppercase;
-    letter-spacing:.04em;font-weight:650;}
-  /* what's owed — the headline the Shipments tab exists to answer */
-  /* bills */
-  .bcard{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
-    padding:14px 15px;margin-bottom:10px;box-shadow:var(--shadow);}
-  .bcard.ack{border-color:var(--good);}
-  .btop{display:flex;align-items:flex-start;gap:10px;}
-  .bno{font-size:14px;font-weight:750;color:var(--ink);
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
-  .bmeta{font-size:11.5px;color:var(--muted);margin-top:2px;}
-  .bright{margin-left:auto;text-align:right;}
-  .btot{font-size:17px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;}
-  .bstat{display:inline-block;font-size:10px;font-weight:750;text-transform:uppercase;
-    letter-spacing:.04em;padding:2px 7px;border-radius:5px;margin-top:3px;}
-  .bstat.draft{color:var(--muted);background:var(--card-2);}
-  .bstat.ok{color:var(--good);background:var(--good-bg);}
-  .blines{list-style:none;margin:11px 0 0;padding:0;border-top:1px solid var(--border);}
-  .blines li{display:flex;gap:10px;align-items:baseline;padding:6px 0;
-    border-bottom:1px solid var(--border);font-size:12.5px;}
-  .blines li:last-child{border-bottom:none;}
-  .blines li span{flex:1;min-width:0;color:var(--muted);overflow:hidden;
-    text-overflow:ellipsis;white-space:nowrap;}
-  .blines li b{color:var(--ink);font-variant-numeric:tabular-nums;font-weight:650;}
-  .blines li.ship span,.blines li.ship b{color:var(--ink);}
-  .blines li.paid span,.blines li.paid b{color:var(--good);}
-  .bnote{font-size:12px;color:var(--muted);margin-top:9px;font-style:italic;}
-  .backby{font-size:11px;color:var(--good);margin-top:7px;}
-  .bact{display:flex;gap:7px;margin-top:11px;flex-wrap:wrap;}
-  .bact .danger{color:var(--bad);}
   .owedcard{background:var(--card);border:1px solid var(--accent);border-radius:var(--r);
     box-shadow:var(--shadow);padding:16px 18px;margin-bottom:16px;}
   .owedtop{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}
@@ -392,23 +375,6 @@ SUP_CSS = r"""
     font:inherit;font-size:13.5px;font-weight:650;cursor:pointer;}
   .owedactions .primary{border:none;background:var(--ink);color:var(--bg);}
   .owedactions .ghost{border:1px solid var(--border);background:var(--card);color:var(--ink);}
-  .shippaid{display:flex;gap:14px;margin-top:6px;flex-wrap:wrap;}
-  .shippaid span{font-size:12px;color:var(--muted);}
-  .shippaid span b{color:var(--ink);font-weight:650;}
-  .shippaid .settled{color:var(--good);font-weight:650;}
-  .shiprecord{margin-top:10px;border:none;background:none;color:var(--accent);
-    font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;padding:6px 2px;
-    min-height:32px;}
-
-  .shipform{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:14px;
-    background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:14px;}
-  @media(max-width:560px){ .shipform{grid-template-columns:1fr;} }
-  .shipform input{font-size:16px;border:1px solid var(--border);border-radius:var(--r-s);
-    background:var(--bg);color:var(--ink);padding:10px 12px;-webkit-appearance:none;appearance:none;}
-  .shipform input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
-  .shipform button{grid-column:1/-1;min-height:var(--tap);border:none;border-radius:var(--r-s);
-    background:var(--ink);color:var(--bg);font:inherit;font-size:14.5px;font-weight:700;cursor:pointer;}
-
   .sempty{text-align:center;color:var(--muted);font-size:14px;line-height:1.6;padding:44px 20px;}
   .sempty svg{width:40px;height:40px;stroke:var(--border-2);fill:none;stroke-width:1.4;margin-bottom:12px;}
   .sfoot{text-align:center;color:var(--muted);font-size:11.5px;padding:26px 0 34px;}
@@ -448,7 +414,7 @@ function ago(s){
 function cls(s){return String(s||'').replace(/[^a-z]/gi,'');}
 
 var STATUSES=[], ORDERS=[], filter='attn', q='', openDetail={}, sort='oldest', onlyPhotos=false, IS_ADMIN=false;
-var stageF='', caseF='', moveF='', selectMode=false, SEL={}, SHIPS=[];
+var stageF='', caseF='', moveF='', selectMode=false, SEL={};
 /* Everything before "shipped" still wants something from them; the tail end
    is history. This split is what makes the queue a to-do list. */
 var DONE=['shipped','delivered'];
@@ -509,6 +475,17 @@ function sortOrders(list){
   if(sort==='newest')c.reverse();
   else if(sort==='stage')c.sort(function(a,b){
     return STATUSES.indexOf(a.status)-STATUSES.indexOf(b.status)||a.id-b.id;});
+  /* Sorting by price uses the default rate for anything unpriced, because
+     that IS what it will cost — sorting an unpriced build to the bottom as
+     a zero would misrepresent it. */
+  else if(sort==='pricehigh'||sort==='pricelow'){
+    var dir = sort==='pricehigh' ? -1 : 1;
+    c.sort(function(a,b){
+      var pa=a.supplier_cost!=null?toINR(a.supplier_cost,a.supplier_cost_ccy):(a.default_cost||0);
+      var pb=b.supplier_cost!=null?toINR(b.supplier_cost,b.supplier_cost_ccy):(b.default_cost||0);
+      return (pa-pb)*dir || a.id-b.id;
+    });
+  }
   return c;
 }
 
@@ -543,15 +520,6 @@ function timelineEl(o){
   }).join('')+'</ul>';
 }
 
-function trackEl(o){
-  if(o.tracking_code){
-    return '<div class="otrk"><span class="chip">'+
-      '<svg viewBox="0 0 24 24"><path d="M3 7h13v10H3zM16 10h4l1 3v4h-5z"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/></svg>'+
-      esc(o.tracking_code)+'</span>'+
-      '<button data-trk="'+o.id+'">Change</button></div>';
-  }
-  return '<div class="otrk"><button data-trk="'+o.id+'">+ Add tracking number</button></div>';
-}
 /* Cost sits on the card itself rather than behind a menu — it's the one
    field the supplier fills in for every single build, so it shouldn't cost
    a tap to reach. Once the bill carrying it is acknowledged it goes
@@ -569,7 +537,11 @@ function costEl(o){
       '<b>'+rs(o.supplier_cost,o.supplier_cost_ccy)+'</b>'+
       '<button data-cost="'+o.id+'">Change</button></div>';
   }
-  return '<div class="ocost"><button class="addcost" data-cost="'+o.id+'">+ Add cost</button></div>';
+  /* No price set: show the rate that will be applied if he never sets one,
+     so the number on the batch is never a surprise. */
+  return '<div class="ocost"><button class="addcost" data-cost="'+o.id+'">+ Add cost</button>'+
+    '<span class="defc">or '+inr(o.default_cost)+' '+
+    (o.default_label==='unidentified'?'default':esc(o.default_label))+'</span></div>';
 }
 
 function cardEl(o){
@@ -586,7 +558,6 @@ function cardEl(o){
         specEl(o)+
         (o.notes?'<div class="onote">'+esc(o.notes)+'</div>':'')+
         costEl(o)+
-        trackEl(o)+
       '</div>'+
     '</div>'+
     '<div class="obar">'+
@@ -717,27 +688,6 @@ function wire(){
   });
   L.querySelectorAll('[data-share]').forEach(function(b){
     b.onclick=function(){ openShare(+b.dataset.share); };
-  });
-  L.querySelectorAll('[data-trk]').forEach(function(b){
-    b.onclick=function(){
-      var id=+b.dataset.trk, o=byId(id);
-      var host=b.closest('.otrk');
-      host.outerHTML='<form class="trkform" data-trkf="'+id+'">'+
-        '<input type="text" value="'+esc(o.tracking_code||'')+'" placeholder="Courier / tracking number" aria-label="Tracking number">'+
-        '<button type="submit">Save</button></form>';
-      var f=L.querySelector('[data-trkf="'+id+'"]');
-      var inp=f.querySelector('input'); inp.focus(); inp.select();
-      f.onsubmit=function(e){
-        e.preventDefault();
-        var v=inp.value.trim();
-        inp.disabled=true;
-        jpost('/supplier/tracking',{id:id,tracking_code:v}).then(function(){
-          o.tracking_code=v;
-          toast(v?'Tracking saved':'Tracking cleared');
-          render();
-        }).catch(function(err){ inp.disabled=false; toast(err.message); });
-      };
-    };
   });
   /* Inline edit, same pattern as tracking — typing a number in place beats
      a modal for a field entered dozens of times a week. */
@@ -919,9 +869,7 @@ document.querySelectorAll('.tabs button').forEach(function(t){
     document.querySelectorAll('.tabs button').forEach(function(x){x.classList.toggle('on',x===t);});
     $('pane-queue').classList.toggle('on',k==='queue');
     $('pane-bills').classList.toggle('on',k==='bills');
-    $('pane-ships').classList.toggle('on',k==='ships');
     $('queue-controls').style.display = k==='queue' ? '' : 'none';
-    if(k==='ships')loadShips();
     if(k==='bills')loadBills();
   };
 });
@@ -943,7 +891,7 @@ function billCard(b){
         '<div class="bmeta">'+(b.items||[]).length+' build'+
         ((b.items||[]).length===1?'':'s')+' · '+esc((b.created_at||'').slice(0,10))+'</div></div>'+
       '<div class="bright"><div class="btot">'+inr(totINR)+'</div>'+
-        '<span class="bstat '+(ack?'ok':'draft')+'">'+(ack?'Acknowledged':'Draft')+'</span></div>'+
+        '<span class="bstat '+(ack?'ok':'draft')+'">'+(ack?'Acknowledged':'Not yet agreed')+'</span></div>'+
     '</div>'+
     '<ul class="blines">'+lines+
       (b.shipping_cost?'<li class="ship"><span>Shipping</span><b>'+
@@ -953,8 +901,11 @@ function billCard(b){
     (b.notes?'<div class="bnote">'+esc(b.notes)+'</div>':'')+
     (ack&&b.acknowledged_by?'<div class="backby">Acknowledged by '+
       esc(String(b.acknowledged_by).split('@')[0])+'</div>':'')+
+    '<div class="btrk">'+(b.tracking_code
+      ? '<span class="chip">'+esc(b.tracking_code)+'</span><button data-btrk="'+b.id+'">Change</button>'
+      : '<button data-btrk="'+b.id+'">+ Add courier / tracking</button>')+'</div>'+
     '<div class="bact">'+
-      '<button class="obtn ghost" data-billpdf="'+b.id+'">PDF</button>'+
+      '<button class="obtn ghost" data-billpdf="'+b.id+'">Bill PDF</button>'+
       (CAN_ACK&&!ack?'<button class="obtn" data-billack="'+b.id+'">Acknowledge</button>':'')+
       (CAN_ACK&&ack?'<button class="obtn ghost" data-billpay="'+b.id+'">Record payment</button>':'')+
       (CAN_ACK?'<button class="obtn danger" data-billdel="'+b.id+'">Delete</button>':'')+
@@ -964,8 +915,8 @@ function billCard(b){
 function drawBills(){
   var L=$('billlist');
   if(!BILLS.length){
-    L.innerHTML='<div class="sempty">No bills yet. Select builds in the queue, '+
-      'then use <b>Create bill</b>.</div>';
+    L.innerHTML='<div class="sempty">No batches yet. Select builds in the queue, '+
+      'then use <b>Create batch</b>. Anything without a price gets its default rate.</div>';
   } else {
     L.innerHTML=BILLS.map(billCard).join('');
   }
@@ -993,20 +944,31 @@ function drawBills(){
   });
   L.querySelectorAll('[data-billack]').forEach(function(b){
     b.onclick=function(){
-      if(!confirm('Acknowledge this bill? Costs lock and it goes to the Ledger.'))return;
+      if(!confirm('Agree this batch? Prices lock and it goes to your Ledger.'))return;
       jpost('/supplier/bill/acknowledge',{id:+b.dataset.billack}).then(function(){
-        toast('Acknowledged — sent to the Ledger');
+        toast('Agreed — sent to your Ledger');
         loadBills(); load(true);
       }).catch(function(e){ toast(e.message); });
     };
   });
   L.querySelectorAll('[data-billdel]').forEach(function(b){
     b.onclick=function(){
-      if(!confirm('Delete this bill? Any Ledger entry is reversed and the '+
+      if(!confirm('Delete this batch? Any Ledger entry is reversed and the '+
                   'builds become editable again.'))return;
       jpost('/supplier/bill/delete',{id:+b.dataset.billdel}).then(function(){
-        toast('Bill deleted and reversed');
+        toast('Batch deleted and reversed');
         loadBills(); load(true);
+      }).catch(function(e){ toast(e.message); });
+    };
+  });
+  L.querySelectorAll('[data-btrk]').forEach(function(b){
+    b.onclick=function(){
+      var id=+b.dataset.btrk;
+      var cur=(BILLS.filter(function(x){return x.id===id;})[0]||{}).tracking_code||'';
+      var v=prompt('Courier / tracking number for this batch:',cur);
+      if(v===null)return;
+      jpost('/supplier/bill/tracking',{id:id,tracking_code:v.trim()}).then(function(){
+        toast(v.trim()?'Tracking saved':'Tracking cleared'); loadBills();
       }).catch(function(e){ toast(e.message); });
     };
   });
@@ -1032,10 +994,6 @@ async function loadBills(){
 }
 
 /* ---- shipments ---- */
-function money(n,cur){
-  if(n===null||n===undefined||n==='')return '—';
-  return (cur||'USD')+' '+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-}
 function inr(n){
   return '₹'+Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
@@ -1078,87 +1036,6 @@ function drawMoney(){
   box.innerHTML=html;
 }
 
-function drawOwed(){
-  if(!ARREARS){ $('owed-box').innerHTML=''; return; }
-  var owed=ARREARS.owed_inr||0;
-  /* Money lives on the Bills tab now that bills are what create the debt.
-     This stays as a summary so someone who opened Shipments looking for the
-     balance still finds it, and gets pointed at the right place. */
-  $('owed-box').innerHTML='<div class="owedcard">'+
-    '<div class="owedtop"><b>'+inr(Math.abs(owed))+'</b><span>'+
-      (owed>0.5?'currently owed':owed<-0.5?'in credit':'settled')+'</span></div>'+
-    '<div class="owedbar">'+
-      '<span class="b">Billed <b>'+inr(ARREARS.total_cost_inr)+'</b></span>'+
-      '<span class="b">Paid so far <b>'+inr(ARREARS.total_paid_inr)+'</b></span>'+
-    '</div>'+
-    '<div class="owedactions">'+
-      '<button class="primary" id="go-bills">Open bills</button>'+
-    '</div>'+
-  '</div>';
-  var b=$('go-bills');
-  if(b)b.onclick=function(){
-    document.querySelector('.tabs button[data-tab="bills"]').click();
-  };
-}
-async function loadShips(){
-  try{
-    var d=await api('/supplier/shipments');
-    SHIPS=d.shipments||[];
-    var unassigned=d.unassigned||[];
-    try{ ARREARS=await api('/supplier/arrears'); }catch(e){ ARREARS=null; }
-    drawOwed();
-    var byId={};
-    if(!SHIPS.length){
-      $('shiplist').innerHTML='<div class="sempty">No shipments yet. Add one above, then '+
-        'select builds in the queue and use &ldquo;Add to shipment&rdquo;.</div>';
-      return;
-    }
-    $('shiplist').innerHTML=SHIPS.map(function(s){
-      var a=byId[s.id];
-      var paidLine='';
-      if(a){
-        var settled=a.balance_inr<=0.5;
-        paidLine='<div class="shippaid">'+
-          '<span>Paid <b>'+inr(a.paid_inr)+'</b></span>'+
-          '<span class="'+(settled?'settled':'')+'">'+
-            (settled?'Settled':'Balance <b>'+inr(a.balance_inr)+'</b>')+'</span>'+
-        '</div>';
-      }
-      return '<div class="shipcard">'+
-        '<div class="shiptop">'+
-          '<span class="shipcode">'+esc(s.code||'')+'</span>'+
-          '<span class="shipmeta">'+esc(s.carrier||'')+
-            (s.order_count?' · '+s.order_count+' watch'+(s.order_count===1?'':'es'):' · empty')+'</span>'+
-          '<span class="shipcost"><b>'+esc(rs(s.per_watch,s.currency))+'</b>'+
-            '<span>per watch</span></span>'+
-        '</div>'+
-        '<div class="shipmeta" style="margin-top:4px">Total '+esc(rs(s.total_cost,s.currency))+
-          (s.order_count?' ÷ '+s.order_count:'')+'</div>'+
-        paidLine+
-        (s.orders&&s.orders.length?'<div class="shiporders">'+s.orders.map(function(o){
-          return '<div class="shiprow"><span class="n">#'+o.id+'</span>'+
-            '<span>'+esc((o.product||'').slice(0,46))+'</span>'+
-            '<span class="st">'+esc(o.status)+'</span></div>';
-        }).join('')+'</div>':'')+
-      '</div>';
-    }).join('')+
-      (unassigned.length?'<p class="shipmeta" style="margin-top:6px">'+unassigned.length+
-        ' build'+(unassigned.length===1?'':'s')+' not yet in a shipment.</p>':'');
-  }catch(e){ $('shiplist').innerHTML='<div class="sempty">'+esc(e.message)+'</div>'; }
-}
-$('shipform').onsubmit=async function(e){
-  e.preventDefault();
-  var code=$('s-code').value.trim();
-  if(!code){toast('A shipment number is needed');return;}
-  try{
-    await jpost('/supplier/shipment/save',{code:code,carrier:$('s-carrier').value.trim(),
-      total_cost:$('s-cost').value,currency:$('s-cur').value.trim()||'INR'});
-    toast('Shipment '+code+' saved');
-    $('s-code').value='';$('s-carrier').value='';$('s-cost').value='';
-    loadShips();
-  }catch(err){ toast(err.message); }
-};
-
 /* ---- bulk buttons ---- */
 $('bulk-clear').onclick=clearSel;
 $('bulk-cost').onclick=function(){
@@ -1175,14 +1052,18 @@ $('bulk-cost').onclick=function(){
 $('bulk-bill').onclick=function(){
   var ids=selIds();
   if(!ids.length){toast('Nothing selected');return;}
-  var missing=ids.filter(function(i){var o=byId(i);return !o||o.supplier_cost==null;});
-  if(missing.length){toast('Set a cost first on '+missing.length+' build(s)');return;}
-  var ship=prompt('Shipping / freight for this bill, in ₹ (0 if none):','0');
+  /* Unpriced builds no longer block the batch — they take their default
+     rate — but say so up front rather than surprising him with the total. */
+  var miss=ids.filter(function(i){var o=byId(i);return !o||o.supplier_cost==null;});
+  if(miss.length&&!confirm(miss.length+' of '+ids.length+
+      ' have no price set. They will use their default rate. Continue?'))return;
+  var ship=prompt('Shipping / freight for the whole batch, in ₹ (0 if none):','0');
   if(ship===null)return;
-  var note=prompt('Note on the bill (optional):')||'';
+  var note=prompt('Note on the batch (optional):')||'';
   jpost('/supplier/bill/create',{ids:ids,shipping_cost:ship||0,currency:'INR',notes:note})
     .then(function(d){
-      toast('Bill '+d.bill_no+' created — '+inr(d.total));
+      toast('Batch '+d.bill_no+' created — '+inr(d.total)+
+        (d.defaulted?' ('+d.defaulted+' at default rate)':''));
       clearSel(); load(true); loadBills();
       document.querySelector('.tabs button[data-tab="bills"]').click();
     }).catch(function(e){ toast(e.message); });
@@ -1193,32 +1074,6 @@ $('bulk-status').onclick=function(){
     return '<button class="opt" data-s="'+esc(s)+'"><i></i>'+esc(s)+'</button>';}).join('');
   $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
     b.onclick=function(){ closeSheet(); bulkDo({status:b.dataset.s},'Status set'); };
-  });
-  $('sheet').classList.add('on');
-};
-$('bulk-track').onclick=function(){
-  var v=prompt('Tracking number for '+selIds().length+' selected orders:');
-  if(v===null)return;
-  bulkDo({tracking_code:v.trim()},'Tracking set');
-};
-$('bulk-ship').onclick=async function(){
-  if(!SHIPS.length){ try{ var d=await api('/supplier/shipments'); SHIPS=d.shipments||[]; }catch(e){} }
-  if(!SHIPS.length){ toast('Create a shipment first, on the Shipments tab'); return; }
-  $('sheet-title').textContent='Add '+selIds().length+' to a shipment';
-  $('sheet-opts').innerHTML=SHIPS.map(function(s){
-    return '<button class="opt" data-s="'+s.id+'"><i></i>'+esc(s.code)+
-      ' <span style="opacity:.6">('+s.order_count+')</span></button>';}).join('')+
-    '<button class="opt" data-s=""><i></i>Remove from shipment</button>';
-  $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
-    b.onclick=async function(){
-      closeSheet();
-      try{
-        var d=await jpost('/supplier/shipment/assign',
-          {ids:selIds(),shipment_id:b.dataset.s||null});
-        toast(d.count+' order'+(d.count===1?'':'s')+' updated');
-        SEL={}; load(true); loadShips();
-      }catch(e){ toast(e.message); }
-    };
   });
   $('sheet').classList.add('on');
 };
@@ -1288,7 +1143,7 @@ load();
 
 fetch(API+'/whoami').then(function(r){return r.ok?r.json():null;}).then(function(i){
   if(i&&i.email){var w=$('who');if(w)w.textContent=i.email;}
-  if(i&&i.admin){IS_ADMIN=true; if(ARREARS)drawOwed();}
+  if(i&&i.admin){IS_ADMIN=true; if(BILLS.length)drawBills();}
 }).catch(function(){});
 """
 
@@ -1314,8 +1169,7 @@ def build():
     </div>
     <div class="tabs">
       <button class="on" data-tab="queue">Build queue</button>
-      <button data-tab="bills">Bills</button>
-      <button data-tab="ships">Shipments</button>
+      <button data-tab="bills">Batches</button>
     </div>
 
     <div id="queue-controls">
@@ -1354,6 +1208,8 @@ def build():
           <button class="schip on" data-sort="oldest">Oldest first</button>
           <button class="schip" data-sort="newest">Newest first</button>
           <button class="schip" data-sort="stage">Stage</button>
+          <button class="schip" data-sort="pricehigh">Price high&ndash;low</button>
+          <button class="schip" data-sort="pricelow">Price low&ndash;high</button>
         </div>
         <div class="frow">
           <button class="schip" id="f-photos">With a photo</button>
@@ -1363,6 +1219,27 @@ def build():
       </div>
       <div class="syncline"><span class="sync" id="sync">Loading&hellip;</span></div>
       <div class="moneybar" id="moneybar"></div>
+      <details class="helpbox">
+        <summary>How these numbers are worked out</summary>
+        <div class="hb">
+          <p><b>Each build has a price.</b> Type one in, or leave it and the
+          default for its movement applies when the batch is made:</p>
+          <ul>
+            <li>VK63 &mdash; &#8377;6,500</li>
+            <li>NH35 (including anything marked automatic) &mdash; &#8377;9,000</li>
+            <li>Movement not identified &mdash; &#8377;5,000</li>
+          </ul>
+          <p style="margin-top:8px"><b>A batch</b> is a set of builds sent
+          together and billed together. Its total is every build's price added
+          up, plus one shipping charge for the whole batch. Prices are copied
+          onto the batch when it's made, so editing a build later never changes
+          a batch that already exists.</p>
+          <p style="margin-top:8px"><b>You owe</b> counts agreed batches only,
+          minus anything already paid. A batch that hasn't been agreed yet
+          isn't owed. <b>Not yet billed</b> is work that's been priced but
+          isn't on any batch.</p>
+        </div>
+      </details>
     </div>
   </div>
 
@@ -1373,9 +1250,7 @@ def build():
       <span class="sp"></span>
       <button id="bulk-cost">Set cost</button>
       <button id="bulk-status">Set status</button>
-      <button id="bulk-track">Tracking</button>
-      <button id="bulk-ship">Add to shipment</button>
-      <button class="primary" id="bulk-bill">Create bill</button>
+      <button class="primary" id="bulk-bill">Create batch</button>
       <button id="bulk-pdf">Build request PDF</button>
       <button id="bulk-clear">Clear</button>
     </div>
@@ -1384,18 +1259,6 @@ def build():
   <section class="pane" id="pane-bills">
     <div id="bills-owed"></div>
     <div id="billlist"><div class="sempty">Loading&hellip;</div></div>
-  </section>
-
-  <section class="pane" id="pane-ships">
-    <div id="owed-box"></div>
-    <form class="shipform" id="shipform">
-      <input id="s-code" placeholder="Shipment number" aria-label="Shipment number" autocomplete="off" required>
-      <input id="s-carrier" placeholder="Carrier (DHL, EMS&hellip;)" aria-label="Carrier" autocomplete="off">
-      <input id="s-cost" type="number" step="0.01" min="0" placeholder="Total cost" aria-label="Total cost">
-      <input id="s-cur" placeholder="INR" aria-label="Currency" value="INR" autocomplete="off">
-      <button type="submit">Save shipment</button>
-    </form>
-    <div id="shiplist"><div class="sempty">Loading&hellip;</div></div>
   </section>
 
   <p class="sfoot">Timelabs Co &middot; build queue</p>

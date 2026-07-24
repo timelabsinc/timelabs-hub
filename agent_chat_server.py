@@ -395,6 +395,12 @@ def _ensure_billing_schema():
         pcols = {r[1] for r in conn.execute("PRAGMA table_info(supplier_payments)")}
         if pcols and "bill_id" not in pcols:
             conn.execute("ALTER TABLE supplier_payments ADD COLUMN bill_id INTEGER")
+        # One courier reference for the whole batch. Per-build tracking was
+        # dropped as more fiddly than useful — the batch travels as one box,
+        # so one number describes it.
+        bcols = {r[1] for r in conn.execute("PRAGMA table_info(supplier_bills)")}
+        if bcols and "tracking_code" not in bcols:
+            conn.execute("ALTER TABLE supplier_bills ADD COLUMN tracking_code TEXT")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -2612,9 +2618,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 n = 0
             d["photos"] = n
             d["timeline"] = events.get(d["id"], [])
-            # Once the bill carrying this build has been acknowledged, its
+            # Once the batch carrying this build has been acknowledged, its
             # cost is settled history and the UI shows it read-only.
             d["locked"] = d.get("bill_id") in locked_bills
+            # Shown greyed on the card so the rate that will be applied is
+            # visible before it's applied, never a surprise on the bill.
+            dc, dl = self._default_cost(d.get("product"), d.get("movement"))
+            d["default_cost"], d["default_label"] = dc, dl
             out.append(d)
         self._json(200, {"orders": out, "statuses": STATUSES})
 
@@ -2673,6 +2683,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return float(amount) * (self._USD_INR if (currency or "USD").upper() == "USD" else 1.0)
 
     # ------------------------------------------------- per-build supplier cost
+    # What a build costs if nobody says otherwise. The supplier can always
+    # type a real number; this is the floor so a batch can be raised without
+    # pricing every line by hand.
+    #
+    # Movement is read from the product text as well as the movement column,
+    # because the column is mostly empty in practice (2 of 7 builds had one
+    # when this was written) while the name almost always says "vk63" or
+    # "nh35". VK63 is checked first: it's a meca-quartz chronograph, so a
+    # build naming both it and "automatic" is a VK63 with an automatic-style
+    # dial, not an NH35.
+    _DEFAULT_COSTS = (
+        ("VK63", 6500.0, ("vk63", "vk 63")),
+        ("NH35", 9000.0, ("nh35", "nh 35", "automatic")),
+    )
+    _FALLBACK_COST = 5000.0
+
+    def _default_cost(self, product, movement):
+        hay = f"{movement or ''} {product or ''}".lower()
+        for label, amount, keys in self._DEFAULT_COSTS:
+            if any(k in hay for k in keys):
+                return amount, label
+        return self._FALLBACK_COST, "unidentified"
+
     def _cost_editable(self, conn, order_id):
         """A build's cost is editable until the bill carrying it is
         acknowledged. After that the number is settled history — the check
@@ -2824,28 +2857,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         conn = db()
         rows = conn.execute(
-            "SELECT id, product, ref_code, supplier_cost, supplier_cost_ccy, bill_id "
-            "FROM orders WHERE id IN ({}) AND supplier_visible=1".format(
+            "SELECT id, product, movement, ref_code, supplier_cost, supplier_cost_ccy, "
+            "bill_id FROM orders WHERE id IN ({}) AND supplier_visible=1".format(
                 ",".join("?" * len(ids))), ids).fetchall()
         if not rows:
             conn.close()
             self._json(400, {"error": "none of those builds are in the queue"})
             return
-        uncosted = [r["id"] for r in rows if r["supplier_cost"] is None]
-        if uncosted:
-            conn.close()
-            self._json(400, {"error": "set a cost first on build "
-                                      + ", ".join(f"#{i}" for i in uncosted)})
-            return
         already = [r["id"] for r in rows if r["bill_id"]]
         if already:
             conn.close()
-            self._json(400, {"error": "already on a bill: "
+            self._json(400, {"error": "already in a batch: "
                                       + ", ".join(f"#{i}" for i in already)})
             return
 
         bill_no = self._next_bill_no(conn)
-        subtotal = sum(float(r["supplier_cost"] or 0) for r in rows)
+        # A build with no price set falls to its movement's default rather
+        # than blocking the batch. The rate is written onto the line as a
+        # real number, so a batch reads the same whether it was priced by
+        # hand or by rule.
+        priced, defaulted = [], 0
+        for r in rows:
+            cost = r["supplier_cost"]
+            if cost is None:
+                cost, label = self._default_cost(r["product"], r["movement"])
+                defaulted += 1
+                conn.execute("UPDATE orders SET supplier_cost=?, supplier_cost_ccy=? "
+                             "WHERE id=?", (cost, currency, r["id"]))
+                order_event(conn, r["id"], "cost",
+                            f"default {label} rate applied: {cost:,.0f}", actor)
+            priced.append((r, float(cost)))
+
+        subtotal = sum(c for _, c in priced)
         total = subtotal + shipping
         cur = conn.execute(
             "INSERT INTO supplier_bills (bill_no, created_by, status, currency, "
@@ -2854,19 +2897,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
             (bill_no, actor, currency, subtotal, shipping, total,
              p.get("shipment_id") or None, notes))
         bill_id = cur.lastrowid
-        for r in rows:
+        for r, cost in priced:
             conn.execute(
                 "INSERT INTO supplier_bill_items (bill_id, order_id, description, "
                 "ref_code, cost) VALUES (?,?,?,?,?)",
-                (bill_id, r["id"], r["product"], r["ref_code"], r["supplier_cost"]))
+                (bill_id, r["id"], r["product"], r["ref_code"], cost))
             conn.execute("UPDATE orders SET bill_id=? WHERE id=?", (bill_id, r["id"]))
-            order_event(conn, r["id"], "billed", f"added to bill {bill_no}", actor)
+            order_event(conn, r["id"], "billed", f"added to batch {bill_no}", actor)
         conn.commit()
         conn.close()
         hub_event("supplier_bill", f"{bill_no} drafted — {currency} {total:,.2f} "
                                    f"across {len(rows)} build(s)", actor, "supplier")
         self._json(200, {"ok": True, "bill_id": bill_id, "bill_no": bill_no,
-                         "subtotal": subtotal, "shipping_cost": shipping, "total": total})
+                         "subtotal": subtotal, "shipping_cost": shipping,
+                         "total": total, "defaulted": defaulted})
+
+    def _handle_supplier_bill_tracking(self):
+        """One courier reference for a whole batch. Editable after
+        acknowledgement on purpose — the money is settled at that point but
+        the box may not have shipped yet, and a tracking number is a fact
+        about the parcel, not about what's owed."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            bid = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            bid = 0
+        code = str(p.get("tracking_code") or "").strip()[:80]
+        conn = db()
+        row = conn.execute("SELECT bill_no FROM supplier_bills WHERE id=?", (bid,)).fetchone()
+        if not row:
+            conn.close()
+            self._json(404, {"error": "no such batch"})
+            return
+        conn.execute("UPDATE supplier_bills SET tracking_code=? WHERE id=?",
+                     (code or None, bid))
+        for oid in [r["order_id"] for r in conn.execute(
+                "SELECT order_id FROM supplier_bill_items WHERE bill_id=?", (bid,))
+                if r["order_id"]]:
+            order_event(conn, oid, "tracking",
+                        f"batch {row['bill_no']} tracking: {code or 'cleared'}", actor)
+        conn.commit()
+        conn.close()
+        self._json(200, {"ok": True})
 
     def _ledger_supplier_id(self, lconn):
         """Hannan builds the watches; the 31 invoices already in the Ledger
@@ -4230,6 +4311,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_bill_acknowledge()
         elif path == "/supplier/bill/delete":
             self._handle_supplier_bill_delete()
+        elif path == "/supplier/bill/tracking":
+            self._handle_supplier_bill_tracking()
         elif path == "/reddit/sync":
             self._handle_reddit_sync()
         elif path == "/supplier/payment/record":
