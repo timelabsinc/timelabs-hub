@@ -66,7 +66,8 @@ def fetch_shopify():
     if not shop or not token:
         return {"connected": False}
 
-    since = (datetime.datetime.utcnow() - datetime.timedelta(days=LOOKBACK_DAYS)).isoformat() + "Z"
+    since = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
     url = (
         f"https://{shop}/admin/api/2024-10/orders.json"
         f"?status=any&created_at_min={since}&limit=250&fields=id,total_price,created_at,refunds,financial_status"
