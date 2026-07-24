@@ -40,6 +40,15 @@ MOBILE_FIX = """<style id="labs-mobile-fix">
   input:not([type=button]):not([type=submit]):not([type=reset]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),
   textarea, select{font-size:16px !important;}
 }
+/* The upload FAB is the ONLY upload trigger on a phone (the toolbar Upload
+   button is desktop-only). Its correct rule places it above the 60px bottom
+   nav bar, but a later unscoped `.fab{bottom:26px}` overrides that and drops
+   it behind the nav bar, where it's half-hidden and awkward to tap — the
+   "photo selector has UI issues on phone" report. Restore the nav-aware
+   position on touch layouts; injected last so it wins. */
+@media (max-width:759px){
+  .fab{bottom:calc(var(--nav-h,60px) + env(safe-area-inset-bottom,0px) + 18px) !important;}
+}
 </style>"""
 
 # Drop's own toolbar controls. The SPA's JS binds to these ids, so they must
@@ -87,7 +96,12 @@ def build():
             return
         out = html[:m.start()] + new + html[m.end():]
 
-    if 'id="labs-mobile-fix"' not in out:
+    # Replace an existing block so edits to MOBILE_FIX actually take effect on
+    # a redeploy, not just on first injection.
+    if 'id="labs-mobile-fix"' in out:
+        out = re.sub(r'<style id="labs-mobile-fix">.*?</style>', lambda _: MOBILE_FIX,
+                     out, count=1, flags=re.S)
+    else:
         out = out.replace("</head>", MOBILE_FIX + "\n</head>", 1)
 
     if out == html:
