@@ -107,6 +107,16 @@ CSS = """
 .rd-dstat.ready{color:var(--good);background:var(--good-bg);}
 .rd-dstat.failed{color:var(--bad);background:var(--bad-bg);}
 .rd-dstat.posted{color:var(--muted);background:var(--card-2);}
+.rd-dstat.needs_input{color:#8a6a2c;background:var(--accent-bg);}
+.rd-ask{background:var(--accent-bg);border:1px solid var(--accent);border-radius:var(--r-s);
+  padding:12px 14px;margin:8px 0 0;}
+.rd-ask p{margin:0 0 9px;font-size:13.5px;color:var(--ink);line-height:1.55;}
+.rd-ask textarea{width:100%;font:inherit;font-size:13.5px;border:1px solid var(--border);
+  border-radius:var(--r-s);background:var(--bg);color:var(--ink);padding:9px 11px;
+  min-height:64px;resize:vertical;}
+.rd-ask button{margin-top:9px;min-height:38px;border:none;border-radius:var(--r-s);
+  background:var(--accent);color:#fff;font:inherit;font-size:13.5px;font-weight:700;
+  padding:0 15px;cursor:pointer;}
 .rd-dwhen{font-size:11.5px;color:var(--muted);margin-left:auto;}
 .rd-dtitle{width:100%;font:inherit;font-size:15px;font-weight:700;color:var(--ink);
   border:1px solid transparent;border-radius:var(--r-s);background:none;padding:6px 8px;
@@ -331,7 +341,11 @@ function draftCard(p){
       '<span class="rd-meta">'+esc(p.kind||'')+(p.photos&&p.photos.length?' · '+p.photos.length+' photo(s)':'')+'</span>'+
       '<span class="rd-dwhen">'+agoTxt(p.created_at)+'</span>'+
     '</div>'+
-    (running
+    (p.status==='needs_input'&&p.question
+      ? '<div class="rd-ask"><p>'+esc(p.question)+'</p>'+
+        '<textarea data-ans="'+p.id+'" placeholder="Answer it and the run picks up from here"></textarea>'+
+        '<button data-send="'+p.id+'">Answer and continue</button></div>'
+    : running
       ? '<div class="rd-empty" style="padding:14px 0">Working through the passes…</div>'
       : p.status==='failed'
         ? '<div class="rd-empty" style="padding:14px 0;text-align:left">'+esc(p.error||'failed')+'</div>'
@@ -356,6 +370,17 @@ function drawDrafts(){
     return;
   }
   L.innerHTML=DRAFTS.map(draftCard).join('');
+  L.querySelectorAll('[data-send]').forEach(function(b){
+    b.onclick=function(){
+      var id=+b.dataset.send;
+      var v=L.querySelector('[data-ans="'+id+'"]').value.trim();
+      if(!v){ toast('Type an answer first'); return; }
+      b.disabled=true;
+      jpost('/reddit/post/answer',{id:id,answer:v})
+        .then(function(){ toast('Picking up where it stopped'); loadDrafts(); })
+        .catch(function(e){ toast(e.message); b.disabled=false; });
+    };
+  });
   L.querySelectorAll('[data-save]').forEach(function(b){
     b.onclick=function(){
       var id=+b.dataset.save, c=b.closest('.rd-draft');

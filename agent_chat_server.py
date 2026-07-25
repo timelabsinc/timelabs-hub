@@ -351,9 +351,17 @@ def _ensure_reddit_schema():
             error TEXT,
             finished_at TEXT,
             posted_at TEXT,
-            posted_url TEXT)""")
+            posted_url TEXT,
+            question TEXT,
+            answer TEXT,
+            rounds INTEGER DEFAULT 0)""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reddit_posts_status "
                      "ON reddit_posts(status)")
+        pcols = {r[1] for r in conn.execute("PRAGMA table_info(reddit_posts)")}
+        for col, decl in (("question", "TEXT"), ("answer", "TEXT"),
+                          ("rounds", "INTEGER DEFAULT 0")):
+            if col not in pcols:
+                conn.execute(f"ALTER TABLE reddit_posts ADD COLUMN {col} {decl}")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -3696,6 +3704,55 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             print(f"[alert] {e}", flush=True)
 
+    def _handle_reddit_post_answer(self):
+        """Answer the question a pass stopped on, and let the run continue."""
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 16384)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            pid = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        answer = str(p.get("answer") or "").strip()[:2000]
+        if not answer:
+            self._json(400, {"error": "an answer is needed"})
+            return
+        conn = db()
+        row = conn.execute("SELECT id FROM reddit_posts WHERE id=?", (pid,)).fetchone()
+        if not row:
+            conn.close()
+            self._json(404, {"error": "no such draft"})
+            return
+        conn.execute("UPDATE reddit_posts SET answer=?, question=NULL, "
+                     "status='queued', rounds=COALESCE(rounds,0)+1 WHERE id=?",
+                     (answer, pid))
+        conn.commit()
+        conn.close()
+
+        def _work():
+            try:
+                subprocess.run(["python3", "/root/ops-dashboard/reddit_draft.py",
+                                str(pid)], capture_output=True, text=True, timeout=2400)
+            except Exception as e:
+                print(f"[reddit_draft] resume: {e}", flush=True)
+            c = db()
+            r = c.execute("SELECT status, title FROM reddit_posts WHERE id=?",
+                          (pid,)).fetchone()
+            c.close()
+            if r and r["status"] == "ready":
+                self._alert(f"*Reddit draft ready*\n{r['title']}\n\n"
+                            f"ops.timelabsco.in/ops/reddit.html")
+
+        threading.Thread(target=_work, daemon=True).start()
+        self._json(200, {"ok": True})
+
     def _handle_reddit_post_update(self):
         """Edit a draft before it goes out, or mark it as posted."""
         if not self._has_tool("reddit"):
@@ -4584,6 +4641,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_bill_tracking()
         elif path == "/reddit/post/create":
             self._handle_reddit_post_create()
+        elif path == "/reddit/post/answer":
+            self._handle_reddit_post_answer()
         elif path == "/reddit/post/update":
             self._handle_reddit_post_update()
         elif path == "/reddit/sync":

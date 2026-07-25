@@ -25,10 +25,14 @@ is what enforces that.
 """
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, "/root/ops-dashboard")
+import reddit_clean
 
 DB = "/root/ops-dashboard/data/hermes.db"
 SUB = "IndiaWatchMods"
@@ -42,7 +46,10 @@ def db():
 
 
 def hermes(prompt, toolset=None):
-    """One Hermes call. Returns text, or raises with whatever it said."""
+    """One Hermes call, scrubbed on the way out.
+
+    Cleaning here rather than only at the end means no later pass ever sees a
+    dash or a watermark character and copies the habit forward."""
     cmd = ["hermes"]
     if toolset:
         cmd += ["-t", toolset]
@@ -51,7 +58,8 @@ def hermes(prompt, toolset=None):
     out = (r.stdout or "").strip()
     if r.returncode != 0 or not out:
         raise RuntimeError((r.stderr or out or "hermes gave nothing back")[:300])
-    return out
+    cleaned, _ = reddit_clean.clean(out)
+    return cleaned
 
 
 def set_stage(post_id, stage, **cols):
@@ -87,7 +95,32 @@ def evidence():
     return "\n".join(lines)
 
 
-PASSES = ("research", "draft", "audit", "humanise", "verify")
+PASSES = ("research", "draft", "audit", "humanise", "geo", "polish", "verify")
+
+# How many times the pipeline may loop back and rewrite before it settles.
+# Finesse comes from re-reading, not from one careful attempt.
+MAX_ROUNDS = 3
+
+
+def ask_owner(post_id, question):
+    """Stop and put a question to the owner rather than guessing.
+
+    A pass that needs a fact we don't have (which movement, what the price
+    is, whether a claim is true) should say so. Inventing it is how a post
+    ends up with something in it we can't stand behind."""
+    conn = db()
+    conn.execute("UPDATE reddit_posts SET status='needs_input', stage='question', "
+                 "question=? WHERE id=?", (question.strip()[:600], post_id))
+    conn.commit()
+    conn.close()
+
+
+def answered(post_id):
+    conn = db()
+    row = conn.execute("SELECT answer FROM reddit_posts WHERE id=?",
+                       (post_id,)).fetchone()
+    conn.close()
+    return (row["answer"] or "").strip() if row else ""
 
 
 def run(post_id):
@@ -137,7 +170,7 @@ def run(post_id):
         "the person who built the watch. End on something that invites a reply "
         "— a real question, not 'let me know what you think'.")
 
-    # 3 — audit
+    # 3 - audit
     set_stage(post_id, "audit")
     out["audit"] = hermes(
         context + "\nDraft:\n" + out["draft"] +
@@ -147,36 +180,105 @@ def run(post_id):
         "- anything that would embarrass a small brand if a watch enthusiast "
         "picked it apart\n"
         "- title that oversells what the photos show\n"
+        "If a fact is missing that only the builder could know, write a line "
+        "starting exactly ASK: followed by the single question worth asking.\n"
         "If there is nothing wrong, reply exactly: CLEAN")
 
-    # 4 — humanise
+    # A pass may stop and ask rather than invent. The run resumes from here
+    # once the owner answers, so the question has to be worth the interruption.
+    for line in out["audit"].splitlines():
+        if line.strip().upper().startswith("ASK:"):
+            q = line.split(":", 1)[1].strip()
+            prior = answered(post_id)
+            if not prior:
+                ask_owner(post_id, q)
+                return None
+            context += f"\nThe owner was asked: {q}\nHe answered: {prior}\n"
+            break
+
+    # 4 - humanise
     set_stage(post_id, "humanise")
     out["humanise"] = hermes(
         context + "\nDraft:\n" + out["draft"] + "\n\nAudit findings:\n" + out["audit"] +
         "\n\nRewrite the post fixing every audit finding, and make it read like "
-        "a person typed it. Specifically remove: bulleted feature lists, the "
-        "word 'elevate', three-item rhythms, sentences that restate the previous "
-        "sentence, and any tidy summary at the end. Vary sentence length. Keep "
-        "it modest — this is someone showing a watch they made, not a launch.\n\n"
+        "a person typed it on a phone. Remove: bulleted feature lists, the word "
+        "'elevate', three-item rhythms, sentences that restate the previous "
+        "sentence, and any tidy summary at the end. Vary sentence length hard, "
+        "some very short. Keep it modest, this is someone showing a watch they "
+        "made.\n\nNever use an em dash or an en dash. Use a comma or a full stop. "
+        "Use straight quotes only.\n\n"
         "Return exactly:\nTITLE: <one line>\nBODY:\n<the post>")
 
-    # 5 — verify
+    # 5 - geo
+    set_stage(post_id, "geo")
+    out["geo"] = hermes(
+        context + "\nPost:\n" + out["humanise"] +
+        "\n\nThe long game is for this subreddit to be what both people and AI "
+        "answer engines cite when someone asks about Seiko modding in India. "
+        "Engines quote passages that answer a specific question with specific "
+        "facts, attached to a named source.\n\n"
+        "Without making it read like SEO, suggest in under 120 words: what "
+        "concrete detail is missing that would make this passage worth quoting "
+        "(a real number, a part name, a price, a failure and what fixed it), "
+        "and what question this post would be the answer to. Do not rewrite it.")
+
+    # 6 - polish, looping until the text survives its own inspection
+    best = out["humanise"]
+    for rnd in range(MAX_ROUNDS):
+        set_stage(post_id, f"polish {rnd + 1}")
+        problems = reddit_clean.verify(best)
+        instruction = (
+            context + "\nPost:\n" + best +
+            "\n\nEditor notes to work in:\n" + out["geo"] +
+            ("\n\nThese give it away as machine-written and must go:\n- "
+             + "\n- ".join(problems) if problems else "") +
+            "\n\nProduce the final version. Rules, all of them:\n"
+            "no em dash or en dash anywhere, no bullet lists, no rhetorical "
+            "questions stacked in threes, no closing summary, no marketing "
+            "adjectives, straight quotes only. It is fine for the post to be "
+            "short. It is not fine for it to sound smooth and empty.\n\n"
+            "Return exactly:\nTITLE: <one line>\nBODY:\n<the post>")
+        candidate = hermes(instruction)
+        t2, b2 = parse(candidate)
+        if not t2:
+            break
+        best = candidate
+        if not reddit_clean.verify(b2):
+            break
+    out["polish"] = best
+
+    # 7 - verify, read cold
     set_stage(post_id, "verify")
     out["verify"] = hermes(
-        context + "\nFinal post:\n" + out["humanise"] +
+        context + "\nFinal post:\n" + best +
         "\n\nRead this cold, as a watch enthusiast scrolling the sub who has "
-        "never heard of us. Would you reply to it? Answer in under 80 words, "
-        "then a last line of exactly GO or NO-GO.")
+        "never heard of us. Would you reply to it? Does any sentence sound "
+        "like it came from a language model? Answer in under 80 words, then a "
+        "last line of exactly GO or NO-GO.")
 
-    title, body = parse(out["humanise"])
+    title, body = parse(out["polish"])
+    if not title:
+        title, body = parse(out["humanise"])
     if not title:
         title, body = parse(out["draft"])
 
+    # Final gate. Everything above is advisory; this is not. A draft that
+    # still carries a tell is held back rather than shown as ready, because
+    # the whole point is that nobody on Reddit can tell.
+    title, _ = reddit_clean.clean(title)
+    body, cleaned_notes = reddit_clean.clean(body)
+    out["scrubber"] = "; ".join(cleaned_notes) or "nothing needed removing"
+    left = reddit_clean.verify(title + "\n" + body)
+    status = "ready" if not left else "needs_input"
+    question = ("" if not left else
+                "The final check still found: " + "; ".join(left) +
+                ". Edit it here, or discard and run it again.")
+
     conn = db()
     conn.execute(
-        "UPDATE reddit_posts SET status='ready', stage='done', title=?, body=?, "
-        "passes=?, finished_at=datetime('now') WHERE id=?",
-        (title, body, json.dumps(out), post_id))
+        "UPDATE reddit_posts SET status=?, stage='done', title=?, body=?, "
+        "passes=?, question=?, finished_at=datetime('now') WHERE id=?",
+        (status, title, body, json.dumps(out), question, post_id))
     conn.commit()
     conn.close()
     return title
