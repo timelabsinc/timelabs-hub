@@ -65,7 +65,8 @@ SUP_CSS = r"""
   .sync.err{color:var(--bad);}
 
   /* tabs */
-  .tabs{display:flex;gap:4px;margin-top:11px;}
+  .tabs{display:flex;gap:4px;margin-top:11px;
+    border-bottom:1px solid var(--border);}
   .tabs button{flex:none;border:none;background:none;color:var(--muted);font:inherit;
     font-size:14px;font-weight:650;padding:8px 2px;margin-right:16px;cursor:pointer;
     border-bottom:2px solid transparent;min-height:38px;}
@@ -76,7 +77,8 @@ SUP_CSS = r"""
      time they open this ("what needs me?"), so it shouldn't cost a tap to
      see. Icons carry it so four stages fit a phone width without wrapping;
      the label is hidden on narrow screens but kept for screen readers. */
-  .stagebar{display:flex;gap:6px;margin-top:10px;}
+  #queue-controls{margin-top:16px;}
+  .stagebar{display:flex;gap:6px;}
   .stg{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;
     border:1px solid var(--border);background:var(--card);color:var(--muted);
     border-radius:var(--r-s);padding:7px 4px;font:inherit;font-size:11px;font-weight:650;
@@ -452,8 +454,9 @@ SUP_CSS = r"""
      to produce only actually began above ~950px.
      ------------------------------------------------------------------ */
   @media(min-width:1000px){
-    #queue-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
-    .stagebar{margin-top:0;gap:0;width:max-content;max-width:100%;
+    #queue-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+      margin-top:16px;}
+    .stagebar{gap:0;width:max-content;max-width:100%;
       border:1px solid var(--border);border-radius:999px;overflow:hidden;
       background:var(--card);}
     .stg{flex:none;flex-direction:row;gap:7px;justify-content:flex-start;
@@ -476,7 +479,10 @@ SUP_CSS = r"""
        line itself belongs here — miss one and it squeezes in beside the
        search box instead of taking its own row. */
     .fpanel,.pickhint,.moneybar,.syncline,.helpbox{flex-basis:100%;margin-top:0;}
-    .moneybar{margin-top:2px;}
+    /* The money strip is its own band, not another control, so it gets the
+       same 16px the controls get from the tabs. The flex row-gap supplies
+       10px of that; 6 more makes the rhythm one number instead of three. */
+    .moneybar{margin-top:6px;}
     /* "Updated 04:55" reads as a footnote to the whole header, so it sits
        last regardless of where it falls in the markup */
     .syncline{order:99;}
