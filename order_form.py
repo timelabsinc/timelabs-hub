@@ -48,7 +48,13 @@ OF_CSS = r"""
     transition:border-color .13s,box-shadow .13s;-webkit-appearance:none;appearance:none;}
   .pin:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
   textarea.pin{min-height:64px;resize:vertical;line-height:1.5;}
-  select.pin{background-image:none;}
+  /* .pin sets appearance:none, which on a <select> also strips the native
+     chevron — Status rendered as a text box you had no reason to think was a
+     dropdown. Same inline chevron the status pills already use; a mid grey so
+     it reads in both themes. */
+  select.pin{padding-right:34px;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 12px center;background-size:12px;}
   input,select,textarea,button{font-size:16px;}
 
   /* tabs */
@@ -66,6 +72,9 @@ OF_CSS = r"""
     padding:20px;box-shadow:var(--shadow);margin-bottom:16px;}
   @media(max-width:600px){.of-card{padding:15px;}}
   .of-card.pastecard{padding:16px 18px;}
+  /* match the card below it on a phone, or the two cards' content edges sit
+     3px apart down the whole page */
+  @media(max-width:600px){.of-card.pastecard{padding:15px;}}
 
   /* paste-to-fill */
   .paste-head{display:flex;align-items:center;gap:9px;margin-bottom:10px;flex-wrap:wrap;}
@@ -129,12 +138,17 @@ OF_CSS = r"""
   .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
     border:1px solid var(--border-2);border-radius:4px;padding:1px 5px;color:var(--ink);}
   .shots{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:11px;}
+  .shots:empty{display:none;}
   .shot{position:relative;width:78px;height:78px;border-radius:10px;overflow:hidden;
     border:1px solid var(--border);background:var(--card-2);}
   .shot img{width:100%;height:100%;object-fit:cover;display:block;}
   .shot.up img{opacity:.45;}
-  .shot .spin{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  /* Only while .up (still uploading). drawShots now builds each tile once and
+     keeps it, so the spinner element is always in the DOM — without this it
+     sat on top of every finished photo forever. */
+  .shot .spin{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
     font-size:11px;font-weight:650;color:var(--muted);}
+  .shot.up .spin{display:flex;}
   .shot .rm{position:absolute;top:3px;right:3px;width:22px;height:22px;border-radius:50%;
     border:none;background:rgba(0,0,0,.62);color:#fff;font-size:13px;cursor:pointer;
     display:flex;align-items:center;justify-content:center;line-height:1;}
@@ -209,7 +223,11 @@ OF_CSS = r"""
   .bar .fl{height:100%;background:var(--accent);border-radius:5px;}
   .bar .vl{font-size:12.5px;color:var(--muted);text-align:right;}
 
-  /* product combobox — a suggestion overlay, never a locked-in enum */
+  /* Product combobox — a suggestion overlay, never a locked-in enum.
+     .combo-wrap has to hug the input and nothing else: when it was the whole
+     .of-field, the list's top:100% measured past the attribute chips and the
+     hint paragraph, so suggestions opened ~50px below the field they belonged
+     to, floating under the help text. */
   .combo-wrap{position:relative;}
   .combo-list{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;
     background:var(--card);border:1px solid var(--border-2);border-radius:var(--r-s);
@@ -991,6 +1009,10 @@ var STATUSES_LIST=Array.prototype.map.call($('f-status').options,function(o){ret
     drawSources(m.sources||[]);
     attrLabels=(m.vocab&&m.vocab.labels)||{};
   }catch(e){window.__sources=[];drawSources([]);}
+  /* Bulk add draws its chips once, when its tab is first opened. Opening it
+     before this fetch landed left "Where did these come from?" sitting over
+     an empty row for the rest of the session — redraw now that we have them. */
+  drawBulkSources();
   try{
     var pd=await api('/orders/products');
     PRODUCTS=pd.products||[];
@@ -1075,9 +1097,11 @@ def build():
         <div class="of-legend">Order</div>
         <div class="of-field"><label>Where did it come from?</label>
           <div class="srcs" id="srcs"></div></div>
-        <div class="of-field combo-wrap"><label>Product <span class="req">*</span></label>
-          <input id="f-product" class="pin" placeholder="e.g. datejust arabic light blue dial 36mm NH35" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false">
-          <div class="combo-list" id="prod-list" hidden></div>
+        <div class="of-field"><label>Product <span class="req">*</span></label>
+          <div class="combo-wrap">
+            <input id="f-product" class="pin" placeholder="e.g. datejust arabic light blue dial 36mm NH35" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false">
+            <div class="combo-list" id="prod-list" hidden></div>
+          </div>
           <div class="attrs" id="attrs"></div>
           <div class="attr-hint" id="attr-hint">Case style, dial colour, movement and size are picked out of what you type — they drive the What's selling tab. Start typing to see what's sold before.</div></div>
         <div class="of-row3">

@@ -46,7 +46,10 @@ SUP_CSS = r"""
   @media(min-width:660px){ .ogrid{grid-template-columns:repeat(2,minmax(0,1fr));} }
   @media(min-width:1040px){ .ogrid{grid-template-columns:repeat(3,minmax(0,1fr));} }
 
-  /* header — sticky, compact, with the counts that matter */
+  /* Header — sticky, and it has to stay compact to earn that: it is pinned
+     for the entire session, so every row added here is a row permanently
+     taken off the queue. Controls only. Anything that is read rather than
+     used belongs in #queue-extra, below, which scrolls. */
   .stop{position:sticky;top:0;z-index:40;background:var(--bg);
     padding:calc(12px + env(safe-area-inset-top)) 0 10px;
     border-bottom:1px solid var(--border);margin-bottom:14px;}
@@ -122,29 +125,14 @@ SUP_CSS = r"""
     font-variant-numeric:tabular-nums;line-height:1.25;}
   .mcell.owe .mv{color:var(--accent);}
 
-  /* Desktop density. On a phone the stage cards are correctly-sized tap
-     targets; stretched across a laptop they became four ~450px boxes that
-     ate the whole first screen before a single build appeared. Above this
-     breakpoint they collapse to one segmented row sharing a line with
-     search, and the reclaimed height goes to the money strip. */
-  @media(min-width:760px){
-    #queue-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
-    .stagebar{margin-top:0;gap:0;width:max-content;max-width:100%;
-      border:1px solid var(--border);border-radius:999px;overflow:hidden;
-      background:var(--card);}
-    .stg{flex:none;flex-direction:row;gap:7px;justify-content:flex-start;
-      border:none;border-radius:0;padding:0 14px;min-height:36px;font-size:12.5px;}
-    .stg + .stg{border-left:1px solid var(--border);}
-    .stg svg{width:15px;height:15px;}
-    .stg b{font-size:12.5px;font-weight:750;}
-    .stg .lbl{font-size:12.5px;opacity:1;}
-    .stg.on{background:var(--accent-bg);color:var(--accent);}
-    .stg.attn.on{background:var(--accent);color:#fff;}
-    .fbar{margin-top:0;margin-left:auto;flex:none;}
-    .ssearch{flex:none;width:220px;font-size:13.5px;padding:8px 12px;}
-    .fbtn{min-height:36px;font-size:12.5px;}
-    .fpanel,.syncline,.moneybar{flex-basis:100%;margin-top:0;}
-    .syncline{order:99;}
+  /* Phone: the search box is the loser in a three-up row. Two flex:none
+     buttons leave it about 120px — six characters of a placeholder that is
+     six words long — so below the phone breakpoint the search takes its own
+     line and the two buttons split the one under it. */
+  @media(max-width:520px){
+    .fbar{flex-wrap:wrap;}
+    .ssearch{flex:1 1 100%;}
+    .fbar .fbtn{flex:1 1 0;justify-content:center;}
   }
 
   .fpanel{display:none;margin-top:10px;padding:13px;background:var(--card);
@@ -163,6 +151,10 @@ SUP_CSS = r"""
   .schip b{font-weight:800;}
   .fclear{border:none;background:none;color:var(--accent);font:inherit;font-size:13px;
     font-weight:650;cursor:pointer;padding:8px 4px;min-height:38px;}
+  /* "nothing to filter by yet" inside a chip row. Without this the text
+     rendered at full body size and weight, louder than the chips it stands
+     in for. */
+  .fnone{font-size:12.5px;color:var(--muted);padding:7px 2px;}
 
   /* section heads */
   .shead{display:flex;align-items:center;gap:8px;margin:20px 2px 10px;}
@@ -269,7 +261,8 @@ SUP_CSS = r"""
   .bact button.danger:hover{border-color:var(--bad);color:var(--bad);}
   .btrk{display:flex;align-items:center;gap:7px;margin-top:9px;flex-wrap:wrap;}
   .btrk .chip{font-size:11.5px;font-weight:650;color:var(--ink);background:var(--card-2);
-    border-radius:6px;padding:3px 8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+    border-radius:6px;padding:3px 8px;word-break:break-all;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
   .btrk button{border:none;background:none;color:var(--accent);font:inherit;font-size:12px;
     font-weight:650;cursor:pointer;padding:4px 2px;min-height:30px;}
 
@@ -293,13 +286,8 @@ SUP_CSS = r"""
   .helpbox .hb li{margin:3px 0;}
   .ocost .lockic svg{width:13px;height:13px;stroke:var(--muted);fill:none;stroke-width:1.9;
     stroke-linecap:round;stroke-linejoin:round;display:block;}
-  .otrk{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap;}
-  .otrk .chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:650;
-    color:var(--ink);background:var(--card-2);border-radius:6px;padding:3px 8px;
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;}
-  .otrk .chip svg{width:12px;height:12px;stroke:var(--muted);fill:none;stroke-width:2;flex:none;}
-  .otrk button{border:none;background:none;color:var(--accent);font:inherit;font-size:12px;
-    font-weight:650;cursor:pointer;padding:4px 2px;min-height:30px;}
+  /* .trkform is shared: it is what an inline cost edit turns into. Per-build
+     tracking is gone, so its .otrk chip rules went with it. */
   .trkform{display:flex;gap:6px;margin-top:8px;}
   .trkform input{flex:1;min-width:0;font-size:16px;border:1px solid var(--border);
     border-radius:var(--r-s);background:var(--bg);color:var(--ink);padding:8px 10px;
@@ -404,7 +392,9 @@ SUP_CSS = r"""
     font-size:12.5px;color:var(--accent);font-weight:650;}
   .pickhint.on{display:flex;}
   .pickhint .sp{flex:1;}
-  .pickhint button{border:none;background:none;color:var(--accent);font:inherit;
+  .pickhint span:first-child{min-width:0;}
+  .pickhint button{flex:none;white-space:nowrap;
+    border:none;background:none;color:var(--accent);font:inherit;
     font-size:12.5px;font-weight:750;cursor:pointer;text-decoration:underline;
     padding:4px 2px;min-height:30px;}
   .bulkbar b{font-size:13.5px;}
@@ -414,7 +404,7 @@ SUP_CSS = r"""
     font-weight:650;cursor:pointer;}
   .bulkbar button.primary{background:var(--bg);color:var(--ink);border-color:var(--bg);}
 
-  /* shipments */
+  /* the "you owe" summary at the top of the Batches tab */
   .owedcard{background:var(--card);border:1px solid var(--accent);border-radius:var(--r);
     box-shadow:var(--shadow);padding:16px 18px;margin-bottom:16px;}
   .owedtop{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}
@@ -425,14 +415,58 @@ SUP_CSS = r"""
   .owedbar{display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;}
   .owedbar .b{font-size:12.5px;color:var(--muted);}
   .owedbar .b b{color:var(--ink);font-weight:650;}
-  .owedactions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
-  .owedactions button{min-height:var(--tap);padding:0 15px;border-radius:var(--r-s);
-    font:inherit;font-size:13.5px;font-weight:650;cursor:pointer;}
-  .owedactions .primary{border:none;background:var(--ink);color:var(--bg);}
-  .owedactions .ghost{border:1px solid var(--border);background:var(--card);color:var(--ink);}
   .sempty{text-align:center;color:var(--muted);font-size:14px;line-height:1.6;padding:44px 20px;}
   .sempty svg{width:40px;height:40px;stroke:var(--border-2);fill:none;stroke-width:1.4;margin-bottom:12px;}
   .sfoot{text-align:center;color:var(--muted);font-size:11.5px;padding:26px 0 34px;}
+
+  /* ------------------------------------------------------------------
+     Desktop density. Keep this block LAST: a media query carries no extra
+     specificity, so anything it overrides must be declared above it or the
+     plain rule simply wins. That is how the old copy of this block ended up
+     unable to zero .fpanel's margin-top.
+
+     On a phone the stage cards are correctly-sized tap targets; stretched
+     across a laptop they became four ~450px boxes that ate the whole first
+     screen before a single build appeared. Above this breakpoint they
+     collapse to one segmented row sharing a line with search.
+
+     The breakpoint is 1000px and not 760px because the row genuinely does
+     not fit at 760: the four segments need ~450px and the search plus its
+     two buttons need ~460px, against ~728px of content width. At 760 the
+     result was a segmented bar alone on one line and the search hanging off
+     the right edge of the next — the single-line layout this block exists
+     to produce only actually began above ~950px.
+     ------------------------------------------------------------------ */
+  @media(min-width:1000px){
+    #queue-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
+    .stagebar{margin-top:0;gap:0;width:max-content;max-width:100%;
+      border:1px solid var(--border);border-radius:999px;overflow:hidden;
+      background:var(--card);}
+    .stg{flex:none;flex-direction:row;gap:7px;justify-content:flex-start;
+      border:none;border-radius:0;padding:0 14px;min-height:36px;font-size:12.5px;}
+    .stg + .stg{border-left:1px solid var(--border);}
+    .stg svg{width:15px;height:15px;}
+    .stg b{font-size:12.5px;font-weight:750;}
+    .stg .lbl{font-size:12.5px;opacity:1;}
+    .stg.on{background:var(--accent-bg);color:var(--accent);}
+    .stg.attn.on{background:var(--accent);color:#fff;}
+    /* shrinkable rather than flex:none, so a three-digit filter count or a
+       longer stage label costs the search a few pixels instead of throwing
+       the whole bar onto a second line */
+    .fbar{margin-top:0;margin-left:auto;flex:0 1 auto;min-width:0;}
+    .ssearch{flex:1 1 220px;width:auto;min-width:150px;max-width:220px;
+      font-size:13.5px;padding:8px 12px;}
+    .fbtn{min-height:36px;font-size:12.5px;}
+    /* full-width rows under the control line, not content-width flex items.
+       Every direct child of #queue-controls that isn't part of the control
+       line itself belongs here — miss one and it squeezes in beside the
+       search box instead of taking its own row. */
+    .fpanel,.pickhint,.moneybar,.syncline,.helpbox{flex-basis:100%;margin-top:0;}
+    .moneybar{margin-top:2px;}
+    /* "Updated 04:55" reads as a footnote to the whole header, so it sits
+       last regardless of where it falls in the markup */
+    .syncline{order:99;}
+  }
 """
 
 SUP_JS = r"""
@@ -517,7 +551,7 @@ function distinct(key){
 function chipRow(host,key,cur,setter){
   var vals=distinct(key);
   var el=$(host);
-  if(!vals.length){ el.innerHTML='<span class="shipmeta">None recorded yet</span>'; return; }
+  if(!vals.length){ el.innerHTML='<span class="fnone">None recorded yet</span>'; return; }
   el.innerHTML=vals.map(function(v){
     return '<button class="schip'+(v===cur?' on':'')+'" data-v="'+esc(v)+'">'+esc(v)+'</button>';
   }).join('');
@@ -965,7 +999,9 @@ document.querySelectorAll('.tabs button').forEach(function(t){
     document.querySelectorAll('.tabs button').forEach(function(x){x.classList.toggle('on',x===t);});
     $('pane-queue').classList.toggle('on',k==='queue');
     $('pane-bills').classList.toggle('on',k==='bills');
-    $('queue-controls').style.display = k==='queue' ? '' : 'none';
+    ['queue-controls','queue-extra'].forEach(function(id){
+      $(id).style.display = k==='queue' ? '' : 'none';
+    });
     if(k==='bills')loadBills();
   };
 });
@@ -1333,14 +1369,21 @@ def build():
           <button class="fclear" id="fclear">Reset filters</button>
         </div>
       </div>
-      <div class="syncline"><span class="sync" id="sync">Loading&hellip;</span></div>
       <div class="pickhint" id="pickhint">
         <span id="pickmsg">Tap the builds for this batch</span>
         <span class="sp"></span>
         <button id="pick-all">All unbilled</button>
         <button id="pick-none">None</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Reference, not controls, so it scrolls away. Kept inside .stop these
+       three added ~120px to a header that is pinned for the whole session:
+       on a 390x844 phone the queue itself was left about half a card. -->
+  <div id="queue-extra">
       <div class="moneybar" id="moneybar"></div>
+      <div class="syncline"><span class="sync" id="sync">Loading&hellip;</span></div>
       <details class="helpbox">
         <summary>How these numbers are worked out</summary>
         <div class="hb">
@@ -1362,7 +1405,6 @@ def build():
           isn't on any batch.</p>
         </div>
       </details>
-    </div>
   </div>
 
   <section class="pane on" id="pane-queue">
