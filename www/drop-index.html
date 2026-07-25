@@ -288,7 +288,18 @@
     border:1px solid var(--border);border-radius:7px;padding:6px 10px;width:min(240px,60%);}
   .org-g small{color:var(--muted);margin-left:8px;}
   .org-thumbs{display:flex;gap:6px;margin-top:8px;overflow-x:auto;}
-  .org-thumbs img{width:56px;height:56px;object-fit:cover;border-radius:8px;flex:0 0 auto;}
+  .org-thumbs img{width:56px;height:56px;object-fit:cover;border-radius:8px;flex:0 0 auto;
+    cursor:pointer;border:2px solid transparent;transition:border-color .12s,opacity .12s;}
+  .org-thumbs img.picked{border-color:var(--accent);}
+  .org-thumbs img.dropped{opacity:.32;}
+  .org-note{font-size:12px;color:var(--muted);margin-top:6px;}
+  .org-move{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px;}
+  .org-move select{font:inherit;font-size:12.5px;border:1px solid var(--border);
+    border-radius:8px;background:var(--bg);color:var(--ink);padding:5px 8px;}
+  .org-move button{font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;
+    border:1px solid var(--border);border-radius:8px;background:var(--bg);
+    color:var(--ink);padding:5px 10px;}
+  .org-move button:disabled{opacity:.45;cursor:default;}
   @media (min-width:760px){
     #orgsheet{left:50%;right:auto;bottom:50%;transform:translate(-50%,60%) scale(.97);opacity:0;
       width:min(560px,92vw);border-radius:14px;border-bottom:1px solid var(--border);pointer-events:none;
@@ -1182,25 +1193,90 @@ $('orgBtn').onclick = async () => {
       return;
     }
     orgGroups = r.groups;
-    $('orgBody').innerHTML = orgGroups.map((g, i) =>
-      '<div class="org-g"><input value="' + esc(g.name) + '" data-i="' + i + '" aria-label="Folder name">' +
-      '<small>' + g.files.length + ' photos</small>' +
-      '<div class="org-thumbs">' + g.files.slice(0, 8).map(f =>
-        '<img loading="lazy" src="' + API + '/thumb?path=' +
-        encodeURIComponent((state.path ? state.path + '/' : '') + f) + '">').join('') + '</div></div>'
-    ).join('') +
-    '<p class="freenote">' + r.ungrouped + ' photos had no close match and stay where they are. Edit names before applying.</p>';
+    orgDrop = {};
+    orgRender(r.ungrouped);
     $('orgsheet').classList.add('open');
     $('veil').classList.add('on');
   } catch(e){ toast(e.message); }
 };
+/* Grouping by image similarity gets most photos right and some wrong, and
+   the wrong ones are obvious to a person in a second. Tap a photo to take it
+   out; tap it again to put it back; or pick several and move them to another
+   set. Nothing is filed until Apply, so this is all still a proposal. */
+let orgDrop = {};        // "groupIndex:filename" -> excluded from the run
+let orgPick = {};        // "groupIndex:filename" -> ticked for a move
+
+function orgKey(i, f){ return i + ':' + f; }
+
+function orgRender(ungrouped){
+  const opts = orgGroups.map((g, i) =>
+    '<option value="' + i + '">' + esc(g.name) + '</option>').join('');
+  $('orgBody').innerHTML = orgGroups.map((g, i) => {
+    const live = g.files.filter(f => !orgDrop[orgKey(i, f)]);
+    return '<div class="org-g" data-g="' + i + '">' +
+      '<input value="' + esc(g.name) + '" data-i="' + i + '" aria-label="Folder name">' +
+      '<small>' + live.length + ' photo' + (live.length === 1 ? '' : 's') + '</small>' +
+      '<div class="org-thumbs">' + g.files.map(f =>
+        '<img loading="lazy" data-f="' + esc(f) + '" title="' + esc(f) + '" class="' +
+        (orgDrop[orgKey(i, f)] ? 'dropped' : '') +
+        (orgPick[orgKey(i, f)] ? ' picked' : '') + '" src="' + API + '/thumb?path=' +
+        encodeURIComponent((state.path ? state.path + '/' : '') + f) + '">').join('') +
+      '</div>' +
+      '<div class="org-move">' +
+        '<span class="org-note">Tap a photo to leave it out. Or pick some and</span>' +
+        '<select data-to="' + i + '">' + opts + '</select>' +
+        '<button data-move="' + i + '" disabled>Move</button>' +
+      '</div></div>';
+  }).join('') +
+  '<p class="freenote">' + ungrouped + ' photos had no close match and stay where they are. ' +
+  'Names are editable; files are only moved when you apply.</p>';
+
+  $('orgBody').querySelectorAll('.org-thumbs img').forEach(img => {
+    const gi = +img.closest('.org-g').dataset.g, f = img.dataset.f, k = orgKey(gi, f);
+    img.onclick = e => {
+      if(e.shiftKey || e.metaKey || e.ctrlKey){
+        orgPick[k] = !orgPick[k];
+      } else {
+        orgDrop[k] = !orgDrop[k];
+        if(orgDrop[k]) delete orgPick[k];
+      }
+      orgRender(ungrouped);
+    };
+    img.ondblclick = () => { orgPick[k] = !orgPick[k]; orgRender(ungrouped); };
+  });
+  $('orgBody').querySelectorAll('[data-move]').forEach(b => {
+    const from = +b.dataset.move;
+    const picked = orgGroups[from].files.filter(f => orgPick[orgKey(from, f)]);
+    b.disabled = !picked.length;
+    b.textContent = picked.length ? 'Move ' + picked.length : 'Move';
+    b.onclick = () => {
+      const to = +b.closest('.org-g').querySelector('select').value;
+      if(to === from) return;
+      picked.forEach(f => {
+        orgGroups[from].files = orgGroups[from].files.filter(x => x !== f);
+        orgGroups[to].files.push(f);
+        delete orgPick[orgKey(from, f)];
+        delete orgDrop[orgKey(from, f)];
+      });
+      orgRender(ungrouped);
+      toast('Moved ' + picked.length + ' to ' + orgGroups[to].name);
+    };
+  });
+}
+
 $('orgApply').onclick = async () => {
   $('orgBody').querySelectorAll('input[data-i]').forEach(inp => {
     orgGroups[+inp.dataset.i].name = inp.value.trim() || orgGroups[+inp.dataset.i].name;
   });
+  /* Photos tapped out stay where they are; a set emptied that way isn't a
+     folder worth creating. */
+  const send = orgGroups
+    .map((g, i) => ({name: g.name, files: g.files.filter(f => !orgDrop[orgKey(i, f)])}))
+    .filter(g => g.files.length);
+  if(!send.length){ toast('Nothing left to file'); return; }
   $('orgApply').disabled = true;
   try {
-    const r = await api('/organize/apply', {method:'POST', body: JSON.stringify({path: state.path, groups: orgGroups})});
+    const r = await api('/organize/apply', {method:'POST', body: JSON.stringify({path: state.path, groups: send})});
     orgClose();
     toast('Moved ' + r.moved + ' photos into ' + r.folders.length + ' folder' + (r.folders.length === 1 ? '' : 's'));
     load();
