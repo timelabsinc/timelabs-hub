@@ -73,15 +73,58 @@ def check(page):
     return out
 
 
+CLASS_RE = re.compile(r"^[A-Za-z][\w-]*$")
+# Toggled by JS rather than written in the stylesheet; not orphans.
+STATE_CLASSES = {"on", "open", "active", "show", "hide", "sel", "up", "err",
+                 "ok", "over", "picked", "dropped", "dragover", "running",
+                 "ready", "failed", "posted", "draft", "settled", "flash"}
+
+
+def unstyled(page):
+    """Classes the page emits that no rule defines.
+
+    This is the check that would have caught a whole tab shipping with its
+    CSS deleted, and it did catch Drop's header losing .top-actions. It was
+    nearly useless on Drop though: scraping class="..." picks up JS template
+    strings too, so the one real finding arrived alongside thirteen fragments
+    like "(f.dir" and "===" and got skimmed past. A class name is letters,
+    digits, dashes and underscores; anything else came out of a template.
+    """
+    html = open(page, encoding="utf-8", errors="replace").read()
+    styles = " ".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.S))
+    defined = set(re.findall(r"\.([A-Za-z][\w-]*)", styles))
+    used = set()
+    for chunk in re.findall(r'class="([^"]*)"', html):
+        for tok in chunk.split():
+            if CLASS_RE.match(tok):
+                used.add(tok)
+    return sorted(c for c in used - defined - STATE_CLASSES if len(c) > 2)
+
+
 def main():
-    print(f"═══ MONEY FITS AT {PHONE}px ═══")
+    pages = sorted(glob.glob("/var/www/ops/*.html")) + ["/var/www/drop/index.html"]
+
+    print("═══ EVERY CLASS HAS A RULE ═══")
+    missing = 0
+    for page in pages:
+        try:
+            orph = unstyled(page)
+        except Exception as e:
+            print(f"  ? {os.path.basename(page)}: {e}")
+            continue
+        if orph:
+            missing += len(orph)
+            print(f"  ✗ {os.path.basename(page):22} {', '.join(orph)}")
+    print("  ✓ nothing unstyled" if not missing else f"  {missing} unstyled")
+
+    print(f"\n═══ MONEY FITS AT {PHONE}px ═══")
     total = 0
-    for page in sorted(glob.glob("/var/www/ops/*.html")) + ["/var/www/drop/index.html"]:
+    for page in pages:
         for sel, why in check(page):
             total += 1
             print(f"  ✗ {os.path.basename(page)}  {sel[:28]}  {why}")
-    print("\n  ✓ every money strip fits" if not total else f"\n  {total} too tight")
-    return 1 if total else 0
+    print("  ✓ every money strip fits" if not total else f"  {total} too tight")
+    return 1 if (total or missing) else 0
 
 
 if __name__ == "__main__":

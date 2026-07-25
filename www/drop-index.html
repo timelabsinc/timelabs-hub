@@ -352,6 +352,19 @@
 @media (max-width:759px){
   .fab{bottom:calc(var(--nav-h,60px) + env(safe-area-inset-bottom,0px) + 18px) !important;}
 }
+/* The header markup above is generated from hub_shell, but Drop carries its
+   own stylesheet instead of HUB_STYLE, so any class the shared header relies
+   on has to be defined here too. .top-actions and .who were never in Drop's
+   CSS at all: the container holding search, view, New folder and Upload was
+   an unstyled block, so the buttons fell out of the top bar and stacked
+   loose above the nav. Syncing the markup without the CSS it depends on is
+   the failure mode this whole file exists to prevent, so they live with the
+   sync rather than in Drop's stylesheet where the next edit could miss them. */
+.topbar .top-actions{display:flex;align-items:center;gap:8px;margin-left:auto;
+  flex-wrap:nowrap;}
+.topbar .who{font-size:12px;color:var(--muted);max-width:150px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;}
+@media (max-width:759px){ .topbar .who{display:none;} }
 </style>
 </head>
 <body>
