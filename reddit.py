@@ -67,6 +67,69 @@ CSS = """
 .rd-title:hover{text-decoration:underline;}
 .rd-score{margin-left:auto;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;}
 .rd-empty{color:var(--muted);font-size:13.5px;padding:30px 0;text-align:center;}
+
+/* composer */
+.rd-tabs{display:flex;gap:20px;margin:-4px 0 16px;border-bottom:1px solid var(--border);}
+.rd-tabs button{border:none;background:none;color:var(--muted);font:inherit;font-size:14px;
+  font-weight:650;padding:9px 2px;cursor:pointer;border-bottom:2px solid transparent;}
+.rd-tabs button.on{color:var(--ink);border-bottom-color:var(--accent);}
+.rd-pane{display:none;} .rd-pane.on{display:block;}
+.rd-form{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+  padding:16px;margin-bottom:16px;}
+.rd-form label{display:block;font-size:12px;color:var(--muted);margin:0 0 5px;}
+.rd-form textarea,.rd-form select{width:100%;font:inherit;font-size:14px;
+  border:1px solid var(--border);border-radius:var(--r-s);background:var(--bg);
+  color:var(--ink);padding:10px 12px;-webkit-appearance:none;appearance:none;}
+.rd-form textarea{min-height:92px;resize:vertical;}
+.rd-form select{background-image:url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23888\' stroke-width=\'2\'%3E%3Cpath d=\'M6 9l6 6 6-6\'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;background-size:12px;padding-right:34px;}
+.rd-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:12px;}
+.rd-shots{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 0;}
+.rd-shot{position:relative;width:64px;height:64px;border-radius:8px;overflow:hidden;
+  background:var(--card-2);border:1px solid var(--border);}
+.rd-shot img{width:100%;height:100%;object-fit:cover;display:block;}
+.rd-shot button{position:absolute;top:2px;right:2px;width:18px;height:18px;border:none;
+  border-radius:50%;background:rgba(0,0,0,.6);color:#fff;font-size:12px;line-height:1;
+  cursor:pointer;padding:0;}
+.rd-add{width:64px;height:64px;border:1px dashed var(--border-2);border-radius:8px;
+  background:none;color:var(--muted);font-size:22px;cursor:pointer;}
+.rd-go{margin-top:14px;min-height:var(--tap);border:none;border-radius:var(--r-s);
+  background:var(--accent);color:#fff;font:inherit;font-size:14.5px;font-weight:700;
+  padding:0 18px;cursor:pointer;}
+.rd-go:disabled{opacity:.5;cursor:default;}
+.rd-draft{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+  padding:15px 16px;margin-bottom:11px;box-shadow:var(--shadow);}
+.rd-draft.ready{border-color:var(--accent);}
+.rd-dhead{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px;}
+.rd-dstat{font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.05em;
+  padding:3px 8px;border-radius:999px;}
+.rd-dstat.running{color:#8a6a2c;background:var(--accent-bg);}
+.rd-dstat.ready{color:var(--good);background:var(--good-bg);}
+.rd-dstat.failed{color:var(--bad);background:var(--bad-bg);}
+.rd-dstat.posted{color:var(--muted);background:var(--card-2);}
+.rd-dwhen{font-size:11.5px;color:var(--muted);margin-left:auto;}
+.rd-dtitle{width:100%;font:inherit;font-size:15px;font-weight:700;color:var(--ink);
+  border:1px solid transparent;border-radius:var(--r-s);background:none;padding:6px 8px;
+  margin:0 0 6px;-webkit-appearance:none;appearance:none;}
+.rd-dbody{width:100%;font:inherit;font-size:13.5px;line-height:1.6;color:var(--ink);
+  border:1px solid transparent;border-radius:var(--r-s);background:none;padding:6px 8px;
+  min-height:120px;resize:vertical;}
+.rd-dtitle:focus,.rd-dbody:focus{outline:none;border-color:var(--accent);background:var(--bg);}
+.rd-dact{display:flex;gap:8px;margin-top:11px;flex-wrap:wrap;padding-top:12px;
+  border-top:1px solid var(--border);}
+.rd-dact button,.rd-dact a{flex:none;min-height:38px;padding:0 14px;border-radius:var(--r-s);
+  border:1px solid var(--border-2);background:var(--card);color:var(--ink);font:inherit;
+  font-size:13px;font-weight:650;cursor:pointer;display:inline-flex;align-items:center;
+  text-decoration:none;white-space:nowrap;}
+.rd-dact .go{background:var(--accent);color:#fff;border-color:var(--accent);}
+.rd-dact .danger{color:var(--bad);margin-left:auto;}
+.rd-passes{margin-top:10px;}
+.rd-passes summary{cursor:pointer;font-size:12px;color:var(--muted);list-style:none;padding:5px 0;}
+.rd-passes summary::-webkit-details-marker{display:none;}
+.rd-pass{margin-top:8px;padding:9px 11px;background:var(--card-2);border-radius:var(--r-s);
+  font-size:12px;line-height:1.55;color:var(--muted);white-space:pre-wrap;}
+.rd-pass b{display:block;color:var(--ink);font-size:11px;text-transform:uppercase;
+  letter-spacing:.05em;margin-bottom:4px;}
 """
 
 JS = """
@@ -171,6 +234,176 @@ $('rd-sync').onclick=async function(){
   $('rd-sync').disabled=false;
 };
 load();
+
+/* ---------------- our subreddit: composer ---------------- */
+var SHOTS=[], DRAFTS=[], pollT=null;
+
+document.querySelectorAll('.rd-tabs button').forEach(function(t){
+  t.onclick=function(){
+    var k=t.dataset.rt;
+    document.querySelectorAll('.rd-tabs button').forEach(function(x){x.classList.toggle('on',x===t);});
+    $('rp-listen').classList.toggle('on',k==='listen');
+    $('rp-compose').classList.toggle('on',k==='compose');
+    document.querySelector('.rd-toolbar').style.display = k==='listen'?'':'none';
+    document.querySelector('.rd-kpirow').style.display = k==='listen'?'':'none';
+    if(k==='compose')loadDrafts();
+  };
+});
+
+function drawShots(){
+  var box=$('c-shots');
+  box.innerHTML=SHOTS.map(function(s,i){
+    return '<div class="rd-shot"><img src="'+s.url+'" alt="">'+
+      '<button data-rm="'+i+'" aria-label="Remove">&times;</button></div>';
+  }).join('')+'<button class="rd-add" id="c-add" aria-label="Add photos">+</button>';
+  box.querySelectorAll('[data-rm]').forEach(function(b){
+    b.onclick=function(){
+      var i=+b.dataset.rm;
+      if(SHOTS[i]&&SHOTS[i].url){ try{URL.revokeObjectURL(SHOTS[i].url);}catch(e){} }
+      SHOTS.splice(i,1); drawShots();
+    };
+  });
+  $('c-add').onclick=function(){ $('c-file').click(); };
+}
+drawShots();
+
+$('c-file').onchange=async function(){
+  var files=Array.prototype.slice.call(this.files||[]);
+  this.value='';
+  for(var i=0;i<files.length;i++){
+    if(SHOTS.length>=12){ toast('12 photos is plenty'); break; }
+    var f=files[i];
+    if(!f.type||f.type.indexOf('image/')!==0)continue;
+    var rec={url:URL.createObjectURL(f),path:null};
+    SHOTS.push(rec); drawShots();
+    try{
+      var fd=new FormData(); fd.append('image',f,f.name||('shot-'+Date.now()+'.jpg'));
+      var r=await fetch(API+'/upload',{method:'POST',body:fd});
+      var d=await r.json();
+      if(!r.ok)throw new Error(d.error||'upload failed');
+      rec.path=d.path;
+    }catch(e){ toast(e.message); }
+  }
+};
+
+$('c-go').onclick=async function(){
+  var brief=$('c-brief').value.trim();
+  var paths=SHOTS.filter(function(s){return s.path;}).map(function(s){return s.path;});
+  if(!brief&&!paths.length){ toast('Add a photo or describe the build'); return; }
+  $('c-go').disabled=true; $('c-go').textContent='Starting…';
+  try{
+    await jpost('/reddit/post/create',{kind:$('c-kind').value,brief:brief,photos:paths});
+    toast("Drafting — you will get a message when it is ready");
+    $('c-brief').value=''; SHOTS=[]; drawShots();
+    loadDrafts();
+  }catch(e){ toast(e.message); }
+  $('c-go').textContent='Draft it'; $('c-go').disabled=false;
+};
+
+function agoTxt(s){
+  if(!s)return '';
+  var t=Date.parse(String(s).replace(' ','T')+'Z');
+  if(isNaN(t))return '';
+  var d=Math.floor((Date.now()-t)/1000);
+  if(d<60)return 'just now';
+  if(d<3600)return Math.floor(d/60)+'m ago';
+  if(d<86400)return Math.floor(d/3600)+'h ago';
+  return Math.floor(d/86400)+'d ago';
+}
+
+function draftCard(p){
+  var running=p.status==='queued'||p.status==='running';
+  var stat=running?'running':p.status;
+  var label=running?(p.stage?('pass: '+p.stage):'queued'):p.status;
+  var passes=p.passes||{};
+  var order=['research','draft','audit','humanise','verify'];
+  var plist=order.filter(function(k){return passes[k];}).map(function(k){
+    return '<div class="rd-pass"><b>'+k+'</b>'+esc(passes[k])+'</div>';
+  }).join('');
+  /* Opens Reddit's own composer with the text already in it. No API needed,
+     which matters because write access is still waiting on approval — and
+     photos have to be attached by hand there anyway. */
+  var url='https://www.reddit.com/r/'+encodeURIComponent(SUBREDDIT)+'/submit?title='+
+    encodeURIComponent(p.title||'')+'&text='+encodeURIComponent(p.body||'');
+  return '<div class="rd-draft'+(p.status==='ready'?' ready':'')+'" data-p="'+p.id+'">'+
+    '<div class="rd-dhead">'+
+      '<span class="rd-dstat '+stat+'">'+esc(label)+'</span>'+
+      '<span class="rd-meta">'+esc(p.kind||'')+(p.photos&&p.photos.length?' · '+p.photos.length+' photo(s)':'')+'</span>'+
+      '<span class="rd-dwhen">'+agoTxt(p.created_at)+'</span>'+
+    '</div>'+
+    (running
+      ? '<div class="rd-empty" style="padding:14px 0">Working through the passes…</div>'
+      : p.status==='failed'
+        ? '<div class="rd-empty" style="padding:14px 0;text-align:left">'+esc(p.error||'failed')+'</div>'
+        : '<input class="rd-dtitle" value="'+esc(p.title||'')+'" data-t="'+p.id+'">'+
+          '<textarea class="rd-dbody" data-b="'+p.id+'">'+esc(p.body||'')+'</textarea>'+
+          (plist?'<details class="rd-passes"><summary>What each pass did</summary>'+plist+'</details>':'')+
+          '<div class="rd-dact">'+
+            (p.status!=='posted'
+              ? '<a class="go" href="'+url+'" target="_blank" rel="noopener" data-open="'+p.id+'">Open in Reddit</a>'+
+                '<button data-save="'+p.id+'">Save edits</button>'+
+                '<button data-posted="'+p.id+'">Mark posted</button>'
+              : '<span class="rd-meta">Posted '+agoTxt(p.posted_at)+'</span>')+
+            '<button class="danger" data-del="'+p.id+'">Discard</button>'+
+          '</div>')+
+  '</div>';
+}
+
+function drawDrafts(){
+  var L=$('draftlist');
+  if(!DRAFTS.length){
+    L.innerHTML='<div class="rd-empty">No drafts yet. Describe a build above and it writes one.</div>';
+    return;
+  }
+  L.innerHTML=DRAFTS.map(draftCard).join('');
+  L.querySelectorAll('[data-save]').forEach(function(b){
+    b.onclick=function(){
+      var id=+b.dataset.save, c=b.closest('.rd-draft');
+      jpost('/reddit/post/update',{id:id,
+        title:c.querySelector('[data-t]').value, body:c.querySelector('[data-b]').value})
+        .then(function(){ toast('Saved'); loadDrafts(); })
+        .catch(function(e){ toast(e.message); });
+    };
+  });
+  L.querySelectorAll('[data-posted]').forEach(function(b){
+    b.onclick=function(){
+      var url=prompt('Link to the post (optional):')||'';
+      jpost('/reddit/post/update',{id:+b.dataset.posted,posted:true,url:url})
+        .then(function(){ toast('Marked as posted'); loadDrafts(); })
+        .catch(function(e){ toast(e.message); });
+    };
+  });
+  L.querySelectorAll('[data-del]').forEach(function(b){
+    b.onclick=function(){
+      if(!confirm('Discard this draft?'))return;
+      jpost('/reddit/post/update',{id:+b.dataset.del,discard:true})
+        .then(function(){ loadDrafts(); }).catch(function(e){ toast(e.message); });
+    };
+  });
+  /* Save whatever is on screen before handing it to Reddit, so an edit made
+     and then immediately opened isn't silently left behind. */
+  L.querySelectorAll('[data-open]').forEach(function(a){
+    a.onclick=function(){
+      var id=+a.dataset.open, c=a.closest('.rd-draft');
+      jpost('/reddit/post/update',{id:id,
+        title:c.querySelector('[data-t]').value, body:c.querySelector('[data-b]').value})
+        .catch(function(){});
+    };
+  });
+}
+
+var SUBREDDIT='IndiaWatchMods';
+async function loadDrafts(){
+  try{
+    var d=await api('/reddit/posts');
+    DRAFTS=d.posts||[]; SUBREDDIT=d.subreddit||SUBREDDIT;
+    drawDrafts();
+    /* poll only while something is actually being written */
+    var busy=DRAFTS.some(function(p){return p.status==='queued'||p.status==='running';});
+    clearTimeout(pollT);
+    if(busy&&$('rp-compose').classList.contains('on'))pollT=setTimeout(loadDrafts,6000);
+  }catch(e){ $('draftlist').innerHTML='<div class="rd-empty">'+esc(e.message)+'</div>'; }
+}
 """
 
 
@@ -205,7 +438,38 @@ def build():
       <span class="rd-sp"></span>
       <button class="rd-sync" id="rd-sync">Sync now</button>
     </div>
-    <div class="rd-list" id="list"><div class="rd-empty">Loading&hellip;</div></div>
+    <div class="rd-tabs">
+      <button class="on" data-rt="listen">Listening</button>
+      <button data-rt="compose">Our subreddit</button>
+    </div>
+
+    <div class="rd-pane on" id="rp-listen">
+      <div class="rd-list" id="list"><div class="rd-empty">Loading&hellip;</div></div>
+    </div>
+
+    <div class="rd-pane" id="rp-compose">
+      <div class="rd-form">
+        <div class="rd-row">
+          <div>
+            <label for="c-kind">What kind of post</label>
+            <select id="c-kind">
+              <option value="showcase">Build showcase</option>
+              <option value="discussion">Discussion / poll</option>
+              <option value="drop">Product drop or restock</option>
+            </select>
+          </div>
+        </div>
+        <label for="c-brief">Tell it about the build</label>
+        <textarea id="c-brief" placeholder="Movement, dial, bezel, bracelet, anything that was awkward to source or fiddly to fit. Rough notes are fine &mdash; it turns these into the post."></textarea>
+        <div class="rd-shots" id="c-shots"></div>
+        <input id="c-file" type="file" accept="image/*" multiple hidden>
+        <button class="rd-go" id="c-go">Draft it</button>
+        <p class="rd-empty" style="padding:10px 0 0;text-align:left">
+          Five passes on Hermes &mdash; research, draft, audit, humanise, verify.
+          Takes a minute or two; you&rsquo;ll get a message when it&rsquo;s ready.</p>
+      </div>
+      <div id="draftlist"><div class="rd-empty">Loading&hellip;</div></div>
+    </div>
     {hub_footer()}
   </main>
 </div>

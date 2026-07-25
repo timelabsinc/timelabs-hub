@@ -330,6 +330,30 @@ def _ensure_reddit_schema():
             created_by TEXT)""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reddit_drafts_thread "
                      "ON reddit_drafts(thread_id)")
+        # Posts for our own subreddit (r/IndiaWatchMods). A post is built by
+        # a multi-pass pipeline rather than one generation, so `passes` keeps
+        # each stage's output — the research it used, what the audit objected
+        # to, what humanising changed. That trail is the point: a draft you
+        # can't inspect is a draft you can't trust enough to publish.
+        conn.execute("""CREATE TABLE IF NOT EXISTS reddit_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_by TEXT,
+            subreddit TEXT NOT NULL DEFAULT 'IndiaWatchMods',
+            kind TEXT NOT NULL DEFAULT 'showcase',
+            brief TEXT,
+            photos TEXT,
+            status TEXT NOT NULL DEFAULT 'queued',
+            stage TEXT,
+            title TEXT,
+            body TEXT,
+            passes TEXT,
+            error TEXT,
+            finished_at TEXT,
+            posted_at TEXT,
+            posted_url TEXT)""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reddit_posts_status "
+                     "ON reddit_posts(status)")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -1019,6 +1043,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/supplier/bills":
             self._handle_supplier_bills()
+            return
+        if path == "/reddit/posts":
+            self._handle_reddit_posts()
             return
         if path == "/reddit/threads":
             self._handle_reddit_threads(query)
@@ -3575,6 +3602,135 @@ class Handler(http.server.BaseHTTPRequestHandler):
         import reddit_api
         self._json(200, {"mode": reddit_api.mode(), "threads": rows})
 
+    def _handle_reddit_posts(self):
+        """Drafts for our own subreddit, newest first, with pipeline state."""
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        conn = db()
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM reddit_posts ORDER BY id DESC LIMIT 50")]
+        conn.close()
+        for r in rows:
+            try:
+                r["photos"] = json.loads(r.get("photos") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                r["photos"] = []
+            try:
+                r["passes"] = json.loads(r.get("passes") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                r["passes"] = {}
+        self._json(200, {"posts": rows, "subreddit": "IndiaWatchMods"})
+
+    def _handle_reddit_post_create(self):
+        """Queue a draft and run the five-pass pipeline in the background.
+
+        Detached rather than awaited: the passes take a minute or two on
+        Hermes and the owner asked to be told when it's ready, not to sit and
+        watch a spinner."""
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 262144)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        brief = str(p.get("brief") or "").strip()[:2000]
+        kind = str(p.get("kind") or "showcase").strip()[:40]
+        photos = [str(x)[:200] for x in (p.get("photos") or [])][:12]
+        if not brief and not photos:
+            self._json(400, {"error": "add a photo or say something about the build"})
+            return
+        conn = db()
+        cur = conn.execute(
+            "INSERT INTO reddit_posts (created_by, kind, brief, photos, status) "
+            "VALUES (?,?,?,?, 'queued')",
+            (actor, kind, brief, json.dumps(photos)))
+        pid = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        def _work():
+            try:
+                subprocess.run(["python3", "/root/ops-dashboard/reddit_draft.py",
+                                str(pid)], capture_output=True, text=True, timeout=2400)
+            except Exception as e:
+                print(f"[reddit_draft] runner: {e}", flush=True)
+            c = db()
+            row = c.execute("SELECT status, title FROM reddit_posts WHERE id=?",
+                            (pid,)).fetchone()
+            c.close()
+            ok = row and row["status"] == "ready"
+            hub_event("reddit_post",
+                      f"draft #{pid} " + ("ready" if ok else "failed"), actor, "agent")
+            self._alert(f"*Reddit draft ready*\n{row['title']}\n\nReview it at "
+                        f"ops.timelabsco.in/ops/reddit.html" if ok else
+                        f"Reddit draft #{pid} failed to build.")
+
+        threading.Thread(target=_work, daemon=True).start()
+        self._json(200, {"ok": True, "id": pid, "status": "queued"})
+
+    def _alert(self, body):
+        """Tell the owner something finished. Uses the health alert
+        destination, never the supplier group — Hannan has no reason to see
+        Reddit drafts."""
+        target = ""
+        try:
+            with open("/root/ops-dashboard/.env") as f:
+                for line in f:
+                    if line.startswith("HEALTH_ALERT_TARGET="):
+                        target = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+        except OSError:
+            pass
+        if not target:
+            print(f"[alert] no HEALTH_ALERT_TARGET set; would have sent: {body}",
+                  flush=True)
+            return
+        try:
+            subprocess.run(["hermes", "send", "--to", target, "--quiet", body],
+                           capture_output=True, text=True, timeout=120)
+        except Exception as e:
+            print(f"[alert] {e}", flush=True)
+
+    def _handle_reddit_post_update(self):
+        """Edit a draft before it goes out, or mark it as posted."""
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 65536)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            pid = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        conn = db()
+        row = conn.execute("SELECT id FROM reddit_posts WHERE id=?", (pid,)).fetchone()
+        if not row:
+            conn.close()
+            self._json(404, {"error": "no such draft"})
+            return
+        if p.get("posted"):
+            conn.execute("UPDATE reddit_posts SET status='posted', "
+                         "posted_at=datetime('now'), posted_url=? WHERE id=?",
+                         (str(p.get("url") or "")[:400], pid))
+        elif p.get("discard"):
+            conn.execute("DELETE FROM reddit_posts WHERE id=?", (pid,))
+        else:
+            conn.execute("UPDATE reddit_posts SET title=?, body=? WHERE id=?",
+                         (str(p.get("title") or "")[:300],
+                          str(p.get("body") or "")[:20000], pid))
+        conn.commit()
+        conn.close()
+        self._json(200, {"ok": True})
+
     def _handle_reddit_sync(self):
         """Pull fresh threads from the target subreddits and upsert them.
         Read-only against Reddit itself — this never posts or comments,
@@ -4426,6 +4582,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_bill_whatsapp()
         elif path == "/supplier/bill/tracking":
             self._handle_supplier_bill_tracking()
+        elif path == "/reddit/post/create":
+            self._handle_reddit_post_create()
+        elif path == "/reddit/post/update":
+            self._handle_reddit_post_update()
         elif path == "/reddit/sync":
             self._handle_reddit_sync()
         elif path == "/supplier/payment/record":
