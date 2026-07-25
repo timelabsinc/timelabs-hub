@@ -364,6 +364,13 @@ def _ensure_reddit_schema():
             rounds INTEGER DEFAULT 0)""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reddit_posts_status "
                      "ON reddit_posts(status)")
+        # Rules, sidebar copy and flair for our own sub. One row per piece,
+        # overwritten on redraft, because there is only ever one live version
+        # of a subreddit's rules and keeping history here helps nobody.
+        conn.execute("""CREATE TABLE IF NOT EXISTS reddit_setup (
+            kind TEXT PRIMARY KEY,
+            text TEXT,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')))""")
         pcols = {r[1] for r in conn.execute("PRAGMA table_info(reddit_posts)")}
         for col, decl in (("question", "TEXT"), ("answer", "TEXT"),
                           ("rounds", "INTEGER DEFAULT 0"),
@@ -1061,6 +1068,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/supplier/bills":
             self._handle_supplier_bills()
+            return
+        if path == "/reddit/setup":
+            self._handle_reddit_setup()
             return
         if path == "/reddit/replies":
             self._handle_reddit_replies()
@@ -3805,6 +3815,73 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
         self._json(200, {"ok": True})
 
+    def _handle_reddit_setup(self):
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        conn = db()
+        rows = {r["kind"]: {"text": r["text"], "updated_at": r["updated_at"]}
+                for r in conn.execute("SELECT * FROM reddit_setup")}
+        conn.close()
+        self._json(200, {"setup": rows})
+
+    def _handle_reddit_setup_draft(self):
+        """Draft the sub's rules, sidebar and flair.
+
+        A brand-new subreddit with no rules and an empty sidebar reads as
+        abandoned to anyone who lands on it, which is the opposite of what
+        daily posting is meant to achieve."""
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 8192)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            p = {}
+        kind = str(p.get("kind") or "").strip()
+        if kind not in ("rules", "sidebar", "flair"):
+            self._json(400, {"error": "unknown piece"})
+            return
+
+        def _work():
+            try:
+                r = subprocess.run(
+                    ["python3", "/root/ops-dashboard/reddit_setup.py", kind],
+                    capture_output=True, text=True, timeout=900)
+                if r.returncode != 0:
+                    print(f"[reddit_setup] {kind}: {r.stderr[:200]}", flush=True)
+            except Exception as e:
+                print(f"[reddit_setup] {kind}: {e}", flush=True)
+            hub_event("reddit_setup", f"{kind} drafted", actor, "agent")
+
+        threading.Thread(target=_work, daemon=True).start()
+        self._json(200, {"ok": True, "kind": kind})
+
+    def _handle_reddit_setup_save(self):
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 65536)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        kind = str(p.get("kind") or "").strip()
+        if kind not in ("rules", "sidebar", "flair"):
+            self._json(400, {"error": "unknown piece"})
+            return
+        conn = db()
+        conn.execute("INSERT INTO reddit_setup (kind, text, updated_at) "
+                     "VALUES (?,?,datetime('now')) ON CONFLICT(kind) DO UPDATE "
+                     "SET text=excluded.text, updated_at=datetime('now')",
+                     (kind, str(p.get("text") or "")[:20000]))
+        conn.commit()
+        conn.close()
+        self._json(200, {"ok": True})
+
     def _handle_reddit_replies(self):
         if not self._has_tool("reddit"):
             self._json(403, {"error": "not available for this account"})
@@ -4763,6 +4840,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_bill_whatsapp()
         elif path == "/supplier/bill/tracking":
             self._handle_supplier_bill_tracking()
+        elif path == "/reddit/setup/draft":
+            self._handle_reddit_setup_draft()
+        elif path == "/reddit/setup/save":
+            self._handle_reddit_setup_save()
         elif path == "/reddit/reply/create":
             self._handle_reddit_reply_create()
         elif path == "/reddit/reply/update":

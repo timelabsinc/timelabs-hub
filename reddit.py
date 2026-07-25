@@ -144,6 +144,26 @@ CSS = """
   border:1px solid transparent;border-radius:var(--r-s);background:none;padding:6px 8px;
   min-height:110px;resize:vertical;}
 .rd-rbody:focus{outline:none;border-color:var(--accent);background:var(--bg);}
+.rd-setup{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+  padding:15px 16px;margin-bottom:16px;}
+.rd-setup > summary{cursor:pointer;font-size:13.5px;font-weight:650;color:var(--ink);
+  list-style:none;}
+.rd-setup > summary::-webkit-details-marker{display:none;}
+.rd-setup > summary::before{content:'+';display:inline-block;width:16px;color:var(--accent);
+  font-weight:700;}
+.rd-setup[open] > summary::before{content:'\2212';}
+.rd-piece{margin-top:14px;}
+.rd-piece h4{font-size:11px;color:var(--muted);margin:0 0 6px;font-weight:650;
+  text-transform:uppercase;letter-spacing:.04em;}
+.rd-piece textarea{width:100%;font:inherit;font-size:13px;line-height:1.55;
+  border:1px solid var(--border);border-radius:var(--r-s);background:var(--bg);
+  color:var(--ink);padding:10px 12px;min-height:130px;resize:vertical;}
+.rd-piece textarea:focus{outline:none;border-color:var(--accent);}
+.rd-pact{display:flex;gap:7px;margin-top:7px;flex-wrap:wrap;}
+.rd-pact button{font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;
+  border:1px solid var(--border-2);border-radius:var(--r-s);background:var(--card);
+  color:var(--ink);padding:6px 12px;min-height:34px;}
+.rd-pact button:disabled{opacity:.55;cursor:default;}
 .rd-dwhen{font-size:11.5px;color:var(--muted);margin-left:auto;}
 .rd-dtitle{width:100%;font:inherit;font-size:15px;font-weight:700;color:var(--ink);
   border:1px solid transparent;border-radius:var(--r-s);background:none;padding:6px 8px;
@@ -296,7 +316,7 @@ document.querySelectorAll('.rd-tabs button').forEach(function(t){
     $('rp-compose').classList.toggle('on',k==='compose');
     document.querySelector('.rd-toolbar').style.display = k==='listen'?'':'none';
     document.querySelector('.rd-kpirow').style.display = k==='listen'?'':'none';
-    if(k==='compose')loadDrafts();
+    if(k==='compose'){ loadDrafts(); loadSetup(); }
   };
 });
 
@@ -496,13 +516,123 @@ function drawDrafts(){
 }
 
 var SUBREDDIT='IndiaWatchMods';
+var SETUP={};
+var PIECES=[['rules','Rules'],['sidebar','Sidebar description'],['flair','Post flairs']];
+function drawSetup(){
+  var L=$('setupbody'); if(!L)return;
+  L.innerHTML=PIECES.map(function(pc){
+    var k=pc[0], cur=SETUP[k]||{};
+    return '<div class="rd-piece"><h4>'+esc(pc[1])+
+      (cur.updated_at?' &middot; saved '+esc(cur.updated_at.slice(0,10)):'')+'</h4>'+
+      '<textarea data-sk="'+k+'" placeholder="Not drafted yet">'+esc(cur.text||'')+'</textarea>'+
+      '<div class="rd-pact">'+
+        '<button data-sdraft="'+k+'">'+(cur.text?'Draft again':'Draft it')+'</button>'+
+        '<button data-ssave="'+k+'">Save</button>'+
+        '<button data-scopy="'+k+'">Copy</button>'+
+      '</div></div>';
+  }).join('')+
+  '<p class="rd-empty" style="padding:10px 0 0;text-align:left">Paste these into Reddit '+
+  'under Mod Tools: Rules, Community appearance, and Post flair.</p>';
+  L.querySelectorAll('[data-sdraft]').forEach(function(b){
+    b.onclick=function(){
+      b.disabled=true; b.textContent='Drafting…';
+      jpost('/reddit/setup/draft',{kind:b.dataset.sdraft})
+        .then(function(){ toast('Drafting, about twenty seconds'); setTimeout(loadSetup,22000); })
+        .catch(function(e){ toast(e.message); b.disabled=false; b.textContent='Draft it'; });
+    };
+  });
+  L.querySelectorAll('[data-ssave]').forEach(function(b){
+    b.onclick=function(){
+      var k=b.dataset.ssave;
+      jpost('/reddit/setup/save',{kind:k,text:L.querySelector('[data-sk="'+k+'"]').value})
+        .then(function(){ toast('Saved'); loadSetup(); }).catch(function(e){ toast(e.message); });
+    };
+  });
+  L.querySelectorAll('[data-scopy]').forEach(function(b){
+    b.onclick=function(){
+      var v=L.querySelector('[data-sk="'+b.dataset.scopy+'"]').value;
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(v).then(function(){ toast('Copied'); })
+          .catch(function(){ prompt('Copy this:',v); });
+      } else { prompt('Copy this:',v); }
+    };
+  });
+}
+async function loadSetup(){
+  try{ var d=await api('/reddit/setup'); SETUP=d.setup||{}; drawSetup(); }catch(e){}
+}
+
+var REPLIES=[];
+function drawReplies(){
+  var L=$('replylist'); if(!L)return;
+  if(!REPLIES.length){ L.innerHTML=''; return; }
+  L.innerHTML='<h3 style="font-size:13px;color:var(--muted);margin:0 0 9px;font-weight:650">'+
+    'Replies to other people</h3>'+REPLIES.map(function(r){
+    var running=r.status==='queued'||r.status==='running';
+    return '<div class="rd-draft'+(r.status==='ready'?' ready':'')+'">'+
+      '<div class="rd-dhead"><span class="rd-dstat '+(running?'running':r.status)+'">'+
+        esc(running?(r.stage||'queued'):r.status)+'</span>'+
+        '<a class="rd-title" href="'+esc(r.permalink||'#')+'" target="_blank" rel="noopener">'+
+        esc((r.title||'').slice(0,70))+'</a></div>'+
+      (r.status==='needs_input'&&r.question
+        ? '<div class="rd-ask"><p>'+esc(r.question)+'</p>'+
+          '<textarea data-rans="'+r.id+'"></textarea>'+
+          '<button data-rsend="'+r.id+'">Answer and continue</button></div>'
+      : running
+        ? '<div class="rd-empty" style="padding:12px 0">Working&hellip;</div>'
+        : '<textarea class="rd-rbody" data-rt="'+r.id+'">'+esc(r.draft_text||'')+'</textarea>'+
+          '<div class="rd-dact">'+
+            '<a class="go" href="'+esc(r.permalink||'#')+'" target="_blank" rel="noopener">Open the thread</a>'+
+            '<button data-rcopy="'+r.id+'">Copy reply</button>'+
+            '<button data-rsave="'+r.id+'">Save edits</button>'+
+            '<button class="danger" data-rdel="'+r.id+'">Discard</button>'+
+          '</div>')+
+    '</div>';
+  }).join('');
+  L.querySelectorAll('[data-rsave]').forEach(function(b){
+    b.onclick=function(){
+      var id=+b.dataset.rsave;
+      jpost('/reddit/reply/update',{id:id,text:L.querySelector('[data-rt="'+id+'"]').value})
+        .then(function(){ toast('Saved'); }).catch(function(e){ toast(e.message); });
+    };
+  });
+  L.querySelectorAll('[data-rcopy]').forEach(function(b){
+    b.onclick=function(){
+      var v=L.querySelector('[data-rt="'+b.dataset.rcopy+'"]').value;
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(v).then(function(){ toast('Copied, paste it into the thread'); })
+          .catch(function(){ prompt('Copy this:',v); });
+      } else { prompt('Copy this:',v); }
+    };
+  });
+  L.querySelectorAll('[data-rdel]').forEach(function(b){
+    b.onclick=function(){
+      if(!confirm('Discard this reply?'))return;
+      jpost('/reddit/reply/update',{id:+b.dataset.rdel,discard:true})
+        .then(loadDrafts).catch(function(e){ toast(e.message); });
+    };
+  });
+  L.querySelectorAll('[data-rsend]').forEach(function(b){
+    b.onclick=function(){
+      var id=+b.dataset.rsend, v=L.querySelector('[data-rans="'+id+'"]').value.trim();
+      if(!v){ toast('Type an answer first'); return; }
+      b.disabled=true;
+      jpost('/reddit/reply/update',{id:id,answer:v})
+        .then(function(){ toast('Picking up where it stopped'); loadDrafts(); })
+        .catch(function(e){ toast(e.message); b.disabled=false; });
+    };
+  });
+}
+
 async function loadDrafts(){
   try{
     var d=await api('/reddit/posts');
     DRAFTS=d.posts||[]; SUBREDDIT=d.subreddit||SUBREDDIT;
-    drawWeek(); drawDrafts();
+    try{ var rr=await api('/reddit/replies'); REPLIES=rr.replies||[]; }catch(e){}
+    drawWeek(); drawReplies(); drawDrafts();
     /* poll only while something is actually being written */
-    var busy=DRAFTS.some(function(p){return p.status==='queued'||p.status==='running';});
+    var busy=DRAFTS.concat(REPLIES).some(function(p){
+      return p.status==='queued'||p.status==='running';});
     clearTimeout(pollT);
     if(busy&&$('rp-compose').classList.contains('on'))pollT=setTimeout(loadDrafts,6000);
   }catch(e){ $('draftlist').innerHTML='<div class="rd-empty">'+esc(e.message)+'</div>'; }
@@ -571,6 +701,11 @@ def build():
           Five passes on Hermes &mdash; research, draft, audit, humanise, verify.
           Takes a minute or two; you&rsquo;ll get a message when it&rsquo;s ready.</p>
       </div>
+      <details class="rd-setup" id="setup">
+        <summary>Set the subreddit up: rules, sidebar, flair</summary>
+        <div id="setupbody"></div>
+      </details>
+      <div id="replylist"></div>
       <div class="rd-week" id="week"></div>
       <div id="draftlist"><div class="rd-empty">Loading&hellip;</div></div>
     </div>
