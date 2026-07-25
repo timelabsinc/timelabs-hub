@@ -10,6 +10,7 @@ import glob
 import html
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -322,9 +323,27 @@ SOURCE_LABEL = {"website": "Website", "form": "Order form",
                 "whatsapp": "WhatsApp", "instagram": "Instagram"}
 
 
+def source_label(src):
+    """Hand-typed short codes stay uppercase.
+
+    The live data carries `TLC` and `CC` alongside the known channels, and
+    `.title()` rendered those as "Tlc" and "Cc" — which reads as a typo
+    rather than as a channel name.
+    """
+    if src in SOURCE_LABEL:
+        return SOURCE_LABEL[src]
+    if not src:
+        return "Other"
+    return src.upper() if len(src) <= 4 else src.title()
+
+
 def order_source_pill(src):
-    return (f'<span class="src src-{html.escape(src)}">'
-            f'{html.escape(SOURCE_LABEL.get(src, src.title() or "Other"))}</span>')
+    # One modifier, not one per channel. The distinction worth seeing at a
+    # glance is "this arrived on its own" against "somebody typed it in";
+    # a class per source would mean four dead class names for three of them.
+    auto = " auto" if src == "website" else ""
+    return (f'<span class="osrc{auto}">'
+            f'{html.escape(source_label(src))}</span>')
 
 
 def product_analytics(top=8):
@@ -577,7 +596,7 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
         by_src = {}
         for o in orders:
             by_src[o["source"]] = by_src.get(o["source"], 0) + 1
-        mix = " · ".join(f'{SOURCE_LABEL.get(s, s.title())}: <b>{n}</b>'
+        mix = " · ".join(f'{source_label(s)}: <b>{n}</b>'
                          for s, n in sorted(by_src.items(), key=lambda kv: -kv[1]))
         total_rev = sum(o["amount"] for o in orders)
         rows = "".join(
@@ -924,6 +943,33 @@ def main():
         ledger.build()
     except Exception as e:
         print(f"[ledger] {e}", file=sys.stderr)
+    # Drop is a hand-written SPA, so its page is a file in the repo rather
+    # than something a generator renders. Publishing it was a manual copy
+    # that only ever worked because someone remembered — the same shape as
+    # the generator list below, which has already drifted once. Copy first,
+    # then let drop_chrome rewrite the header region in place.
+    try:
+        drop_src = os.path.join(BASE, "www", "drop-index.html")
+        drop_dst = "/var/www/drop/index.html"
+        src_html = open(drop_src, encoding="utf-8").read()
+        # The chrome region is rewritten in the published copy, so compare
+        # everything outside it — otherwise this would rewrite on every run.
+        strip = lambda s: re.sub(r"<!--labs:chrome-->.*?<!--/labs:chrome-->",
+                                 "", s, flags=re.S)
+        try:
+            cur = open(drop_dst, encoding="utf-8").read()
+        except OSError:
+            cur = ""
+        if strip(src_html) != strip(cur):
+            tmp = drop_dst + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(src_html)
+            os.replace(tmp, drop_dst)
+            os.system(f"chown www-data:www-data {drop_dst}")
+            print(f"published {drop_dst} from www/drop-index.html")
+    except Exception as e:
+        print(f"[drop] publish failed: {e}", file=sys.stderr)
+
     # drop_chrome doesn't render a page — it re-syncs Drop's header/nav from
     # hub_shell so the hand-written SPA can't drift out of step with the rest.
     generators = ("tools", "blog", "product_updater", "product_builder",

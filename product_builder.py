@@ -81,7 +81,15 @@ def build():
   .urlrow input{{flex:1;font-size:13px;}}
   .hint{{font-size:11.5px;color:var(--muted);margin-top:7px;line-height:1.5;}}
   /* live preview */
-  .pv{{position:sticky;top:14px;}}
+  /* Sticky has to sit on the grid item, not on something inside it. .pb-grid
+     is align-items:start, so .pv-wrap is exactly as tall as the preview and
+     the old `position:sticky` on .pv had no room to travel in — the preview
+     scrolled away the moment the form got long, which is the one time it is
+     worth having. Only in the two-column layout: stacked on a phone, a
+     pinned preview would just cover the field being typed into. */
+  .pv-wrap{{min-width:0;}}
+  @media(min-width:841px){{.pv-wrap{{position:sticky;top:14px;}}}}
+  .pv{{min-width:0;}}
   .pv-label{{font-size:11px;font-weight:650;color:var(--muted);text-transform:uppercase;
     letter-spacing:.05em;margin-bottom:9px;}}
   .pv-img{{width:100%;aspect-ratio:1;border-radius:var(--r-s);object-fit:cover;background:var(--card-2);

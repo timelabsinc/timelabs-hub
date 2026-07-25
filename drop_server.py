@@ -446,7 +446,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             src = os.path.join(d, name)
             if not os.path.exists(src):
                 continue
-            shutil.move(src, os.path.join(TRASH, f"{int(time.time())}-{name}"))
+            # unique_path, not a bare timestamp: deleting a whole selection
+            # puts every file in the same second, and two folders holding the
+            # same filename would otherwise have the second delete overwrite
+            # the first one's only copy in the trash.
+            dst = unique_path(TRASH, f"{int(time.time())}-{name}")
+            shutil.move(src, dst)
             done.append(name)
         print(f"[drop] {self._user()} trashed {done}", flush=True)
         hub_event("delete", ", ".join(done), self._user())

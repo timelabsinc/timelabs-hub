@@ -398,6 +398,19 @@ HUB_STYLE = r"""
   .pill.good{color:var(--good);background:var(--good-bg);border-color:transparent;}
   .pill.warn{color:var(--accent);background:var(--accent-bg);border-color:transparent;}
   .pill.crit{color:var(--bad);background:var(--bad-bg);border-color:transparent;}
+  /* The default look, named so a caller can say "no status" out loud instead
+     of passing an empty modifier and hoping the base rule is what it wanted. */
+  .pill.neutral{color:var(--muted);background:var(--card-2);border-color:var(--border);}
+
+  /* Where an order came from. Deliberately NOT .src: that is the data-source
+     health chip further up this file, and borrowing it here put a bordered
+     pill-shaped card into every row of a dense table. Only "website" is
+     tinted — the useful split is "arrived on its own" against "somebody
+     typed it in", not one colour per channel. */
+  .osrc{display:inline-block;font-size:11px;font-weight:650;letter-spacing:.02em;
+    padding:2px 8px;border-radius:5px;white-space:nowrap;
+    background:var(--card-2);color:var(--muted);}
+  .osrc.auto{color:var(--good);background:var(--good-bg);}
 
   /* ---- plan ---- */
   .a-project{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;

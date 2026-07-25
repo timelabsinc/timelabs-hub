@@ -39,6 +39,7 @@ def build():
     border-radius:var(--r-s);padding:7px 12px;cursor:pointer;}}
   .te-top .rev:hover{{border-color:var(--border-2);color:var(--ink);}}
   .te-top .rev[disabled]{{opacity:.4;cursor:not-allowed;}}
+  .te-actions{{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;}}
   .prompt label{{display:block;font-size:11.5px;font-weight:650;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;}}
   .prompt textarea{{width:100%;font-size:14.5px;border:1px solid var(--border);border-radius:var(--r-s);
     background:var(--bg);color:var(--ink);padding:12px;font-family:inherit;min-height:70px;resize:vertical;line-height:1.5;}}
@@ -232,7 +233,7 @@ function locked(reason){{
         '<li>Under <b>Admin API scopes</b> tick <code>read_themes</code> and <code>write_themes</code>, then <b>Save</b>.</li>'+
         '<li>Reconnect at <a href="/ops/agent/api/shopify/connect">the Shopify connect link</a> to refresh the token.</li>'+
       '</ol>'+
-      '<div class="te-actions" style="margin-top:18px"><button class="btn" id="recheck">Re-check access</button></div>'+
+      '<div class="te-actions"><button class="btn" id="recheck">Re-check access</button></div>'+
       (reason?'<div class="diag">Shopify said: '+esc(reason)+'</div>':'')+
     '</div>';
   $('recheck').onclick=function(){{$('recheck').textContent='Checking…';$('recheck').disabled=true;init();}};

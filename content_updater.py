@@ -75,6 +75,10 @@ def build():
   .chip:hover{{border-color:var(--accent);background:var(--accent-bg);}}
   .row2{{display:grid;grid-template-columns:1fr 1fr;gap:12px;}}
   @media(max-width:520px){{.row2{{grid-template-columns:1fr;}}}}
+  /* The line under a field that says what the operation will actually do.
+     It had no rule, so it rendered at body size and read as instruction
+     rather than as a note. */
+  .hint{{font-size:12px;line-height:1.45;color:var(--muted);margin-top:8px;}}
   .btn{{font-size:13.5px;font-weight:650;border-radius:var(--r-s);padding:10px 16px;cursor:pointer;
     border:1px solid var(--border);background:var(--card);color:var(--ink);transition:border-color .12s,transform .1s;}}
   .btn:hover{{border-color:var(--border-2);}}

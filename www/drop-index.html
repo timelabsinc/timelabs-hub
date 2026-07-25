@@ -258,6 +258,10 @@
     border:1.5px solid rgba(255,255,255,.85);background:rgba(0,0,0,.35);display:none;
     align-items:center;justify-content:center;cursor:pointer;padding:0;}
   body.picking .pick{display:flex;}
+  /* Where there is a pointer, show the tick on hover as well. Otherwise the
+     only way to learn you can select anything is to find the toolbar button
+     first, and nothing on the card ever hints that it is selectable. */
+  @media(hover:hover){ .card:hover .pick{display:flex;} }
   .pick svg{width:14px;height:14px;stroke:#fff;fill:none;stroke-width:3;opacity:0;}
   .card.on .pick{background:var(--accent);border-color:var(--accent);}
   .card.on .pick svg{opacity:1;}
@@ -273,6 +277,18 @@
     border-radius:999px;padding:6px 13px;font:inherit;font-size:13px;font-weight:650;
     cursor:pointer;white-space:nowrap;}
   .actbar button.primary{background:#fff;color:#171717;border-color:#fff;}
+  /* The one button in this bar that destroys something. On a dark bar the
+     theme's --bad is too dim to read, so it gets a lighter red of its own. */
+  .actbar button.danger{color:#ff8f80;border-color:rgba(255,143,128,.45);}
+  .actbar button.danger:hover{background:rgba(255,143,128,.14);}
+  /* Five things do not fit on one line at 390px, and a bar you have to scroll
+     sideways to reach Cancel in is worse than a bar two lines tall. The count
+     takes the first row, the buttons share the second. */
+  @media(max-width:600px){
+    .actbar{flex-wrap:wrap;justify-content:center;row-gap:8px;
+      border-radius:18px;overflow:visible;max-width:calc(100vw - 20px);}
+    .actbar b{width:100%;text-align:center;}
+  }
   /* organize sheet */
   #orgsheet{position:fixed;left:0;right:0;bottom:0;z-index:118;background:var(--card);
     border:1px solid var(--border);border-bottom:none;border-radius:16px 16px 0 0;
@@ -448,7 +464,9 @@
 
 <div class="actbar" id="actbar">
   <b id="actmsg">0 selected</b>
+  <button id="actAll">Select all</button>
   <button id="actCut">Move…</button>
+  <button class="danger" id="actDel">Delete</button>
   <button id="actClear">Cancel</button>
 </div>
 <div class="actbar" id="clipbar">
@@ -498,6 +516,7 @@ let viewIdx = -1;       // index into visible files for the preview overlay
 let picking = false;                 // multi-select mode
 let sel = new Set();                 // filenames ticked in the current folder
 let clip = { names: [], from: null }; // files cut, waiting for a destination
+let anchor = null;                   // last card ticked, so shift-click has a range to fill
 
 /* ---------------- helpers ---------------- */
 const $ = id => document.getElementById(id);
@@ -710,14 +729,40 @@ function render(){
   }).join('');
   $('grid').querySelectorAll('.card').forEach(c => {
     const nm = c.dataset.n;
+    const idx = parseInt(c.dataset.i, 10);
     c.onclick = e => {
       if(e.target.closest('.dots')) return;
-      if(e.target.closest('.pick') || picking){ toggleSel(nm); return; }
-      openView(parseInt(c.dataset.i, 10));
+      if(held){ held = false; return; }   // long-press already handled this one
+      /* Shift picks up the run since the last tick, ctrl/cmd adds one at a
+         time. Both work without arming select mode first, because having to
+         find a toolbar button before you can tick anything is the slow part. */
+      if(e.shiftKey && anchor !== null){ e.preventDefault(); selectRange(anchor, idx); return; }
+      if(e.target.closest('.pick') || picking || e.metaKey || e.ctrlKey){ toggleSel(nm, idx); return; }
+      openView(idx);
     };
+    /* Press and hold to start selecting — the phone equivalent of ctrl-click,
+       and the only one available there. 450ms, cancelled by any real movement
+       so it never fires while scrolling the grid. */
+    let holdT = null, hx = 0, hy = 0, held = false;
+    c.addEventListener('pointerdown', e => {
+      held = false;
+      if(picking || e.button) return;
+      hx = e.clientX; hy = e.clientY;
+      holdT = setTimeout(() => {
+        holdT = null;
+        held = true;   // the click that follows the release is not a real tap
+        if(navigator.vibrate) navigator.vibrate(12);
+        toggleSel(nm, idx);
+      }, 450);
+    });
+    const dropHold = () => { if(holdT){ clearTimeout(holdT); holdT = null; } };
+    c.addEventListener('pointermove', e => {
+      if(holdT && (Math.abs(e.clientX - hx) > 8 || Math.abs(e.clientY - hy) > 8)) dropHold();
+    });
+    ['pointerup','pointercancel','pointerleave'].forEach(ev => c.addEventListener(ev, dropHold));
     c.oncontextmenu = e => {
       e.preventDefault();
-      showMenu(e, visibleFiles()[parseInt(c.dataset.i, 10)].name, false);
+      showMenu(e, visibleFiles()[idx].name, false);
     };
     c.addEventListener('dragstart', e => {
       /* dragging an unticked file moves just that one, which is what the
@@ -943,6 +988,17 @@ document.addEventListener('keydown', e => {
   if(e.key === 'ArrowLeft') openView(viewIdx - 1);
   if(e.key === 'ArrowRight') openView(viewIdx + 1);
 });
+/* Selection shortcuts. Only while browsing: not with a file open, not with a
+   sheet up, and never while the caret is in the search box or a rename field. */
+document.addEventListener('keydown', e => {
+  if($('view').classList.contains('on') || $('veil').classList.contains('on')) return;
+  const t = e.target;
+  if(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  if((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a'){ e.preventDefault(); $('actAll').click(); return; }
+  if(!picking) return;
+  if(e.key === 'Escape'){ setPicking(false); return; }
+  if((e.key === 'Delete' || e.key === 'Backspace') && sel.size){ e.preventDefault(); $('actDel').click(); }
+});
 /* swipe between files on touch */
 (function(){
   let x0 = null;
@@ -1105,14 +1161,19 @@ async function runSearch(q){
       grid.innerHTML = '<p class="empty" style="padding:18px">Nothing matched &ldquo;' + esc(q) + '&rdquo;.' +
         (d.unindexed ? ' ' + d.unindexed + ' photo' + (d.unindexed===1?'':'s') + " haven't been described yet — index them to search by what's in the picture." : '') + '</p>';
     } else {
+      // Same markup as the browse grid on purpose. This used to emit its own
+      // .thumb/.cap/.ph, none of which were ever given a rule, so every
+      // search result rendered as a bare image over an unstyled filename.
       grid.innerHTML = '<div class="grid">' + d.results.map(r => {
-        const thumb = r.kind === 'image' || r.kind === 'video'
-          ? '<img loading="lazy" src="' + API + '/thumb?path=' + encodeURIComponent(r.path) + '" alt="">'
-          : '<div class="ph">' + (ICONS[r.kind] || ICONS.file) + '</div>';
+        const pv = (r.kind === 'image' || r.kind === 'video')
+          ? '<img loading="lazy" src="' + API + '/thumb?path=' + encodeURIComponent(r.path) + '" alt="" onerror="this.remove()">'
+          : (ICONS[r.kind] || ICONS.file);
+        const badge = r.kind === 'video' ? '<span class="badge">' + ICONS.play + 'video</span>' : '';
         return '<div class="card" data-p="' + esc(r.path) + '" data-d="' + esc(r.dir) + '">' +
-          '<div class="thumb">' + thumb + '</div>' +
-          '<div class="cap"><b>' + esc(r.name) + '</b><small>' + esc(r.dir || 'Drop') +
-          (r.why === 'described' ? ' · matched by photo' : '') + '</small></div></div>';
+          '<div class="pv">' + pv + badge + '</div>' +
+          '<div class="meta"><div class="nm">' + esc(r.name) + '</div>' +
+          '<div class="sub">' + esc(r.dir || 'Drop') +
+          (r.why === 'described' ? ' · matched by photo' : '') + '</div></div></div>';
       }).join('') + '</div>';
       grid.querySelectorAll('.card').forEach(c => {
         c.onclick = () => { nav(c.dataset.d || ''); $('q').value=''; $('srchresults').innerHTML=''; $('srchmeta').innerHTML=''; };
@@ -1149,23 +1210,46 @@ $('newBtn').onclick = newFolder;
 $('newBtnM').onclick = newFolder;
 
 /* ---------------- selection + moving ---------------- */
-function toggleSel(name){
+function paintSel(){
+  $('grid').querySelectorAll('.card').forEach(c => c.classList.toggle('on', sel.has(c.dataset.n)));
+}
+function toggleSel(name, idx){
   if(sel.has(name)) sel.delete(name); else sel.add(name);
+  if(typeof idx === 'number') anchor = idx;
   if(sel.size && !picking) setPicking(true);
   const card = $('grid').querySelector('.card[data-n="' + CSS.escape(name) + '"]');
   if(card) card.classList.toggle('on', sel.has(name));
   drawActbar();
 }
-function setPicking(on){
+/* Everything from the last thing ticked to the thing just clicked, inclusive.
+   Always adds — shift-clicking backwards over a run you already picked should
+   not silently unpick it. */
+function selectRange(a, b){
+  const files = visibleFiles();
+  for(let i = Math.min(a, b); i <= Math.max(a, b); i++){
+    if(files[i]) sel.add(files[i].name);
+  }
+  anchor = b;
+  if(!picking) setPicking(true, true);
+  paintSel();
+  drawActbar();
+}
+function setPicking(on, keep){
   picking = on;
   document.body.classList.toggle('picking', on);
-  if(!on){ sel.clear(); $('grid').querySelectorAll('.card.on').forEach(c => c.classList.remove('on')); }
+  if(!on){ sel.clear(); anchor = null; $('grid').querySelectorAll('.card.on').forEach(c => c.classList.remove('on')); }
+  else if(!keep) paintSel();
   drawActbar();
 }
 function drawActbar(){
   $('actbar').classList.toggle('on', picking && !clip.names.length);
-  $('actmsg').textContent = sel.size + ' selected';
+  const total = visibleFiles().length;
+  $('actmsg').textContent = sel.size + ' of ' + total + ' selected';
+  $('actAll').style.display = total ? '' : 'none';
+  $('actAll').textContent = (sel.size === total && total) ? 'Select none' : 'Select all';
   $('actCut').style.display = sel.size ? '' : 'none';
+  $('actDel').style.display = sel.size ? '' : 'none';
+  $('actDel').textContent = sel.size > 1 ? 'Delete ' + sel.size : 'Delete';
   const pending = clip.names.length;
   $('clipbar').classList.toggle('on', pending > 0);
   $('clipmsg').textContent = pending + ' ready to move';
@@ -1183,11 +1267,38 @@ async function moveTo(names, from, to){
 }
 $('pickBtn').onclick = () => setPicking(!picking);
 $('actClear').onclick = () => setPicking(false);
+/* "All" means everything currently on screen, not everything in the folder —
+   if you have filtered to Photos or typed a search, that filter is the point. */
+$('actAll').onclick = () => {
+  const files = visibleFiles();
+  if(sel.size === files.length){ sel.clear(); anchor = null; }
+  else { files.forEach(f => sel.add(f.name)); }
+  if(sel.size && !picking) setPicking(true, true);
+  paintSel();
+  drawActbar();
+};
 $('actCut').onclick = () => {
   if(!sel.size) return;
   clip = { names: Array.from(sel), from: state.path };
   toast('Now open the folder you want them in');
   drawActbar();
+};
+/* One confirm and one request for the whole selection. The endpoint has always
+   taken a list of names — only the per-file menu ever called it, with a list
+   of one — so nothing on the server had to change. Deleted files move to
+   .trash rather than being unlinked, which is why this asks once rather than
+   making you tick a box. */
+$('actDel').onclick = async () => {
+  const names = Array.from(sel);
+  if(!names.length) return;
+  const what = names.length === 1 ? '"' + names[0] + '"' : names.length + ' files';
+  if(!confirm('Delete ' + what + '?')) return;
+  try {
+    await api('/delete', {method:'POST', body: JSON.stringify({path: state.path, names})});
+    toast('Deleted ' + names.length + (names.length === 1 ? ' file' : ' files'));
+    setPicking(false);
+    load();
+  } catch(e){ toast(e.message); }
 };
 $('clipCancel').onclick = () => { clip = { names: [], from: null }; setPicking(false); };
 $('clipPaste').onclick = () => moveTo(clip.names, clip.from, state.path);
