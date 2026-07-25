@@ -136,6 +136,14 @@ CSS = """
 .rd-slot button{font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;
   border:1px solid var(--border-2);border-radius:var(--r-s);background:var(--card);
   color:var(--ink);padding:6px 11px;min-height:34px;}
+.rd-reply{margin-left:auto;font:inherit;font-size:12px;font-weight:650;cursor:pointer;
+  border:1px solid var(--accent);border-radius:var(--r-s);background:var(--accent-bg);
+  color:var(--accent);padding:5px 11px;min-height:32px;white-space:nowrap;}
+.rd-reply:disabled{opacity:.55;cursor:default;}
+.rd-rbody{width:100%;font:inherit;font-size:13.5px;line-height:1.6;color:var(--ink);
+  border:1px solid transparent;border-radius:var(--r-s);background:none;padding:6px 8px;
+  min-height:110px;resize:vertical;}
+.rd-rbody:focus{outline:none;border-color:var(--accent);background:var(--bg);}
 .rd-dwhen{font-size:11.5px;color:var(--muted);margin-left:auto;}
 .rd-dtitle{width:100%;font:inherit;font-size:15px;font-weight:700;color:var(--ink);
   border:1px solid transparent;border-radius:var(--r-s);background:none;padding:6px 8px;
@@ -212,9 +220,22 @@ function draw(){
       +'<span class="rd-score">score '+ (t.opportunity_score||0).toFixed(2) +'</span>'
       +'</div>'
       +'<a class="rd-title" href="'+esc(t.permalink)+'" target="_blank" rel="noopener">'+esc(t.title)+'</a>'
-      +'<div class="rd-meta">'+upvotes+' upvotes &middot; '+comments+' comments</div>'
+      +'<div class="rd-meta">'+upvotes+' upvotes &middot; '+comments+' comments'
+      +'<button class="rd-reply" data-reply="'+t.id+'">Draft a reply</button></div>'
       +'</div>';
   }).join('');
+  $('list').querySelectorAll('[data-reply]').forEach(function(b){
+    b.onclick=function(){
+      var note=prompt('Anything you want said? Leave blank and it works it out:')||'';
+      b.disabled=true; b.textContent='Drafting…';
+      jpost('/reddit/reply/create',{thread_id:+b.dataset.reply,note:note})
+        .then(function(){
+          toast('Drafting a reply, you will get a message');
+          document.querySelector('.rd-tabs button[data-rt="compose"]').click();
+        })
+        .catch(function(e){ toast(e.message); b.disabled=false; b.textContent='Draft a reply'; });
+    };
+  });
 }
 
 var BANNER={

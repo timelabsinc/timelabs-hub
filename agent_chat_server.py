@@ -330,6 +330,13 @@ def _ensure_reddit_schema():
             created_by TEXT)""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reddit_drafts_thread "
                      "ON reddit_drafts(thread_id)")
+        dcols = {r[1] for r in conn.execute("PRAGMA table_info(reddit_drafts)")}
+        for col, decl in (("stage", "TEXT"), ("passes", "TEXT"),
+                          ("question", "TEXT"), ("answer", "TEXT"),
+                          ("error", "TEXT"), ("finished_at", "TEXT"),
+                          ("posted_at", "TEXT")):
+            if col not in dcols:
+                conn.execute(f"ALTER TABLE reddit_drafts ADD COLUMN {col} {decl}")
         # Posts for our own subreddit (r/IndiaWatchMods). A post is built by
         # a multi-pass pipeline rather than one generation, so `passes` keeps
         # each stage's output — the research it used, what the audit objected
@@ -1054,6 +1061,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/supplier/bills":
             self._handle_supplier_bills()
+            return
+        if path == "/reddit/replies":
+            self._handle_reddit_replies()
             return
         if path == "/reddit/posts":
             self._handle_reddit_posts()
@@ -3795,6 +3805,113 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
         self._json(200, {"ok": True})
 
+    def _handle_reddit_replies(self):
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        conn = db()
+        rows = [dict(r) for r in conn.execute(
+            "SELECT d.*, t.title, t.subreddit, t.author, t.permalink "
+            "FROM reddit_drafts d LEFT JOIN reddit_threads t ON t.id=d.thread_id "
+            "ORDER BY d.id DESC LIMIT 50")]
+        conn.close()
+        for r in rows:
+            try:
+                r["passes"] = json.loads(r.get("passes") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                r["passes"] = {}
+        self._json(200, {"replies": rows})
+
+    def _handle_reddit_reply_create(self):
+        """Draft a reply to somebody else's thread. On a small subreddit this
+        matters more than another post of our own."""
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 16384)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            tid = int(p.get("thread_id") or 0)
+        except (TypeError, ValueError):
+            tid = 0
+        conn = db()
+        t = conn.execute("SELECT id FROM reddit_threads WHERE id=?", (tid,)).fetchone()
+        if not t:
+            conn.close()
+            self._json(404, {"error": "no such thread"})
+            return
+        cur = conn.execute(
+            "INSERT INTO reddit_drafts (thread_id, draft_text, status, created_by, answer) "
+            "VALUES (?,'','queued',?,?)",
+            (tid, actor, str(p.get("note") or "").strip()[:1000]))
+        did = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        def _work():
+            try:
+                subprocess.run(["python3", "/root/ops-dashboard/reddit_reply.py",
+                                str(did)], capture_output=True, text=True, timeout=1800)
+            except Exception as e:
+                print(f"[reddit_reply] runner: {e}", flush=True)
+            c = db()
+            r = c.execute("SELECT status FROM reddit_drafts WHERE id=?", (did,)).fetchone()
+            c.close()
+            if r and r["status"] == "ready":
+                self._alert("*Reddit reply ready*\nops.timelabsco.in/ops/reddit.html")
+
+        threading.Thread(target=_work, daemon=True).start()
+        self._json(200, {"ok": True, "id": did})
+
+    def _handle_reddit_reply_update(self):
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 65536)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            did = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            did = 0
+        conn = db()
+        if not conn.execute("SELECT id FROM reddit_drafts WHERE id=?", (did,)).fetchone():
+            conn.close()
+            self._json(404, {"error": "no such reply"})
+            return
+        if p.get("discard"):
+            conn.execute("DELETE FROM reddit_drafts WHERE id=?", (did,))
+        elif p.get("posted"):
+            conn.execute("UPDATE reddit_drafts SET status='posted', "
+                         "posted_at=datetime('now') WHERE id=?", (did,))
+        elif p.get("answer"):
+            conn.execute("UPDATE reddit_drafts SET answer=?, question=NULL, "
+                         "status='queued' WHERE id=?",
+                         (str(p.get("answer"))[:1000], did))
+            conn.commit()
+            conn.close()
+
+            def _resume():
+                subprocess.run(["python3", "/root/ops-dashboard/reddit_reply.py",
+                                str(did)], capture_output=True, text=True, timeout=1800)
+            threading.Thread(target=_resume, daemon=True).start()
+            self._json(200, {"ok": True})
+            return
+        else:
+            conn.execute("UPDATE reddit_drafts SET draft_text=? WHERE id=?",
+                         (str(p.get("text") or "")[:20000], did))
+        conn.commit()
+        conn.close()
+        self._json(200, {"ok": True})
+
     def _handle_reddit_sync(self):
         """Pull fresh threads from the target subreddits and upsert them.
         Read-only against Reddit itself — this never posts or comments,
@@ -4646,6 +4763,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_bill_whatsapp()
         elif path == "/supplier/bill/tracking":
             self._handle_supplier_bill_tracking()
+        elif path == "/reddit/reply/create":
+            self._handle_reddit_reply_create()
+        elif path == "/reddit/reply/update":
+            self._handle_reddit_reply_update()
         elif path == "/reddit/post/create":
             self._handle_reddit_post_create()
         elif path == "/reddit/post/answer":

@@ -77,14 +77,19 @@ def strip_dashes(text):
             return ". " + after.lstrip()[:1].upper() + after.lstrip()[1:]
         return ", " + after.lstrip()
 
+    # A dash between two numbers is a range, not a stylistic tell. "5,500-7,000"
+    # and "2-4 weeks" are what a person types; turning them into "5,500, 7,000"
+    # makes a price list read as nonsense, which is how this was found.
+    text = re.sub(r"(?<=\d)\s*[—–]\s*(?=\d)", "-", text)
+
     # A matched pair with a short span between them is an aside, and both
     # ends want commas. Handled first, because treating each dash on its own
     # turns "And - honestly - I'd" into "And, honestly. I'd".
     text = re.sub(r"\s*[—–]\s*(?P<mid>[^—–\n]{1,60}?)\s*[—–]\s*",
                   lambda m: ", " + m.group("mid").strip() + ", ", text)
-    text = re.sub(r"\s*[—–]\s*(?P<after>.)", repl, text)
+    text = re.sub(r"(?<!\d)\s*[—–]\s*(?P<after>.)", repl, text)
     # a hyphen doing an em dash's job, " - ", is the same tell
-    text = re.sub(r"\s+-\s+(?P<after>.)", repl, text)
+    text = re.sub(r"(?<!\d)\s+-\s+(?P<after>.)", repl, text)
     return text
 
 

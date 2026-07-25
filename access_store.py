@@ -41,6 +41,13 @@ ROLES = {
         "tools": ["face", "drop", "ledger", "chat", "blog", "content",
                   "theme", "price", "product", "orders", "reddit"],
     },
+    "content": {
+        "label": "Content",
+        "blurb": "The Reddit tool and the writing tools. No orders, no customer "
+                 "list, no Ledger, no Shopify admin.",
+        "home": "/ops/reddit.html",
+        "tools": ["reddit", "blog", "content", "drop"],
+    },
     "orders": {
         "label": "Orders",
         "blurb": "The order form and the order/customer lists. No revenue dashboard, no Shopify tools.",
