@@ -224,6 +224,10 @@ SUP_CSS = r"""
   .bcard{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
     padding:15px 16px;margin-bottom:11px;box-shadow:var(--shadow);}
   .bcard.ack{border-color:var(--good);}
+  .bcard.flash{animation:bflash 2.2s ease;}
+  @keyframes bflash{0%,100%{box-shadow:var(--shadow);}
+    15%,60%{box-shadow:0 0 0 3px var(--accent-bg),var(--shadow);}}
+  @media (prefers-reduced-motion:reduce){ .bcard.flash{animation:none;} }
   .btop{display:flex;align-items:flex-start;gap:12px;}
   .bno{font-size:14.5px;font-weight:750;color:var(--ink);letter-spacing:-.01em;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
@@ -1017,7 +1021,7 @@ function billCard(b){
     return '<li><span>'+esc(it.ref_code||('#'+it.order_id))+' · '+
       esc(it.description||'')+'</span><b>'+rs(it.cost,b.currency)+'</b></li>';
   }).join('');
-  return '<article class="bcard'+(ack?' ack':'')+'">'+
+  return '<article class="bcard'+(ack?' ack':'')+'" data-bill="'+b.id+'">'+
     '<div class="btop">'+
       '<div><div class="bno">'+esc(b.bill_no)+'</div>'+
         '<div class="bmeta">'+(b.items||[]).length+' build'+
@@ -1038,6 +1042,8 @@ function billCard(b){
       : '<button data-btrk="'+b.id+'">+ Add courier / tracking</button>')+'</div>'+
     '<div class="bact">'+
       '<button data-billpdf="'+b.id+'">Bill PDF</button>'+
+      '<button data-billwa="'+b.id+'">Send to WhatsApp</button>'+
+      '<button data-billlink="'+b.id+'">Copy link</button>'+
       (CAN_ACK&&!ack?'<button class="go" data-billack="'+b.id+'">Agree this batch</button>':'')+
       (CAN_ACK&&ack?'<button data-billpay="'+b.id+'">Record payment</button>':'')+
       (CAN_ACK?'<button class="danger" data-billdel="'+b.id+'">Delete</button>':'')+
@@ -1093,6 +1099,35 @@ function drawBills(){
       }).catch(function(e){ toast(e.message); });
     };
   });
+  /* The batch reaches the other side through the group everyone already
+     watches, PDF attached. Queued server-side, so this returns at once. */
+  L.querySelectorAll('[data-billwa]').forEach(function(b){
+    b.onclick=function(){
+      var name=localStorage.getItem('labs_bill_from')||'';
+      if(!name){
+        name=(prompt('Business name for the bill header:','')||'').trim();
+        if(name)localStorage.setItem('labs_bill_from',name);
+      }
+      b.disabled=true;
+      jpost('/supplier/bill/whatsapp',{id:+b.dataset.billwa,from:name||'Supplier'})
+        .then(function(){ toast('Sending to WhatsApp…'); })
+        .catch(function(e){ toast(e.message); })
+        .then(function(){ b.disabled=false; });
+    };
+  });
+  /* A deep link rather than a public one: agreeing a batch moves money into
+     the Ledger, so it stays behind the sign-in. Hannan sends this, the owner
+     opens it already signed in and lands on the batch ready to agree. */
+  L.querySelectorAll('[data-billlink]').forEach(function(b){
+    b.onclick=function(){
+      var url=location.origin+location.pathname+'#batch-'+b.dataset.billlink;
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(url)
+          .then(function(){ toast('Link copied'); })
+          .catch(function(){ prompt('Copy this link:',url); });
+      } else { prompt('Copy this link:',url); }
+    };
+  });
   L.querySelectorAll('[data-btrk]').forEach(function(b){
     b.onclick=function(){
       var id=+b.dataset.btrk;
@@ -1116,12 +1151,27 @@ function drawBills(){
     };
   });
 }
+/* Someone arriving on #batch-7 should land on it, not on the queue. */
+function batchFromHash(){
+  var m=/^#batch-(\d+)$/.exec(location.hash||'');
+  return m?+m[1]:0;
+}
+function focusHashBatch(){
+  var id=batchFromHash();
+  if(!id)return;
+  var el=$('billlist').querySelector('.bcard[data-bill="'+id+'"]');
+  if(!el)return;
+  el.scrollIntoView({behavior:'smooth',block:'center'});
+  el.classList.add('flash');
+  setTimeout(function(){ el.classList.remove('flash'); },2200);
+}
 async function loadBills(){
   try{
     var d=await api('/supplier/bills');
     BILLS=d.bills||[]; CAN_ACK=!!d.can_acknowledge;
     try{ ARREARS=await api('/supplier/arrears'); }catch(e){}
     drawBills();
+    focusHashBatch();
   }catch(e){ $('billlist').innerHTML='<div class="sempty">'+esc(e.message)+'</div>'; }
 }
 
@@ -1289,6 +1339,11 @@ document.addEventListener('visibilitychange',function(){
   if(!document.hidden&&!busyEditing())load(true); });
 setInterval(function(){ if(!document.hidden&&!busyEditing())load(true); },90000);
 load();
+/* Arriving on a #batch-N link should open Batches, not the queue. */
+if(/^#batch-\d+$/.test(location.hash||'')){
+  var _bt=document.querySelector('.tabs button[data-tab="bills"]');
+  if(_bt)_bt.click();
+}
 
 fetch(API+'/whoami').then(function(r){return r.ok?r.json():null;}).then(function(i){
   if(i&&i.email){var w=$('who');if(w)w.textContent=i.email;}
