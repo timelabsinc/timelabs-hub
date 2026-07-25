@@ -71,6 +71,27 @@ def set_stage(post_id, stage, **cols):
     conn.close()
 
 
+def our_sub():
+    """What is already on our own subreddit.
+
+    It is not an empty room: other people post builds there. That matters
+    twice over. A post has to sit sensibly next to what neighbours have
+    written, and posting daily over the top of the handful of people who
+    showed up on their own is the fastest way to make a small sub feel like
+    one person talking to themselves."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT title, author, created_utc FROM reddit_threads "
+        "WHERE subreddit=? ORDER BY created_utc DESC LIMIT 15", (SUB,)).fetchall()
+    conn.close()
+    if not rows:
+        return "Nothing collected from our own sub yet."
+    mine = sum(1 for r in rows if (r["author"] or "").lower() == "brief_client_2900")
+    lines = [f"- u/{r['author']}: {r['title'][:100]}" for r in rows]
+    return (f"Recent posts on r/{SUB} ({len(rows)} seen, {mine} of them ours):\n"
+            + "\n".join(lines))
+
+
 def evidence():
     """What the Listener has actually seen do well, rather than a guess about
     Reddit in general. Falls back to a plain statement of ignorance when the
@@ -153,12 +174,15 @@ def run(post_id):
     set_stage(post_id, "research", status="running")
     out["research"] = hermes(
         context +
-        "\nHere is what our Listener has actually collected from watch subreddits, "
-        "ordered by how much discussion each thread got:\n\n" + evidence() +
-        "\n\nIn under 200 words: what shapes of post are earning replies here, "
-        "and what would make a build showcase worth commenting on rather than "
-        "just upvoting? Be concrete. If the data is thin, say so plainly rather "
-        "than inventing a trend.")
+        "\nWhat our Listener has collected from the bigger watch subreddits, "
+        "ordered by discussion:\n\n" + evidence() +
+        "\n\nAnd our own sub, which is small and has real people posting in "
+        "it already:\n\n" + our_sub() +
+        "\n\nIn under 200 words: what would make this post worth commenting on "
+        "rather than just upvoting, given who is already posting there? A small "
+        "sub needs posts that give the handful of regulars something to answer, "
+        "not broadcasts. Name one thing in the existing posts worth building on. "
+        "If the data is thin, say so plainly rather than inventing a trend.")
 
     # 2 — draft
     set_stage(post_id, "draft")
