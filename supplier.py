@@ -114,15 +114,25 @@ SUP_CSS = r"""
      totals rather than making him open something else to find them. Costs
      stay in the supplier's own currency; only "you owe" is converted, since
      that's the figure that means something on our side of the table. */
-  .moneybar{display:flex;margin-top:10px;border:1px solid var(--border);
-    border-radius:var(--r-s);background:var(--card);overflow:hidden;}
+  /* A wrapping grid, not a five-across row. As a flex row each cell got
+     about 49px of content on a 390px phone while "₹34,500.00" needs ~85px,
+     so the amounts spilled out of their cells. auto-fit gives three columns
+     on a phone and all five on a desktop without a second breakpoint.
+     The 1px gap over a border-coloured background draws the dividers, which
+     a wrapping grid can't do with border-left. */
+  .moneybar{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));
+    gap:1px;margin-top:10px;background:var(--border);
+    border:1px solid var(--border);border-radius:var(--r-s);overflow:hidden;}
   .moneybar:empty{display:none;}
-  .mcell{flex:1;min-width:0;padding:8px 12px;}
-  .mcell + .mcell{border-left:1px solid var(--border);}
+  .mcell{min-width:0;padding:8px 11px;background:var(--card);}
   .mcell .ml{font-size:10.5px;color:var(--muted);white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis;}
-  .mcell .mv{font-size:15px;font-weight:750;color:var(--ink);
-    font-variant-numeric:tabular-nums;line-height:1.25;}
+  /* Never ellipsise money — "₹34,50…" is worse than a smaller number, so
+     the value shrinks to fit rather than being cut off. */
+  .mcell .mv{font-size:14px;font-weight:750;color:var(--ink);
+    font-variant-numeric:tabular-nums;line-height:1.25;
+    white-space:nowrap;overflow:hidden;}
+  @media(min-width:560px){ .mcell .mv{font-size:15px;} }
   .mcell.owe .mv{color:var(--accent);}
 
   /* Phone: the search box is the loser in a three-up row. Two flex:none
