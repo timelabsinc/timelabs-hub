@@ -385,6 +385,33 @@ def _ensure_reddit_schema():
         print(f"[reddit] schema check: {e}", flush=True)
 
 
+def _ensure_stock_schema():
+    """A build we are making for ourselves, with no buyer yet.
+
+    These already existed in practice: bulk intake creates orders with no
+    customer, and so does anyone queuing a build speculatively. What was
+    missing was a way to say so on purpose and then find them again. Without
+    it, stock and unsold-but-real orders look identical, so "how many orders
+    this week" quietly counts watches nobody has bought.
+    """
+    try:
+        conn = sqlite3.connect(DB, timeout=5)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
+        if cols and "is_stock" not in cols:
+            conn.execute("ALTER TABLE orders ADD COLUMN is_stock INTEGER DEFAULT 0")
+            # The owner already invented this convention by hand: builds for
+            # stock were being logged with the customer typed as "Self". The
+            # backfill matches what he actually did, plus genuinely blank
+            # rows, rather than a convention nobody used.
+            conn.execute("UPDATE orders SET is_stock=1 WHERE "
+                         "LOWER(TRIM(COALESCE(customer_name,''))) IN "
+                         "('self','stock','') AND price_inr IS NULL")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[stock] schema check: {e}", flush=True)
+
+
 def _ensure_billing_schema():
     """What the supplier charges us, per build, and the bills that collect it.
 
@@ -462,6 +489,7 @@ _ensure_order_events_schema()
 _ensure_shipments_schema()
 _ensure_reddit_schema()
 _ensure_billing_schema()
+_ensure_stock_schema()
 
 
 def _fs_resolve(p):
@@ -1973,6 +2001,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not product:
             self._json(400, {"error": "a product is needed"})
             return
+        # "For stock" can be said explicitly, or inferred from the convention
+        # already in the data, where the customer was typed as Self.
+        is_stock = 1 if (p.get("is_stock")
+                         or customer.strip().lower() in ("self", "stock")) else 0
         phone = str(p.get("customer_phone", "")).strip()[:40]
         email = str(p.get("customer_email", "")).strip()[:200]
         address = str(p.get("address", "")).strip()[:600]
@@ -2034,13 +2066,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "INSERT INTO orders (customer_name, customer_phone, customer_email, address, "
             "pincode, city, state, source, product, price_inr, quantity, notes, status, "
             "has_image, drive_link, photo_links, case_style, dial_colour, dial_style, "
-            "case_colour, movement, watch_size, supplier_visible) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+            "case_colour, movement, watch_size, is_stock, supplier_visible) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
             (customer, phone, email, address, pincode, city, state, source, product,
              price, qty, notes, status, 1 if photos else 0, drive_link,
              json.dumps(links) if links else None,
              attrs.get("case_style"), attrs.get("dial_colour"), attrs.get("dial_style"),
-             attrs.get("case_colour"), attrs.get("movement"), attrs.get("watch_size")))
+             attrs.get("case_colour"), attrs.get("movement"), attrs.get("watch_size"),
+             is_stock))
         oid = cur.lastrowid
 
         # Move the photos somewhere permanent BEFORE reporting success. They
@@ -2140,7 +2173,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "address, pincode, city, state, source, product, quantity, price_inr, "
                 "notes, status, drive_link, photo_links, local_photos, case_style, "
                 "dial_colour, dial_style, case_colour, movement, watch_size, shopify_name, "
-                "ref_code FROM orders ORDER BY id DESC LIMIT 100").fetchall()
+                "ref_code, is_stock FROM orders ORDER BY id DESC LIMIT 100").fetchall()
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
@@ -2204,9 +2237,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "SUM(COALESCE(quantity,1)) AS units FROM orders "
                     f"WHERE {field} IS NOT NULL AND {field} != '' AND status != 'cancelled' "
                     f"GROUP BY {field} ORDER BY units DESC LIMIT 8")]
+            # Stock builds are counted separately, not folded into "orders".
+            # A watch we made for ourselves is not a sale, and letting it sit
+            # in the same number quietly inflates how the week looks.
             totals = conn.execute(
-                "SELECT COUNT(*) n, COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) "
-                "revenue, SUM(CASE WHEN source='website' THEN 1 ELSE 0 END) website FROM orders "
+                "SELECT SUM(CASE WHEN COALESCE(is_stock,0)=0 THEN 1 ELSE 0 END) n, "
+                "COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) revenue, "
+                "SUM(CASE WHEN source='website' THEN 1 ELSE 0 END) website, "
+                "SUM(COALESCE(is_stock,0)) stock FROM orders "
                 "WHERE status != 'cancelled' AND (financial_status IS NULL "
                 "OR financial_status NOT IN ('refunded','voided'))").fetchone()
             ncust = conn.execute("SELECT COUNT(*) n FROM customers").fetchone()["n"]
@@ -2227,7 +2265,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, {"sources": sources, "selling": sold,
                          "vocab": order_taxonomy.vocab(), "top_products": top_products,
                          "channels": {"logged": totals["n"] - website, "website": website},
-                         "totals": {"orders": totals["n"], "revenue": totals["revenue"] or 0,
+                         "totals": {"orders": totals["n"] or 0,
+                                    "stock": totals["stock"] or 0,
+                                    "revenue": totals["revenue"] or 0,
                                     "customers": ncust}})
 
     def _handle_orders_update(self):

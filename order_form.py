@@ -251,6 +251,13 @@ OF_CSS = r"""
   a.thumb{position:relative;display:block;width:46px;height:46px;border-radius:7px;
     overflow:hidden;border:1px solid var(--border);background:var(--card-2);}
   a.thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  /* Builds made without a buyer. The convention already existed by hand, with
+     the customer typed as "Self"; this makes it a real field so stock stops
+     being counted as sales. */
+  .stocktog{float:right;font-weight:400;color:var(--muted);font-size:11.5px;
+    display:inline-flex;align-items:center;gap:5px;cursor:pointer;}
+  .stocktog input{width:14px;height:14px;accent-color:var(--accent);cursor:pointer;}
+  .pill.stock{color:var(--accent);background:var(--accent-bg);}
   a.thumb .tn{position:absolute;right:2px;bottom:2px;background:rgba(0,0,0,.68);color:#fff;
     font-size:9.5px;font-weight:700;border-radius:4px;padding:0 4px;}
 
@@ -612,15 +619,25 @@ if(!(navigator.clipboard&&navigator.clipboard.read))$('paste-img').style.display
 
 /* ---------------- save ---------------- */
 function canSave(){
-  $('save').disabled=!($('f-cust').value.trim()&&$('f-product').value.trim());
+  /* A stock build has no buyer to name, so the customer field stops being
+     required the moment "for stock" is ticked. */
+  var stock=$('f-stock').checked;
+  $('save').disabled=!((stock||$('f-cust').value.trim())&&$('f-product').value.trim());
 }
 ['f-cust','f-product'].forEach(function(id){$(id).addEventListener('input',canSave);});
+$('f-stock').addEventListener('change',function(){
+  $('f-cust').placeholder=this.checked?'Self':'';
+  canSave();
+});
 
 $('save').onclick=async function(){
   if(shots.filter(function(p){return !p.path;}).length){toast('A photo is still uploading — one moment');return;}
   var btn=$('save');btn.disabled=true;var label=btn.textContent;btn.textContent='Saving…';
   try{
-    var body={customer_name:$('f-cust').value.trim(),customer_phone:$('f-phone').value.trim(),
+    var stock=$('f-stock').checked;
+    var body={is_stock:stock?1:0,
+      customer_name:$('f-cust').value.trim()||(stock?'Self':''),
+      customer_phone:$('f-phone').value.trim(),
       customer_email:$('f-email').value.trim(),address:$('f-address').value.trim(),
       pincode:$('f-pincode').value.trim(),city:$('f-city').value.trim(),
       state:$('f-state').value.trim(),source:source,product:$('f-product').value.trim(),
@@ -653,6 +670,7 @@ function reset(){
   attrs={};dropped={};drawAttrs();
   /* release the blob URLs before dropping the records, or a long session of
      logging orders on a phone slowly leaks every photo it ever previewed */
+  $('f-stock').checked=false; $('f-cust').placeholder='';
   shots.forEach(function(x){ if(x.url){ try{URL.revokeObjectURL(x.url);}catch(e){} } });
   shots=[];drawShots();
   window.scrollTo({top:0,behavior:'smooth'});
@@ -705,7 +723,8 @@ async function loadOrders(){
           '<td data-l="Logged" class="o-when">'+esc(when(o.received_at))+'</td>'+
           '<td data-l="Source">'+(o.source?'<span class="pill">'+esc(o.source)+'</span>':'')+
             (o.shopify_name?'<div class="o-sub">'+esc(o.shopify_name)+'</div>':'')+'</td>'+
-          '<td data-l="Customer"><div class="o-strong">'+esc(o.customer_name||'')+'</div>'+
+          '<td data-l="Customer"><div class="o-strong">'+esc(o.customer_name||'')+
+            (o.is_stock?' <span class="pill stock">stock</span>':'')+'</div>'+
             (o.customer_phone?'<div class="o-sub">'+esc(o.customer_phone)+'</div>':'')+
             (o.customer_email?'<div class="o-sub">'+esc(o.customer_email)+'</div>':'')+'</td>'+
           '<td data-l="Ship to"><div class="o-sub">'+esc(o.address||'')+
@@ -1075,7 +1094,8 @@ def build():
         <div class="of-sep"></div>
         <div class="of-legend">Customer</div>
         <div class="of-row">
-          <div class="of-field"><label>Name <span class="req">*</span></label>
+          <div class="of-field"><label>Name <span class="req">*</span>
+            <label class="stocktog"><input type="checkbox" id="f-stock">for stock</label></label>
             <input id="f-cust" class="pin" autocomplete="off"></div>
           <div class="of-field"><label>Phone</label>
             <input id="f-phone" class="pin" inputmode="tel" autocomplete="off"></div>
