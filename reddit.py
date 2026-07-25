@@ -117,6 +117,25 @@ CSS = """
 .rd-ask button{margin-top:9px;min-height:38px;border:none;border-radius:var(--r-s);
   background:var(--accent);color:#fff;font:inherit;font-size:13.5px;font-weight:700;
   padding:0 15px;cursor:pointer;}
+
+/* the rota: seven days, so a gap is visible rather than discovered */
+.rd-week{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:1px;
+  background:var(--border);border:1px solid var(--border);border-radius:var(--r-s);
+  overflow:hidden;margin-bottom:16px;}
+.rd-day{background:var(--card);padding:9px 10px;min-height:74px;}
+.rd-day.today{background:var(--accent-bg);}
+.rd-day .d{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+.rd-day .n{font-size:15px;font-weight:750;color:var(--ink);line-height:1.2;}
+.rd-day .who{font-size:11px;color:var(--accent);margin-top:4px;line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;}
+.rd-day .gap{font-size:11px;color:var(--muted);margin-top:4px;font-style:italic;}
+.rd-slot{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:9px;}
+.rd-slot input{font:inherit;font-size:12.5px;border:1px solid var(--border);
+  border-radius:var(--r-s);background:var(--bg);color:var(--ink);padding:6px 9px;}
+.rd-slot input[type=date]{max-width:150px;}
+.rd-slot button{font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;
+  border:1px solid var(--border-2);border-radius:var(--r-s);background:var(--card);
+  color:var(--ink);padding:6px 11px;min-height:34px;}
 .rd-dwhen{font-size:11.5px;color:var(--muted);margin-left:auto;}
 .rd-dtitle{width:100%;font:inherit;font-size:15px;font-weight:700;color:var(--ink);
   border:1px solid transparent;border-radius:var(--r-s);background:none;padding:6px 8px;
@@ -359,8 +378,36 @@ function draftCard(p){
                 '<button data-posted="'+p.id+'">Mark posted</button>'
               : '<span class="rd-meta">Posted '+agoTxt(p.posted_at)+'</span>')+
             '<button class="danger" data-del="'+p.id+'">Discard</button>'+
+          '</div>'+
+          '<div class="rd-slot">'+
+            '<input type="date" data-date="'+p.id+'" value="'+esc(p.slot_date||'')+'" aria-label="Day to post">'+
+            '<input type="text" data-who="'+p.id+'" value="'+esc(p.assigned_to||'')+'" placeholder="Who posts it" aria-label="Who posts it">'+
+            '<button data-slot="'+p.id+'">Put on the rota</button>'+
           '</div>')+
   '</div>';
+}
+
+/* A week at a glance. Colleagues posting on alternate days only works if
+   everyone can see which days already have something and which do not. */
+function drawWeek(){
+  var box=$('week'); if(!box)return;
+  var byDay={};
+  DRAFTS.forEach(function(p){ if(p.slot_date)(byDay[p.slot_date]=byDay[p.slot_date]||[]).push(p); });
+  var out='', today=new Date();
+  for(var i=0;i<7;i++){
+    var d=new Date(today.getFullYear(),today.getMonth(),today.getDate()+i);
+    var key=d.toISOString().slice(0,10);
+    var list=byDay[key]||[];
+    var names=list.map(function(p){return p.assigned_to||'unassigned';});
+    out+='<div class="rd-day'+(i===0?' today':'')+'">'+
+      '<div class="d">'+d.toLocaleDateString(undefined,{weekday:'short'})+'</div>'+
+      '<div class="n">'+d.getDate()+'</div>'+
+      (list.length
+        ? '<div class="who">'+esc(names.join(', '))+'</div>'
+        : '<div class="gap">nothing</div>')+
+    '</div>';
+  }
+  box.innerHTML=out;
 }
 
 function drawDrafts(){
@@ -370,6 +417,16 @@ function drawDrafts(){
     return;
   }
   L.innerHTML=DRAFTS.map(draftCard).join('');
+  L.querySelectorAll('[data-slot]').forEach(function(b){
+    b.onclick=function(){
+      var id=+b.dataset.slot;
+      jpost('/reddit/post/update',{id:id,
+        slot_date:L.querySelector('[data-date="'+id+'"]').value,
+        assigned_to:L.querySelector('[data-who="'+id+'"]').value})
+        .then(function(){ toast('On the rota'); loadDrafts(); })
+        .catch(function(e){ toast(e.message); });
+    };
+  });
   L.querySelectorAll('[data-send]').forEach(function(b){
     b.onclick=function(){
       var id=+b.dataset.send;
@@ -422,7 +479,7 @@ async function loadDrafts(){
   try{
     var d=await api('/reddit/posts');
     DRAFTS=d.posts||[]; SUBREDDIT=d.subreddit||SUBREDDIT;
-    drawDrafts();
+    drawWeek(); drawDrafts();
     /* poll only while something is actually being written */
     var busy=DRAFTS.some(function(p){return p.status==='queued'||p.status==='running';});
     clearTimeout(pollT);
@@ -493,6 +550,7 @@ def build():
           Five passes on Hermes &mdash; research, draft, audit, humanise, verify.
           Takes a minute or two; you&rsquo;ll get a message when it&rsquo;s ready.</p>
       </div>
+      <div class="rd-week" id="week"></div>
       <div id="draftlist"><div class="rd-empty">Loading&hellip;</div></div>
     </div>
     {hub_footer()}

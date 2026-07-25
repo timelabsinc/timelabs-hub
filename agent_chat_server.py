@@ -359,7 +359,10 @@ def _ensure_reddit_schema():
                      "ON reddit_posts(status)")
         pcols = {r[1] for r in conn.execute("PRAGMA table_info(reddit_posts)")}
         for col, decl in (("question", "TEXT"), ("answer", "TEXT"),
-                          ("rounds", "INTEGER DEFAULT 0")):
+                          ("rounds", "INTEGER DEFAULT 0"),
+                          # Several people posting to one sub needs a rota, or
+                          # you get two posts on Tuesday and nothing until Friday.
+                          ("slot_date", "TEXT"), ("assigned_to", "TEXT")):
             if col not in pcols:
                 conn.execute(f"ALTER TABLE reddit_posts ADD COLUMN {col} {decl}")
         conn.commit()
@@ -3774,7 +3777,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._json(404, {"error": "no such draft"})
             return
-        if p.get("posted"):
+        if p.get("slot_date") is not None or p.get("assigned_to") is not None:
+            conn.execute("UPDATE reddit_posts SET slot_date=?, assigned_to=? WHERE id=?",
+                         (str(p.get("slot_date") or "")[:10] or None,
+                          str(p.get("assigned_to") or "")[:80] or None, pid))
+        elif p.get("posted"):
             conn.execute("UPDATE reddit_posts SET status='posted', "
                          "posted_at=datetime('now'), posted_url=? WHERE id=?",
                          (str(p.get("url") or "")[:400], pid))
