@@ -45,9 +45,17 @@ import xml.etree.ElementTree as ET
 ENV_PATH = "/root/ops-dashboard/.env"
 USER_AGENT = "timelabs-labsos/1.0 by /u/Brief_Client_2900"
 
-# Home turf first, broadest reach last. India-specific subs get added here
-# once a named community is picked — see reference_reddit_timelabs memory.
-TARGET_SUBS = ["SeikoMods", "Watches", "watchmodding", "Seiko"]
+# Home turf first, India-specific communities next, broadest reach last.
+# r/Watches and r/Seiko sit at the end deliberately, not omitted: both are
+# huge/strict on vendor self-promo (see reference_reddit_timelabs memory), so
+# a keyword hit there is far more often noise than a real opportunity for an
+# India-focused Seiko-mod brand. watchesindia/WatchEnthusiastIndia/
+# WatchCollectorsIndia/IndiaWatchExchange are the actually-relevant India
+# watch communities found via r/all search 2026-07-25 — they were missing
+# entirely before, which is why "other subreddit" recommendations read as
+# irrelevant: the Listener was mostly watching threads with no India angle.
+TARGET_SUBS = ["SeikoMods", "watchmodding", "watchesindia", "WatchEnthusiastIndia",
+               "WatchCollectorsIndia", "IndiaWatchExchange", "Watches", "Seiko"]
 
 # Cheap keyword heuristics for a first pass at tagging — good enough to sort
 # the inbox by likely value without calling a model per thread. A human

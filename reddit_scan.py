@@ -17,7 +17,13 @@ DB = "/root/ops-dashboard/data/hermes.db"
 
 
 def main():
-    subs = reddit_api.TARGET_SUBS + ["IndiaWatchMods"]
+    # Weighted by repetition, not a scheduler — simplest way to check some
+    # subs more often without adding a new concept. IndiaWatchMods is our own
+    # sub (small, and catching a new post/comment there quickly matters most);
+    # SeikoMods is the biggest realistic opportunity pool. Everything else
+    # once per lap.
+    subs = (["IndiaWatchMods"] * 3 + ["SeikoMods"] * 2 +
+            [s for s in reddit_api.TARGET_SUBS if s != "SeikoMods"])
     # rotate by the hour so each sub comes round without keeping state
     sub = subs[int(time.time() // 3600) % len(subs)]
     try:
