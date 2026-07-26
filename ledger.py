@@ -81,7 +81,7 @@ def build():
 
     sku_rows = ""
     for name, cat, price, cost, status in skus:
-        if cost:
+        if cost and price:
             margin = 100 * (price - cost) / price
             mcls = "good" if margin >= 55 else ("warn" if margin >= 35 else "crit")
             mtxt = f'<span class="pill {mcls}">{margin:.0f}%</span>'
