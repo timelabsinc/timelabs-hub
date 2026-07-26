@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import subprocess
 import threading
@@ -33,6 +34,12 @@ UPLOAD_DIR = "/root/ops-dashboard/data/uploads"
 # nginx can't reach it, so the only way to a photo is through a role-checked
 # endpoint here, never a guessable static URL.
 ORDER_PHOTOS = "/root/ops-dashboard/data/order-photos"
+# Labs Drop's storage root — a separate service (drop_server.py, :8903) owns
+# this, but it's local disk on the same box, so copying a picked photo into
+# UPLOAD_DIR is a plain file copy rather than a round trip through Drop's own
+# HTTP API. See _drop_safe_path, which mirrors drop_server.safe_rel exactly
+# since the two processes don't share code.
+DROP_ROOT = "/srv/timelabs-drop"
 THEME_BACKUPS = "/root/ops-dashboard/theme-backups"
 FS_ROOT = "/root"   # System-files browser is confined to the Hermes home
 # Chat-photo cap. Modern phone photos routinely exceed the old 11 MB ceiling;
@@ -42,6 +49,12 @@ FS_ROOT = "/root"   # System-files browser is confined to the Hermes home
 MAX_UPLOAD_MB = 32
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 LOCK = threading.Lock()
+# Serializes theme apply/revert's read-modify-write specifically — LOCK above
+# guards the shared Hermes agent process and would be too broad to reuse here
+# (an in-flight research run would block an unrelated theme edit for no
+# reason). Without this, two near-simultaneous applies both read the same
+# pre-change settings and the later PUT silently wins, dropping the other.
+THEME_LOCK = threading.Lock()
 # Fast requests answer synchronously within the soft wait; anything longer keeps
 # running in a background thread (up to the hard cap) and lands in the thread
 # via history polling — long tasks are no longer killed at the HTTP boundary.
@@ -95,9 +108,17 @@ def write_env(updates):
     for k, v in updates.items():
         if k not in seen:
             out.append(f"{k}={v}")
-    with open(ENV_FILE, "w") as f:
+    # Every other writer in this codebase (product_builder.py, reddit.py,
+    # drop_server.py's upload finish, ...) writes to a temp file then
+    # os.replace()s it, specifically so a crash mid-write can't leave the
+    # target half-written. This is the one file where that matters most —
+    # a truncated .env loses every credential the whole OS depends on, not
+    # just one tool's data — and it was writing in place directly.
+    tmp = ENV_FILE + ".tmp"
+    with open(tmp, "w") as f:
         f.write("\n".join(out) + "\n")
-    os.chmod(ENV_FILE, 0o600)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, ENV_FILE)
 
 
 def hub_event(kind, detail, actor="?", app="key"):
@@ -574,17 +595,55 @@ def theme_prompt(request, flat_settings):
     )
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A URL that resolves to a safe host on the first request could still
+    redirect somewhere internal on the hop — a real fetch happens either way,
+    so the host check below has to hold for every request actually made, not
+    just the one the caller typed. Simplest correct answer: don't follow
+    redirects at all. Every real caller (Drop /raw links, a pasted product
+    image URL) works fine without one."""
+    def redirect_request(self, *a, **k):
+        return None
+
+
+def _safe_image_host(url):
+    """Reject a URL whose host resolves to loopback/private/link-local/
+    reserved space, so an admin-authenticated /shopify/product/ai-draft call
+    can't be pointed at internal-only services on this box or a cloud
+    metadata endpoint. Was previously scheme-only (any http(s) URL, no host
+    check at all)."""
+    import ipaddress
+    import socket
+    host = urllib.parse.urlparse(url).hostname
+    if not host:
+        return False
+    try:
+        addrs = {info[4][0] for info in socket.getaddrinfo(host, None)}
+    except OSError:
+        return False
+    for addr in addrs:
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast):
+            return False
+    return True
+
+
 def _download_images(urls, limit=4):
     """Fetch a few image URLs (Drop /raw links or external) to local temp files
     so the vision model can see them. Returns [(path, url)], skipping failures."""
+    opener = urllib.request.build_opener(_NoRedirect)
     saved = []
     for u in urls[:limit]:
         u = str(u).strip()
-        if not u.startswith(("http://", "https://")):
+        if not u.startswith(("http://", "https://")) or not _safe_image_host(u):
             continue
         try:
             req = urllib.request.Request(u, headers={"User-Agent": "LabsOS/1.0"})
-            with urllib.request.urlopen(req, timeout=25) as r:
+            with opener.open(req, timeout=25) as r:
                 ctype = (r.headers.get("Content-Type") or "").lower()
                 data = r.read(9 * 1024 * 1024)  # cap ~9MB per image
         except Exception:
@@ -600,6 +659,25 @@ def _download_images(urls, limit=4):
         except OSError:
             pass
     return saved
+
+
+def _drop_safe_path(rel, name):
+    """Resolve a Drop folder-path + filename to an absolute path inside
+    DROP_ROOT, or None if it's missing or tries to escape. Mirrors
+    drop_server.py's safe_rel/safe_name — duplicated rather than imported
+    since Drop runs as its own process on :8903."""
+    rel = (rel or "").strip().strip("/")
+    name = (name or "").strip()
+    if (not name or len(name) > 200 or "/" in name or "\\" in name
+            or name.startswith(".") or any(ord(c) < 0x20 for c in name)):
+        return None
+    parts = rel.split("/") if rel else []
+    if any(p in ("", ".", "..") or p.startswith(".") for p in parts):
+        return None
+    path = os.path.realpath(os.path.join(DROP_ROOT, *parts, name))
+    if not path.startswith(DROP_ROOT + os.sep):
+        return None
+    return path
 
 
 def ai_product_prompt(saved, hint=""):
@@ -1667,15 +1745,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "no changes to apply"}); return
         import shopify_api
         try:
-            theme, raw, data = shopify_api.get_settings_data()
-            new_current, applied, skipped = shopify_api.apply_theme_patch(data["current"], patch)
-            if not applied:
-                self._json(200, {"ok": True, "applied": 0, "skipped": len(skipped)}); return
-            ts = int(time.time())
-            with open(os.path.join(THEME_BACKUPS, f"{theme['id']}-{ts}.json"), "w") as f:
-                f.write(raw)  # full snapshot for one-click revert
-            data["current"] = new_current
-            shopify_api.put_settings_data(theme["id"], json.dumps(data, ensure_ascii=False))
+            with THEME_LOCK:
+                theme, raw, data = shopify_api.get_settings_data()
+                new_current, applied, skipped = shopify_api.apply_theme_patch(data["current"], patch)
+                if not applied:
+                    self._json(200, {"ok": True, "applied": 0, "skipped": len(skipped)}); return
+                # token_hex suffix, not just the second-resolution timestamp:
+                # two applies landing in the same second used to collide and
+                # silently clobber each other's backup file.
+                ts = int(time.time())
+                fname = f"{theme['id']}-{ts}-{secrets.token_hex(4)}.json"
+                with open(os.path.join(THEME_BACKUPS, fname), "w") as f:
+                    f.write(raw)  # full snapshot for one-click revert
+                data["current"] = new_current
+                shopify_api.put_settings_data(theme["id"], json.dumps(data, ensure_ascii=False))
         except shopify_api.ShopifyError as e:
             self._json(502, {"error": str(e)}); return
         actor = (self.headers.get("X-User-Email") or "?").strip().lower()
@@ -1691,17 +1774,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             theme = shopify_api.theme_main()
         except shopify_api.ShopifyError as e:
             self._json(502, {"error": str(e)}); return
-        backups = sorted(f for f in os.listdir(THEME_BACKUPS) if f.startswith(theme["id"] + "-"))
-        if not backups:
-            self._json(404, {"error": "nothing to revert"}); return
-        newest = os.path.join(THEME_BACKUPS, backups[-1])
         try:
-            with open(newest) as f:
-                raw = f.read()
-            shopify_api.put_settings_data(theme["id"], raw)
+            with THEME_LOCK:
+                backups = sorted(f for f in os.listdir(THEME_BACKUPS)
+                                 if f.startswith(theme["id"] + "-"))
+                if not backups:
+                    self._json(404, {"error": "nothing to revert"}); return
+                newest = os.path.join(THEME_BACKUPS, backups[-1])
+                with open(newest) as f:
+                    raw = f.read()
+                shopify_api.put_settings_data(theme["id"], raw)
+                os.remove(newest)   # consume the undo step
         except shopify_api.ShopifyError as e:
             self._json(502, {"error": str(e)}); return
-        os.remove(newest)   # consume the undo step
         actor = (self.headers.get("X-User-Email") or "?").strip().lower()
         hub_event("theme_revert", f"reverted last change on {theme['name']}", actor, app="shopify")
         self._json(200, {"ok": True, "remaining": len(backups) - 1})
@@ -2330,6 +2415,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              f"tracking.",
                     "locked_fields": blocked})
                 return
+        if "status" in p and p["status"] not in STATUSES:
+            conn.close()
+            self._json(400, {"error": f"'{p['status']}' isn't a real status"})
+            return
         updatable = dict(always)
         if not locked:
             updatable.update(lockable)
@@ -2668,6 +2757,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         The SELECT itself never names a PII or price column, so there is no
         code path here that could leak one even by accident — this isn't a
         matter of the response happening to omit fields the UI doesn't show.
+        That's also why orders.notes (free-typed staff shorthand — sizing,
+        deadlines, and just as easily a customer's number or address) is
+        deliberately absent: it's a different channel from the supplier's
+        own note box, which travels through order_events (the 'note' kind
+        in the timeline below) and is fine for them to see.
 
         No separate "paid" flag: `status` already has a paid stage, and it
         means "we've paid the supplier" — Shopify's financial_status means
@@ -2684,7 +2778,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # supplier_cost is the supplier's OWN price to us — safe to
                 # return here, unlike price_inr (what the customer pays),
                 # which stays absent from this SELECT entirely.
-                "SELECT id, received_at, product, quantity, status, notes, "
+                "SELECT id, received_at, product, quantity, status, "
                 "case_style, dial_colour, dial_style, case_colour, movement, "
                 "watch_size, local_photos, tracking_code, ref_code, "
                 "supplier_cost, supplier_cost_ccy, bill_id FROM orders "
@@ -3203,14 +3297,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(500, {"error": f"couldn't write to the Ledger: {e}"})
             return
 
-        conn.execute("UPDATE supplier_bills SET status='acknowledged', "
-                     "acknowledged_at=datetime('now'), acknowledged_by=?, "
-                     "ledger_invoice_id=? WHERE id=?", (actor, invoice_id, bid))
-        for it in items:
-            if it["order_id"]:
-                order_event(conn, it["order_id"], "bill_acknowledged",
-                            f"bill {bill['bill_no']} acknowledged — cost locked", actor)
-        conn.commit()
+        try:
+            conn.execute("UPDATE supplier_bills SET status='acknowledged', "
+                         "acknowledged_at=datetime('now'), acknowledged_by=?, "
+                         "ledger_invoice_id=? WHERE id=?", (actor, invoice_id, bid))
+            for it in items:
+                if it["order_id"]:
+                    order_event(conn, it["order_id"], "bill_acknowledged",
+                                f"bill {bill['bill_no']} acknowledged — cost locked", actor)
+            conn.commit()
+        except Exception as e:
+            conn.close()
+            # The Ledger invoice above is already committed in a separate
+            # database — two connections, no shared transaction, so this
+            # can't roll back atomically. Undo it by hand rather than leave
+            # an invoice with no bill pointing at it (permanently inflates
+            # Ledger totals, invisible from this side). If even that fails,
+            # this is now the one place that knows about the orphan, so it
+            # says so loudly instead of a bare 500.
+            try:
+                lconn = sqlite3.connect(SUPPLIERS_DB, timeout=5)
+                lconn.execute("DELETE FROM invoice_items WHERE invoice_id=?", (invoice_id,))
+                lconn.execute("DELETE FROM invoices WHERE id=?", (invoice_id,))
+                lconn.commit()
+                lconn.close()
+                self._json(500, {"error": f"couldn't mark the bill acknowledged: {e}"})
+            except Exception as e2:
+                print(f"[supplier-bill] ORPHANED ledger invoice {invoice_id} for bill "
+                      f"{bid} ({bill['bill_no']}) — hermes.db update failed ({e}) and "
+                      f"the compensating Ledger delete also failed ({e2}); needs manual "
+                      f"cleanup in suppliers.db", flush=True)
+                self._json(500, {"error": f"couldn't mark the bill acknowledged, and "
+                                           f"couldn't undo the Ledger invoice either "
+                                           f"(id {invoice_id}) — needs manual cleanup"})
+            return
         conn.close()
         hub_event("supplier_bill", f"{bill['bill_no']} acknowledged — "
                                    f"{bill['currency']} {bill['total']:,.2f} to Ledger",
@@ -3262,12 +3382,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 conn.execute("UPDATE orders SET bill_id=NULL WHERE id=?", (it["order_id"],))
                 order_event(conn, it["order_id"], "bill_deleted",
                             f"bill {bill['bill_no']} deleted — cost editable again", actor)
-        # Payments pointed at this bill go back to being general credit rather
-        # than vanishing with it — the money was still sent.
-        conn.execute("UPDATE supplier_payments SET bill_id=NULL WHERE bill_id=?", (bid,))
-        conn.execute("DELETE FROM supplier_bill_items WHERE bill_id=?", (bid,))
-        conn.execute("DELETE FROM supplier_bills WHERE id=?", (bid,))
-        conn.commit()
+        try:
+            # Payments pointed at this bill go back to being general credit
+            # rather than vanishing with it — the money was still sent.
+            conn.execute("UPDATE supplier_payments SET bill_id=NULL WHERE bill_id=?", (bid,))
+            conn.execute("DELETE FROM supplier_bill_items WHERE bill_id=?", (bid,))
+            conn.execute("DELETE FROM supplier_bills WHERE id=?", (bid,))
+            conn.commit()
+        except Exception as e:
+            conn.close()
+            # The Ledger invoice is already gone from the other database at
+            # this point, committed separately — no shared transaction to
+            # roll back to. Nothing to compensate with (the deleted invoice's
+            # data isn't held onto), so this can only say plainly what's now
+            # out of sync rather than silently leaving bid's ledger_invoice_id
+            # pointing at nothing.
+            print(f"[supplier-bill] bill {bid} ({bill['bill_no']}): Ledger invoice "
+                  f"{bill['ledger_invoice_id']} was deleted but the hermes.db side failed "
+                  f"({e}) — the bill row is now inconsistent, needs manual cleanup", flush=True)
+            self._json(500, {"error": f"the Ledger entry was reversed, but removing the "
+                                       f"bill itself failed: {e} — needs manual cleanup"})
+            return
         conn.close()
         hub_event("supplier_bill", f"{bill['bill_no']} deleted and reversed", actor, "supplier")
         self._json(200, {"ok": True})
@@ -3692,6 +3827,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except (json.JSONDecodeError, TypeError):
                 r["passes"] = {}
         self._json(200, {"posts": rows, "subreddit": "IndiaWatchMods"})
+
+    def _handle_reddit_drop_photo(self):
+        """Copy a photo the owner picked from Labs Drop into the same upload
+        area a phone photo lands in, so the compose flow can pull an existing
+        build/order photo instead of only a fresh device upload. Returns the
+        same {"path": ...} shape as /upload, so the frontend treats both
+        sources identically once picked."""
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        src = _drop_safe_path(p.get("path", ""), p.get("name", ""))
+        if not src or not os.path.isfile(src):
+            self._json(404, {"error": "photo not found"})
+            return
+        ext = os.path.splitext(src)[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+            self._json(400, {"error": "only jpg, png, or webp images"})
+            return
+        dst = os.path.join(UPLOAD_DIR, secrets.token_hex(8) + ext)
+        try:
+            shutil.copyfile(src, dst)
+        except OSError as e:
+            self._json(500, {"error": str(e)})
+            return
+        self._json(200, {"path": dst})
 
     def _handle_reddit_post_create(self):
         """Queue a draft and run the five-pass pipeline in the background.
@@ -4689,6 +4855,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(200, {"pending": True, "reply": None})
 
     def _handle_upload(self):
+        if not self._admin_email():
+            self._json(403, {"error": "admins only"})
+            return
         ctype = self.headers.get("Content-Type", "")
         m = re.search(r'boundary="?([^";]+)"?', ctype)
         length = int(self.headers.get("Content-Length", 0))
@@ -4721,6 +4890,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(400, {"error": "no image field found"})
 
     def _handle_export_pdf(self):
+        if not self._admin_email():
+            self._json(403, {"error": "admins only"})
+            return
         length = int(self.headers.get("Content-Length", 0))
         try:
             payload = json.loads(self.rfile.read(min(length, 512 * 1024)).decode())
@@ -4745,6 +4917,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(pdf)
 
     def _handle_plan_toggle(self):
+        if not self._admin_email():
+            self._json(403, {"error": "admins only"})
+            return
         length = int(self.headers.get("Content-Length", 0))
         try:
             payload = json.loads(self.rfile.read(min(length, 4096)).decode())
@@ -4791,6 +4966,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     )
 
     def _handle_research_run(self):
+        if not self._admin_email():
+            self._json(403, {"error": "admins only"})
+            return
         if not LOCK.acquire(blocking=False):
             self._json(409, {"error": "agent is busy — try again shortly"})
             return
@@ -4888,6 +5066,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_reddit_reply_create()
         elif path == "/reddit/reply/update":
             self._handle_reddit_reply_update()
+        elif path == "/reddit/drop-photo":
+            self._handle_reddit_drop_photo()
         elif path == "/reddit/post/create":
             self._handle_reddit_post_create()
         elif path == "/reddit/post/answer":
