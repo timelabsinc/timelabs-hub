@@ -56,6 +56,11 @@ CSS = """
 .rd-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .rd-sr{font-weight:650;color:var(--accent);font-size:12.5px;}
 .rd-meta{color:var(--muted);font-size:12px;}
+/* The card's bottom line. It carries a button, so it has to be a flex row:
+   .rd-reply asks for margin-left:auto and on a plain block .rd-meta that
+   computes to 0, which glued "Draft a reply" to the end of the counts with
+   no gap and left ~680px of empty card to its right on a desktop. */
+.rd-foot{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;}
 .rd-tag{font-size:10.5px;font-weight:650;text-transform:uppercase;letter-spacing:.03em;
   padding:2px 7px;border-radius:5px;}
 .rd-tag.buying_intent{color:#3f7d4f;background:var(--good-bg);}
@@ -93,6 +98,48 @@ CSS = """
   cursor:pointer;padding:0;}
 .rd-add{width:64px;height:64px;border:1px dashed var(--border-2);border-radius:8px;
   background:none;color:var(--muted);font-size:22px;cursor:pointer;}
+.rd-adddrop{width:64px;height:64px;border:1px dashed var(--border-2);border-radius:8px;
+  background:none;color:var(--muted);font-size:10.5px;font-weight:650;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  line-height:1.2;}
+.rd-adddrop svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8;}
+
+/* Drop photo picker — same modal/grid pattern as the Product builder's, so a
+   photo picked from Drop looks and behaves the same wherever it's offered. */
+.rd-modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;
+  align-items:flex-end;justify-content:center;z-index:60;}
+.rd-modal.open{display:flex;}
+@media(min-width:640px){ .rd-modal{align-items:center;} }
+.rd-sheet{background:var(--bg);width:100%;max-width:640px;max-height:85vh;
+  border-radius:16px 16px 0 0;display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:var(--shadow-lg);}
+@media(min-width:640px){ .rd-sheet{border-radius:16px;} }
+.rd-sheet header{display:flex;align-items:center;gap:10px;padding:14px 16px;
+  border-bottom:1px solid var(--border);}
+.rd-sheet header b{flex:1;font-size:15px;}
+.rd-sheet .x{border:none;background:none;font-size:22px;color:var(--muted);
+  cursor:pointer;line-height:1;}
+.rd-crumbs{font-size:12.5px;color:var(--muted);padding:9px 16px;
+  border-bottom:1px solid var(--border);}
+.rd-crumbs a{color:var(--accent);cursor:pointer;}
+.rd-pickgrid{overflow:auto;padding:12px 16px;display:grid;align-items:start;
+  grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px;}
+.rd-pick{position:relative;border-radius:9px;overflow:hidden;border:2px solid transparent;
+  cursor:pointer;aspect-ratio:1;background:var(--card-2);}
+.rd-pick.sel{border-color:var(--accent);}
+.rd-pick.folder{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:var(--card-2);border-color:var(--border);color:var(--muted);gap:5px;padding:6px;
+  text-align:center;}
+.rd-pick.folder svg{width:34px;height:34px;stroke:var(--accent);fill:var(--accent-bg);stroke-width:1.6;}
+.rd-pick.folder small{font-size:10.5px;line-height:1.2;overflow:hidden;max-height:24px;}
+.rd-pick img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;}
+.rd-pick .chk{position:absolute;top:4px;right:4px;width:19px;height:19px;border-radius:50%;
+  background:var(--accent);color:#fff;font-size:12px;display:none;align-items:center;
+  justify-content:center;}
+.rd-pick.sel .chk{display:flex;}
+.rd-sheet footer{padding:12px 16px;border-top:1px solid var(--border);display:flex;
+  gap:10px;align-items:center;}
+.rd-sheet footer .rd-go{margin:0;flex:1;text-align:center;}
 .rd-go{margin-top:14px;min-height:var(--tap);border:none;border-radius:var(--r-s);
   background:var(--accent);color:#fff;font:inherit;font-size:14.5px;font-weight:700;
   padding:0 18px;cursor:pointer;}
@@ -190,7 +237,7 @@ CSS = """
 """
 
 JS = """
-var API='/ops/agent/api';
+var API='/ops/agent/api', DROP='/drop/api';
 function $(id){return document.getElementById(id);}
 function esc(s){var d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
 var toastT;
@@ -230,8 +277,15 @@ function draw(){
     return;
   }
   $('list').innerHTML=rows.map(function(t){
-    var upvotes = t.score==null ? '&mdash;' : t.score;
-    var comments = t.num_comments==null ? '&mdash;' : t.num_comments;
+    /* On the RSS feed — which is what runs until the OAuth ticket clears —
+       Reddit gives us neither count, so every card used to read
+       "— upvotes · — comments": two blanks per row saying nothing the banner
+       at the top of the page doesn't already say. Show the counts only when
+       there are counts; this lights up on its own once the app is connected. */
+    var counts = [];
+    if(t.score!=null) counts.push(t.score+' upvotes');
+    if(t.num_comments!=null) counts.push(t.num_comments+' comments');
+    var countTxt = counts.join(' &middot; ');
     return '<div class="rd-card">'
       +'<div class="rd-top">'
       +'<span class="rd-sr">r/'+esc(t.subreddit)+'</span>'
@@ -240,7 +294,7 @@ function draw(){
       +'<span class="rd-score">score '+ (t.opportunity_score||0).toFixed(2) +'</span>'
       +'</div>'
       +'<a class="rd-title" href="'+esc(t.permalink)+'" target="_blank" rel="noopener">'+esc(t.title)+'</a>'
-      +'<div class="rd-meta">'+upvotes+' upvotes &middot; '+comments+' comments'
+      +'<div class="rd-foot">'+(countTxt?'<span>'+countTxt+'</span>':'')
       +'<button class="rd-reply" data-reply="'+t.id+'">Draft a reply</button></div>'
       +'</div>';
   }).join('');
@@ -325,7 +379,9 @@ function drawShots(){
   box.innerHTML=SHOTS.map(function(s,i){
     return '<div class="rd-shot"><img src="'+s.url+'" alt="">'+
       '<button data-rm="'+i+'" aria-label="Remove">&times;</button></div>';
-  }).join('')+'<button class="rd-add" id="c-add" aria-label="Add photos">+</button>';
+  }).join('')+'<button class="rd-add" id="c-add" aria-label="Add photos from this device">+</button>'+
+    '<button class="rd-adddrop" id="c-adddrop" aria-label="Add photos from Drop">'+
+    '<svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>Drop</button>';
   box.querySelectorAll('[data-rm]').forEach(function(b){
     b.onclick=function(){
       var i=+b.dataset.rm;
@@ -334,6 +390,7 @@ function drawShots(){
     };
   });
   $('c-add').onclick=function(){ $('c-file').click(); };
+  $('c-adddrop').onclick=openPicker;
 }
 drawShots();
 
@@ -354,6 +411,86 @@ $('c-file').onchange=async function(){
       rec.path=d.path;
     }catch(e){ toast(e.message); }
   }
+};
+
+/* ---- Drop photo picker — same pattern as the Product builder's ---- */
+var pk={path:'',sel:{}};
+function openPicker(){ pk.sel={}; $('rd-picker').classList.add('open'); loadDrop(''); }
+$('pk-x').onclick=function(){ $('rd-picker').classList.remove('open'); };
+$('rd-picker').addEventListener('click',function(e){
+  if(e.target===$('rd-picker'))$('rd-picker').classList.remove('open');
+});
+async function dropApi(url,opts){
+  var r=await fetch(url,opts);
+  if(r.status===403){ throw new Error("This account can't open Drop."); }
+  var d=await r.json().catch(function(){return {};});
+  if(!r.ok)throw new Error(d.error||'Something went wrong');
+  return d;
+}
+async function loadDrop(path){
+  pk.path=path;
+  $('pk-grid').innerHTML='<span class="rd-empty" style="grid-column:1/-1">Loading&hellip;</span>';
+  var crumbs='<a data-p="">Drop</a>', acc='';
+  path.split('/').filter(Boolean).forEach(function(seg){
+    acc=(acc?acc+'/':'')+seg;
+    crumbs+=' / <a data-p="'+esc(acc)+'">'+esc(seg)+'</a>';
+  });
+  $('pk-crumbs').innerHTML=crumbs;
+  $('pk-crumbs').querySelectorAll('a').forEach(function(a){
+    a.onclick=function(){ loadDrop(a.dataset.p); };
+  });
+  try{
+    var d=await dropApi(DROP+'/list?path='+encodeURIComponent(path));
+    var html='';
+    (d.dirs||[]).forEach(function(dir){
+      html+='<div class="rd-pick folder" data-dir="'+esc(dir.name)+'">'+
+        '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>'+
+        '<small>'+esc(dir.name)+'</small></div>';
+    });
+    (d.files||[]).filter(function(f){ return f.kind==='image'; }).forEach(function(f){
+      var full=(path?path+'/':'')+f.name;
+      html+='<div class="rd-pick" data-name="'+esc(f.name)+'">'+
+        '<img loading="lazy" src="'+DROP+'/thumb?path='+encodeURIComponent(full)+'&big=1" alt="">'+
+        '<span class="chk">&#10003;</span></div>';
+    });
+    $('pk-grid').innerHTML=html||'<span class="rd-empty" style="grid-column:1/-1">No photos in this folder.</span>';
+    $('pk-grid').querySelectorAll('.rd-pick.folder').forEach(function(el){
+      el.onclick=function(){ loadDrop((path?path+'/':'')+el.dataset.dir); };
+    });
+    $('pk-grid').querySelectorAll('.rd-pick:not(.folder)').forEach(function(el){
+      el.onclick=function(){
+        var key=(path?path+'/':'')+el.dataset.name;
+        if(pk.sel[key]){ delete pk.sel[key]; el.classList.remove('sel'); }
+        else{ pk.sel[key]={path:path,name:el.dataset.name}; el.classList.add('sel'); }
+        updatePkCount();
+      };
+    });
+  }catch(e){ $('pk-grid').innerHTML='<span class="rd-empty" style="grid-column:1/-1">'+esc(e.message)+'</span>'; }
+}
+function updatePkCount(){
+  var n=Object.keys(pk.sel).length;
+  $('pk-count').textContent=n?(n+' selected'):'';
+  $('pk-add').textContent=n?('Add '+n+' photo'+(n>1?'s':'')):'Add photos';
+}
+$('pk-add').onclick=async function(){
+  var items=Object.values(pk.sel);
+  if(!items.length){ $('rd-picker').classList.remove('open'); return; }
+  this.disabled=true; this.textContent='Adding\\u2026';
+  var added=0;
+  for(var i=0;i<items.length;i++){
+    if(SHOTS.length>=12){ toast('12 photos is plenty'); break; }
+    try{
+      var d=await api('/reddit/drop-photo',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(items[i])});
+      SHOTS.push({url:DROP+'/thumb?path='+encodeURIComponent((items[i].path?items[i].path+'/':'')+items[i].name)+'&big=1',
+        path:d.path});
+      added++;
+    }catch(e){ toast(e.message); }
+  }
+  this.disabled=false; this.textContent='Add photos';
+  $('rd-picker').classList.remove('open');
+  drawShots();
+  if(added)toast(added+' photo'+(added===1?'':'s')+' added');
 };
 
 $('c-go').onclick=async function(){
@@ -712,6 +849,17 @@ def build():
     {hub_footer()}
   </main>
 </div>
+
+<div class="rd-modal" id="rd-picker"><div class="rd-sheet">
+  <header><b>Pick photos from Drop</b><button class="x" id="pk-x">&times;</button></header>
+  <div class="rd-crumbs" id="pk-crumbs"></div>
+  <div class="rd-pickgrid" id="pk-grid"></div>
+  <footer>
+    <span class="rd-empty" id="pk-count" style="margin:0;flex:1;padding:0"></span>
+    <button class="rd-go" id="pk-add">Add photos</button>
+  </footer>
+</div></div>
+
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>{WHOAMI_JS}</script>
 <script>{JS}</script>

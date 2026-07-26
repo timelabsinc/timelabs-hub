@@ -131,8 +131,9 @@ def build():
     aspect-ratio:1;background:var(--card-2);}}
   .pick.sel{{border-color:var(--accent);}}
   .pick.folder{{display:flex;flex-direction:column;align-items:center;justify-content:center;
-    color:var(--muted);gap:4px;padding:6px;text-align:center;}}
-  .pick.folder svg{{width:26px;height:26px;stroke:var(--accent);fill:none;stroke-width:1.6;}}
+    background:var(--card-2);border-color:var(--border);color:var(--muted);gap:5px;padding:6px;
+    text-align:center;}}
+  .pick.folder svg{{width:34px;height:34px;stroke:var(--accent);fill:var(--accent-bg);stroke-width:1.6;}}
   .pick.folder small{{font-size:10.5px;line-height:1.2;overflow:hidden;max-height:24px;}}
   .pick img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;}}
   .pick .chk{{position:absolute;top:4px;right:4px;width:19px;height:19px;border-radius:50%;
@@ -306,6 +307,8 @@ function done(d){{
       '<div class="tick">&#10003;</div>'+
       '<h2>'+esc(form.title)+' created</h2>'+
       '<p>'+(live?'It\\'s live on your store now.':'Saved as a draft — activate it when you\\'re ready.')+'</p>'+
+      (d.price_warning?'<p class="hint" style="color:var(--bad)">'+esc(d.price_warning)+
+        ' Set it in the updater before this goes live.</p>':'')+
       '<div class="row">'+
         '<a class="btn" href="'+esc(d.admin_url)+'" target="_blank" rel="noopener">Open in Shopify</a>'+
         (live?'':'<a class="btn" href="/ops/product-updater.html">Manage in Quick updater</a>')+
