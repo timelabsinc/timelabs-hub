@@ -385,20 +385,27 @@ def flatten_theme_settings(current):
     return out
 
 
+_COERCE_FAILED = object()
+
+
 def _coerce(old, val):
-    """Coerce a new value to match the existing value's type."""
+    """Coerce a new value to match the existing value's type, or
+    _COERCE_FAILED if it can't be — e.g. the AI proposed a non-numeric string
+    for an int setting. Previously returned `old` unchanged on failure, which
+    made a failed coercion indistinguishable from "no change" to the caller:
+    the key silently vanished from both applied and skipped."""
     if isinstance(old, bool):
         return val if isinstance(val, bool) else str(val).strip().lower() in ("true", "1", "yes", "on")
     if isinstance(old, int) and not isinstance(old, bool):
         try:
             return int(float(val))
         except (TypeError, ValueError):
-            return old
+            return _COERCE_FAILED
     if isinstance(old, float):
         try:
             return float(val)
         except (TypeError, ValueError):
-            return old
+            return _COERCE_FAILED
     return str(val)
 
 
@@ -414,14 +421,18 @@ def apply_theme_patch(current, patch):
             leaf = parts[3]
             if leaf in node and not isinstance(node[leaf], (dict, list)):
                 new = _coerce(node[leaf], val)
-                if new != node[leaf]:
+                if new is _COERCE_FAILED:
+                    skipped.append(key)
+                elif new != node[leaf]:
                     applied[key] = {"old": node[leaf], "new": new}
                     node[leaf] = new
             else:
                 skipped.append(key)
         elif key in cur and not isinstance(cur[key], (dict, list)):
             new = _coerce(cur[key], val)
-            if new != cur[key]:
+            if new is _COERCE_FAILED:
+                skipped.append(key)
+            elif new != cur[key]:
                 applied[key] = {"old": cur[key], "new": new}
                 cur[key] = new
         else:
@@ -508,16 +519,25 @@ def create_product(title, description="", product_type="", tags=None,
         raise ShopifyError(res["userErrors"][0]["message"])
     p = res["product"]
     variant_id = (p.get("variants", {}).get("nodes") or [{}])[0].get("id")
+    price_warning = None
     if price not in (None, "") and variant_id:
         try:
             set_price(p["id"], variant_id, f"{float(price):.2f}")
-        except (ValueError, ShopifyError):
-            pass  # product exists; price can be corrected in the updater
+        except (ValueError, ShopifyError) as e:
+            # The product itself is already created (and may be ACTIVE) —
+            # that can't be undone here without a second failure mode, so
+            # this surfaces as a warning on an otherwise-successful create
+            # rather than vanishing. Silent before: a product could go live
+            # at an unset/zero price with a plain success response.
+            price_warning = f"Product created, but the price didn't save: {e}"
     shop, _ = credentials()
     numeric = p["id"].split("/")[-1]
-    return {"id": p["id"], "handle": p.get("handle"),
-            "status": p.get("status"), "variant_id": variant_id,
-            "admin_url": f"https://{shop}/admin/products/{numeric}"}
+    out = {"id": p["id"], "handle": p.get("handle"),
+           "status": p.get("status"), "variant_id": variant_id,
+           "admin_url": f"https://{shop}/admin/products/{numeric}"}
+    if price_warning:
+        out["price_warning"] = price_warning
+    return out
 
 
 if __name__ == "__main__":
