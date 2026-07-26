@@ -120,20 +120,37 @@ SUP_CSS = r"""
      about 49px of content on a 390px phone while "₹34,500.00" needs ~85px,
      so the amounts spilled out of their cells. auto-fit gives three columns
      on a phone and all five on a desktop without a second breakpoint.
-     The 1px gap over a border-coloured background draws the dividers, which
-     a wrapping grid can't do with border-left. */
+     Dividers are drawn by each cell rather than by a border-coloured
+     background behind a 1px gap. Five cells never divide evenly into three
+     columns, and with the old technique that leftover slot showed the bare
+     background as a grey tile sitting in the strip, which read as something
+     having failed to load. Cells paint their own right/bottom rule, so an
+     absent cell is simply absent; the container's overflow:hidden trims the
+     rules that fall on the outer edge. */
   .moneybar{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));
-    gap:1px;margin-top:10px;background:var(--border);
+    gap:0;margin-top:10px;background:var(--card);
     border:1px solid var(--border);border-radius:var(--r-s);overflow:hidden;}
   .moneybar:empty{display:none;}
-  .mcell{min-width:0;padding:8px 11px;background:var(--card);}
+  .mcell{min-width:0;padding:8px 11px;background:var(--card);
+    box-shadow:1px 0 0 var(--border),0 1px 0 var(--border);}
+  /* The last cell must not rule off its right edge: when the row is short
+     that rule has nothing on the other side of it and draws one wall of a
+     box around the empty slot. The row rule above the gap is fine — it just
+     reads as the row divider running the full width. */
+  .mcell:last-child{box-shadow:0 1px 0 var(--border);}
   .mcell .ml{font-size:10.5px;color:var(--muted);white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis;}
   /* Never ellipsise money — "₹34,50…" is worse than a smaller number, so
-     the value shrinks to fit rather than being cut off. */
+     the value shrinks to fit rather than being cut off. That was the stated
+     intent from the start but nothing implemented it: nowrap + overflow
+     hidden is precisely "cut off", and a phone showed ₹1,44,300.00 sliced
+     through the last digit. Three columns on a 390px phone leave 105px of
+     cell once the padding below is applied, and 13px tabular digits put a
+     13-character amount (₹12,44,300.00) inside that. */
   .mcell .mv{font-size:14px;font-weight:750;color:var(--ink);
     font-variant-numeric:tabular-nums;line-height:1.25;
     white-space:nowrap;overflow:hidden;}
+  @media(max-width:559px){ .mcell{padding:8px 8px;} .mcell .mv{font-size:13px;} }
   @media(min-width:560px){ .mcell .mv{font-size:15px;} }
   .mcell.owe .mv{color:var(--accent);}
 

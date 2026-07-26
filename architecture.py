@@ -188,13 +188,18 @@ def build():
       <div class="kpi2"><div class="v">{facts}</div><div class="l">agent memories</div></div>
     </div>
     <section><h2>Request flow</h2><div class="flow">{flow_html}</div></section>
-    <section><h2>Services</h2><div class="panel2"><table>
+    <!-- .tscroll inside .panel2: the four-column services table needs 450px
+         and a phone gives it 348. .panel2 clips with overflow:hidden (it has
+         to, to round the corners), so without a scroller the Status column —
+         the one thing this table exists to answer — was simply not on the
+         page on a phone, with no way to reach it. -->
+    <section><h2>Services</h2><div class="panel2"><div class="tscroll"><table>
       <thead><tr><th>Service</th><th class="num">Port</th><th>Role</th><th>Status</th></tr></thead>
-      <tbody>{svc_rows}</tbody></table></div></section>
+      <tbody>{svc_rows}</tbody></table></div></div></section>
     <section><h2>Tools</h2><div class="mgrid">{tool_html}</div></section>
-    <section><h2>Data stores</h2><div class="panel2"><table>
+    <section><h2>Data stores</h2><div class="panel2"><div class="tscroll"><table>
       <thead><tr><th>Store</th><th class="num">Count</th><th>What</th></tr></thead>
-      <tbody>{data_rows}</tbody></table></div></section>
+      <tbody>{data_rows}</tbody></table></div></div></section>
     <section><h2>Recent activity</h2><div class="panel2">{act_html}</div></section>
     {hub_footer()}
   </main>

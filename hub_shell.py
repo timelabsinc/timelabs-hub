@@ -313,7 +313,11 @@ HUB_STYLE = r"""
   .verdict .v-model{display:block;margin-top:8px;font-size:11px;color:var(--muted);}
 
   /* ---- KPI cards ---- */
-  .kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;}
+  /* minmax(0,1fr), not 1fr: a plain 1fr track will not shrink below its
+     content's min-content width, so one long context line ("31 invoices ·
+     $22,278 invoiced") pushed both tracks to 181px inside a 350px phone
+     column and the whole document picked up 2px of sideways scroll. */
+  .kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
   .kpi{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;
     box-shadow:var(--shadow);transition:border-color .15s;}
   .kpi:hover{border-color:var(--border-2);}
@@ -511,7 +515,7 @@ HUB_STYLE = r"""
     .appitem .ic{width:15px;height:15px;}
     .appitem.active{background:var(--card);color:var(--ink);box-shadow:var(--shadow);}
     .topbar{padding:20px 0 18px;}
-    .kpis{grid-template-columns:repeat(4,1fr);}
+    .kpis{grid-template-columns:repeat(4,minmax(0,1fr));}
     .face-nav{margin:0 0 22px;}
     .face-tabs,.searchrow{padding-left:0;padding-right:0;}
     .toast{bottom:24px;}
@@ -1005,16 +1009,14 @@ ASSIST_JS = r"""
 # HUB_STYLE so the styles are available everywhere.
 # ---------------------------------------------------------------------------
 ORDERS_CSS = r"""
-.src{display:inline-block;font-size:10.5px;font-weight:650;letter-spacing:.03em;text-transform:uppercase;
-  padding:2px 7px;border-radius:5px;white-space:nowrap;}
-.src-website{color:#1f6f4a;background:rgba(31,111,74,.13);}
-.src-form{color:#996c1f;background:var(--accent-bg);}
-.src-whatsapp{color:#1c7a3e;background:rgba(37,211,102,.15);}
-.src-instagram{color:#a3346b;background:rgba(193,53,132,.13);}
-@media (prefers-color-scheme:dark){
-  .src-website{color:#6fd6a4;} .src-whatsapp{color:#63dc92;} .src-instagram{color:#e88ac0;}
-}
-.oo-row .src{margin-right:2px;}
+/* The order-source badge lives in HUB_STYLE as .osrc. An older copy of it
+   called .src used to sit here, and because ORDERS_CSS is concatenated onto
+   HUB_STYLE it silently overrode the data-source freshness chip of the same
+   name up there: .src is a flex row with gap:7px, this one was
+   display:inline-block, and inline-block ignores gap. The result on Home was
+   "SHOPIFYLIVE" and "GA42026-07-12" — name and date welded together. Nothing
+   emitted .src-website/-form/-whatsapp/-instagram any more, so the whole
+   block is gone rather than renamed. Keep one .src per page. */
 .sell-row{display:grid;grid-template-columns:1fr 120px 44px 90px;gap:10px;align-items:center;
   padding:7px 0;border-bottom:1px solid var(--border);font-size:13.5px;}
 .sell-row:last-of-type{border-bottom:none;}

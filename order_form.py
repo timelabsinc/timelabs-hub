@@ -112,8 +112,13 @@ OF_CSS = r"""
 
   /* source chips */
   .srcs{display:flex;flex-wrap:wrap;gap:8px;}
+  /* text-transform is declared here on purpose. These chips have always
+     rendered uppercase, but only by accident: a dead .src rule in the shared
+     ORDERS_CSS was leaking it in. That rule is gone, so the intent has to be
+     stated where it belongs or the chips silently become "website". */
   .src{border:1px solid var(--border);background:var(--card);color:var(--ink);
     border-radius:999px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;
+    text-transform:uppercase;letter-spacing:.03em;
     transition:background .12s,border-color .12s,color .12s;}
   .src.on{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);}
   .src.add{color:var(--muted);border-style:dashed;}

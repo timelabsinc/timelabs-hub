@@ -28,10 +28,27 @@ def text_px(s, size):
     return len(s) * size * 0.60   # slight over-estimate: borderline reports
 
 
+def decomment(css):
+    """Drop /* ... */ before any selector parsing.
+
+    Nothing here parses CSS properly; it splits on braces. That means the run
+    of text before a "{" is "everything since the last }", which includes the
+    comment sitting above the rule. This file's own house style puts a
+    paragraph of comment above most rules, so `strips()` was handing back
+    selectors like "/* Money, always visible ... */\\n  .moneybar", and
+    `base = sel.split()[0]` then evaluated to "/*". Every commented strip
+    failed the region test and was skipped, which is how "every money strip
+    fits" was printed while the supplier strip was slicing ₹1,44,300.00
+    through its last digit on a phone. Strip comments first and the selector
+    is a selector again.
+    """
+    return re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
+
+
 def strips(css):
     """(selector, min-column-px, font-size-of-its-value) for grid strips."""
     out = []
-    for m in re.finditer(r'([^{}]+)\{([^{}]*)\}', css):
+    for m in re.finditer(r'([^{}]+)\{([^{}]*)\}', decomment(css)):
         sel, body = m.group(1).strip(), m.group(2).replace(" ", "")
         c = re.search(r'grid-template-columns:repeat\(auto-fit,minmax\((\d+)px', body)
         if c:
@@ -39,17 +56,102 @@ def strips(css):
     return out
 
 
-def value_size(css, strip_sel):
-    """font-size of the value element inside this strip, if it declares one."""
-    base = strip_sel.lstrip('.').split()[0]
-    best = 15.0
-    for m in re.finditer(r'([^{}]+)\{([^{}]*)\}', css):
-        sel, body = m.group(1), m.group(2)
-        if base in sel and ('.mv' in sel or ' b' in sel or '.v' in sel):
-            f = re.search(r'font-size:\s*([\d.]+)px', body)
-            if f:
-                best = float(f.group(1))
-    return best
+def applies_at(cond, width):
+    """Does this @media condition hold at `width`? Unknown conditions -> yes.
+
+    Only the width bounds are read, because they are the only part of a media
+    query that changes whether a rupee amount fits in a column.
+    """
+    for lo in re.findall(r"min-width:\s*(\d+)px", cond):
+        if width < int(lo):
+            return False
+    for hi in re.findall(r"max-width:\s*(\d+)px", cond):
+        if width > int(hi):
+            return False
+    return True
+
+
+def declarations(css, width):
+    """(selector, body) in cascade order for the rules live at `width`."""
+    css = decomment(css)
+    out, i, n = [], 0, len(css)
+    while i < n:
+        at = css.find("@media", i)
+        if at == -1:
+            out += [(m.group(1).strip(), m.group(2))
+                    for m in re.finditer(r'([^{}]+)\{([^{}]*)\}', css[i:])]
+            break
+        out += [(m.group(1).strip(), m.group(2))
+                for m in re.finditer(r'([^{}]+)\{([^{}]*)\}', css[i:at])]
+        ob = css.find("{", at)
+        cond, depth, j = css[at + 6:ob], 1, ob + 1
+        while j < n and depth:
+            depth += (css[j] == "{") - (css[j] == "}")
+            j += 1
+        if applies_at(cond, width):
+            out += [(m.group(1).strip(), m.group(2))
+                    for m in re.finditer(r'([^{}]+)\{([^{}]*)\}', css[ob + 1:j - 1])]
+        i = j
+    return out
+
+
+def _last_px(css, width, want, prop):
+    """Last value of `prop` at `width` among selectors matching `want`."""
+    found = None
+    for sel, body in declarations(css, width):
+        if not want(sel):
+            continue
+        m = None
+        for m in re.finditer(rf"(?:^|;)\s*{prop}:\s*([^;]+)", body):
+            pass
+        if m:
+            found = m.group(1).strip()
+    return found
+
+
+# Which element carries the amount inside each strip, which carries the
+# padding, how much of the 390px the strip's ancestors have already eaten, and
+# the strip's own gap. Stated rather than guessed: a "looks like a value"
+# heuristic put .verdict .v-icon's 26px against the supplier strip and
+# reported a strip that fits as 80px short, and assuming a bare .wrap put
+# .okpis at three columns when the panel it sits in gives it two. Four numbers
+# per strip is not a burden; a wrong number is. A strip that is not listed
+# here is reported as unchecked rather than silently passing.
+#   inset  = every horizontal padding between the viewport and the strip
+#   widest = the longest string THIS strip can actually render. The two strips
+#            do not format money the same way, and checking a strip against a
+#            format it never shows is how a checker earns a reputation for
+#            crying wolf: the supplier strip prints inr() with paise, the
+#            order strip prints whole rupees and tops out below a crore.
+STRIP_PARTS = {
+    # .swrap padding 16*2
+    "moneybar": (".mcell", ".mcell .mv", 32, 0, "₹1,34,500.00"),
+    # .wrap padding 20*2 + .panel padding 18*2
+    "okpis": (".okpi", ".okpi b", 76, 12, "₹99,99,999"),
+}
+
+
+def value_size(css, cell, value_sel, width=PHONE):
+    """font-size of the amount inside this strip, at `width`.
+
+    Reads the size that actually applies rather than assuming a default: the
+    supplier strip declares 14px, steps down to 13px below 560px and up to
+    15px above it, and checking a phone against the desktop size reports a
+    strip that fits as broken.
+    """
+    got = _last_px(css, width, lambda s: s == value_sel, "font-size")
+    return float(re.match(r"[\d.]+", got).group(0)) if got else 15.0
+
+
+def cell_pad(css, cell, width=PHONE):
+    """Horizontal padding of the strip's cell at `width`, both sides."""
+    got = _last_px(css, width, lambda s: s == cell, "padding")
+    if not got:
+        return 0.0        # the cell selector is explicit now; no rule means none
+    parts = re.findall(r"([\d.]+)px", got)
+    if len(parts) >= 2:
+        return float(parts[1]) * 2
+    return float(parts[0]) * 2 if parts else 0.0
 
 
 def check(page):
@@ -58,18 +160,26 @@ def check(page):
     out = []
     for sel, colmin in strips(css):
         base = sel.lstrip('.').split()[0]
-        # only strips this page actually renders money into
-        region = re.search(rf'{re.escape(base)}["\'][\s\S]{{0,900}}', html)
-        if not region or ('inr(' not in region.group(0)
-                          and '₹' not in region.group(0)):
+        # only strips this page actually renders money into. The markup is
+        # often an empty div that JS fills, so look at the whole page for the
+        # formatter as well as at the element itself.
+        if not re.search(rf'{re.escape(base)}["\']', html):
             continue
-        cols = max(1, (PHONE - PAGE_PAD) // colmin)
-        inner = (PHONE - PAGE_PAD) / cols - CELL_PAD
-        size = value_size(css, sel)
-        need = text_px(WIDEST, size)
+        if "inr(" not in html and "₹" not in html:
+            continue
+        if base not in STRIP_PARTS:
+            out.append((sel, "carries money but is not in STRIP_PARTS — add its "
+                             "cell and value selectors so it can be measured"))
+            continue
+        cell, value_sel, inset, gap, widest = STRIP_PARTS[base]
+        avail = PHONE - inset
+        cols = max(1, int((avail + gap) // (colmin + gap)))
+        inner = (avail - gap * (cols - 1)) / cols - cell_pad(css, cell)
+        size = value_size(css, cell, value_sel)
+        need = text_px(widest, size)
         if inner < need:
             out.append((sel, f"{cols} cols at {PHONE}px leaves ~{inner:.0f}px; "
-                             f"{WIDEST} at {size:.0f}px needs ~{need:.0f}px"))
+                             f"{widest} at {size:.0f}px needs ~{need:.0f}px"))
     return out
 
 
