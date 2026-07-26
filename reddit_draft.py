@@ -210,11 +210,22 @@ def run(post_id):
 
     # A pass may stop and ask rather than invent. The run resumes from here
     # once the owner answers, so the question has to be worth the interruption.
+    # Capped at MAX_ROUNDS: `rounds` was already tracked on every answer but
+    # never checked, so a post whose regenerated draft kept raising a *new*
+    # question each round had no floor — every answer just triggered another
+    # full re-run that could ask something else. Past the cap, proceed with
+    # whatever's known rather than stopping again.
     for line in out["audit"].splitlines():
         if line.strip().upper().startswith("ASK:"):
             q = line.split(":", 1)[1].strip()
             prior = answered(post_id)
             if not prior:
+                if (post["rounds"] or 0) >= MAX_ROUNDS:
+                    context += (f"\nThe pipeline wanted to ask: {q}\nBut the owner has "
+                                f"already been asked {MAX_ROUNDS} times for this post — "
+                                f"proceed without this fact rather than asking again, and "
+                                f"say plainly in the post where you're unsure.\n")
+                    break
                 ask_owner(post_id, q)
                 return None
             context += f"\nThe owner was asked: {q}\nHe answered: {prior}\n"
