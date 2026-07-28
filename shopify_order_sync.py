@@ -134,16 +134,18 @@ def sync(actor="shopify-sync"):
             # Line total column and the true sum behind every order_items row.
             unit_price = amount / qty if qty else amount
             try:
+                order_no = conn.execute(
+                    "SELECT COALESCE(MAX(order_no), 0) + 1 AS n FROM orders").fetchone()[0]
                 cur = conn.execute(
                     "INSERT INTO orders (received_at, customer_name, customer_phone, "
                     "customer_email, address, pincode, city, state, source, product, "
-                    "price_inr, quantity, status, shopify_order_id, shopify_name, "
+                    "price_inr, quantity, status, order_no, shopify_order_id, shopify_name, "
                     "financial_status, supplier_visible) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     ((o.get("createdAt") or "")[:19].replace("T", " "),
                      name, phone, email, _address(o), addr.get("zip") or "",
                      addr.get("city") or "", addr.get("province") or "",
-                     "website", product, unit_price, qty, "new",
+                     "website", product, unit_price, qty, "pending", order_no,
                      o["id"], o.get("name") or "", fin_status))
             except sqlite3.IntegrityError:
                 skipped += 1

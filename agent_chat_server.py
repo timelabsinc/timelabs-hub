@@ -175,7 +175,15 @@ def _ensure_orders_schema():
             # live on our own disk (data/order-photos/<id>/) with Drive kept
             # as a mirror, which is also what lets the supplier queue show
             # them: the reference photo is the whole brief for a build.
-            "local_photos": "TEXT"}
+            "local_photos": "TEXT",
+            # The number a person sees — "#61". Kept apart from the DB id
+            # (which photos, the sheet join and Shopify links all key off, so
+            # it can't be renumbered) precisely so the visible number CAN be a
+            # clean, gapless sequence. Existing rows are seeded to their own id
+            # so nothing they've already been called by changes; new orders
+            # continue gaplessly from the highest, so from here on it's
+            # #62, #63, #64… one after another.
+            "order_no": "INTEGER"}
     try:
         conn = sqlite3.connect(DB, timeout=5)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
@@ -188,6 +196,37 @@ def _ensure_orders_schema():
             # double-inserting the same storefront order.
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_shopify_id "
                         "ON orders(shopify_order_id)")
+            # Seed the display number for anything that predates the column.
+            conn.execute("UPDATE orders SET order_no=id WHERE order_no IS NULL")
+
+            # Collapse the old 8-status pipeline onto the 5 stages — ONCE.
+            # This can't be value-based-idempotent: old "shipped" (to the
+            # customer, = done) must become "delivered", but "shipped" is also
+            # a NEW stage key (Shipped from China), so a guard keyed on the
+            # value can't tell a not-yet-migrated old row from a correct new
+            # one. So it's gated on PRAGMA user_version and runs exactly once,
+            # when every value is still guaranteed to be old-vocabulary.
+            import order_stages
+            SCHEMA_VERSION = 1
+            ver = conn.execute("PRAGMA user_version").fetchone()[0]
+            if ver < SCHEMA_VERSION:
+                whens = " ".join(f"WHEN '{old}' THEN '{new}'"
+                                 for old, new in order_stages.OLD_TO_NEW.items())
+                conn.execute(f"UPDATE orders SET status = CASE status {whens} "
+                             f"ELSE status END")
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            # Belt-and-braces for a NULL or genuinely unrecognised status
+            # (idempotent, unambiguous — none of these collide with a new key).
+            valid = ",".join(f"'{s}'" for s in order_stages.STATUSES)
+            conn.execute(f"UPDATE orders SET status='pending' "
+                         f"WHERE status IS NULL OR status NOT IN ({valid})")
+
+            # The pipeline is now how orders are managed, so make the real
+            # backlog visible instead of leaving it stranded behind the
+            # off-by-default flag. Cancelled stays hidden; the queue skips it
+            # anyway. Idempotent.
+            conn.execute("UPDATE orders SET supplier_visible=1 "
+                        "WHERE supplier_visible=0 AND status != 'cancelled'")
             conn.commit()
         conn.close()
     except Exception as e:
@@ -2095,7 +2134,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         address = str(p.get("address", "")).strip()[:600]
         pincode = str(p.get("pincode", "")).strip()[:20]
         notes = str(p.get("notes", "")).strip()[:1000]
-        status = str(p.get("status", "new")).strip()[:40] or "new"
+        import order_stages
+        status = str(p.get("status", "")).strip()[:40] or order_stages.DEFAULT_STAGE
+        if status not in order_stages.STATUSES:
+            status = order_stages.DEFAULT_STAGE
         source = str(p.get("source", "")).strip()[:40]
 
         # City/state and product attributes come from the browser (where staff
@@ -2147,18 +2189,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
         drive_link = links[0] if links else None
 
         conn = db()
+        # Next display number: gapless, one past the highest so far (which after
+        # the backfill is at least the highest id). Assigned inside the same
+        # connection right before the insert.
+        order_no = (conn.execute(
+            "SELECT COALESCE(MAX(order_no), 0) + 1 AS n FROM orders").fetchone()["n"])
         cur = conn.execute(
             "INSERT INTO orders (customer_name, customer_phone, customer_email, address, "
             "pincode, city, state, source, product, price_inr, quantity, notes, status, "
             "has_image, drive_link, photo_links, case_style, dial_colour, dial_style, "
-            "case_colour, movement, watch_size, is_stock, supplier_visible) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+            "case_colour, movement, watch_size, is_stock, order_no, supplier_visible) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
             (customer, phone, email, address, pincode, city, state, source, product,
              price, qty, notes, status, 1 if photos else 0, drive_link,
              json.dumps(links) if links else None,
              attrs.get("case_style"), attrs.get("dial_colour"), attrs.get("dial_style"),
              attrs.get("case_colour"), attrs.get("movement"), attrs.get("watch_size"),
-             is_stock))
+             is_stock, order_no))
         oid = cur.lastrowid
 
         # Move the photos somewhere permanent BEFORE reporting success. They
@@ -2225,7 +2272,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if access:
                 line_total = (price or 0) * qty
                 google_api.append_order_row(access, google_api.row_for(google_api.SHEET_HEADERS, {
-                    "Order #": oid, "Logged": logged, "Status": status, "Source": source,
+                    "Order #": order_no, "Logged": logged,
+                    "Status": order_stages.label(status), "Source": source,
                     "Customer": customer, "Phone": phone, "Email": email, "Address": address,
                     "City": city, "State": state, "Pincode": pincode, "Product": product,
                     "Case style": attrs.get("case_style"), "Dial colour": attrs.get("dial_colour"),
@@ -2240,8 +2288,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             warnings.append(f"Sheet not updated: {e}")
 
-        hub_event("order_created", f"{product} ×{qty} for {customer}", actor, app="orders")
-        self._json(200, {"ok": True, "id": oid, "drive_link": drive_link,
+        hub_event("order_created", f"#{order_no} {product} ×{qty} for {customer}",
+                 actor, app="orders")
+        self._json(200, {"ok": True, "id": oid, "order_no": order_no, "drive_link": drive_link,
                          "attributes": {k: v for k, v in attrs.items() if v},
                          "customer": {"orders": cust["orders_count"],
                                       "tags": customers_mod.all_tags(cust)} if cust else None,
@@ -2254,9 +2303,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn = db()
         try:
             rows = conn.execute(
-                "SELECT id, received_at, customer_name, customer_phone, customer_email, "
-                "address, pincode, city, state, source, product, quantity, price_inr, "
-                "notes, status, drive_link, photo_links, local_photos, case_style, "
+                "SELECT id, order_no, received_at, customer_name, customer_phone, "
+                "customer_email, address, pincode, city, state, source, product, quantity, "
+                "price_inr, notes, status, drive_link, photo_links, local_photos, case_style, "
                 "dial_colour, dial_style, case_colour, movement, watch_size, shopify_name, "
                 "ref_code, is_stock FROM orders ORDER BY id DESC LIMIT 100").fetchall()
         except sqlite3.OperationalError as e:
@@ -2265,7 +2314,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         conn.close()
         import google_api
+        import order_stages
         self._json(200, {"orders": [dict(r) for r in rows],
+                         "labels": order_stages.LABELS,
                          "sheet_url": google_api.sheet_url()})
 
     def _handle_orders_parse(self):
@@ -2398,21 +2449,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._json(404, {"error": "no such order"})
             return
+        import order_stages
         from order_form import STATUSES
-        cur_status = before["status"] or "new"
+        cur_status = before["status"] or order_stages.DEFAULT_STAGE
         try:
-            locked = STATUSES.index(cur_status) >= STATUSES.index("paid")
+            locked = (order_stages.PIPELINE.index(cur_status)
+                      >= order_stages.PIPELINE.index(order_stages.LOCK_FROM))
         except ValueError:
-            locked = False          # unknown status: don't block on a guess
+            locked = False          # off-pipeline (e.g. cancelled): don't guess
         if locked:
             blocked = [k for k in lockable if k in p]
             if blocked:
                 conn.close()
                 self._json(409, {
-                    "error": f"This order is already \"{cur_status}\" — the supplier has "
-                             f"been paid and may have bought parts, so the build details "
-                             f"are locked. You can still change its status, notes and "
-                             f"tracking.",
+                    "error": f"This order is already \"{order_stages.label(cur_status)}\" — "
+                             f"it's been placed with the supplier, who may have bought "
+                             f"parts, so the build details are locked. You can still change "
+                             f"its stage, notes and tracking.",
                     "locked_fields": blocked})
                 return
         if "status" in p and p["status"] not in STATUSES:
@@ -2508,15 +2561,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     price = None
                 attrs = order_taxonomy.extract(product + " " + notes)
+                order_no = conn.execute(
+                    "SELECT COALESCE(MAX(order_no), 0) + 1 AS n FROM orders").fetchone()["n"]
                 cur = conn.execute(
                     "INSERT INTO orders (customer_name, source, product, price_inr, "
                     "quantity, notes, status, has_image, ref_code, case_style, dial_colour, "
-                    "dial_style, case_colour, movement, watch_size, supplier_visible) "
-                    "VALUES ('',?,?,?,?,?,'new',?,?,?,?,?,?,?,?,1)",
+                    "dial_style, case_colour, movement, watch_size, order_no, supplier_visible) "
+                    "VALUES ('',?,?,?,?,?,'pending',?,?,?,?,?,?,?,?,?,1)",
                     (source, product, price, qty, notes, 1 if rp else 0, ref or None,
                      attrs.get("case_style"), attrs.get("dial_colour"),
                      attrs.get("dial_style"), attrs.get("case_colour"),
-                     attrs.get("movement"), attrs.get("watch_size")))
+                     attrs.get("movement"), attrs.get("watch_size"), order_no))
                 oid = cur.lastrowid
                 if rp:
                     dest = os.path.join(ORDER_PHOTOS, str(oid))
@@ -2771,6 +2826,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self._supplier_ok():
             self._json(403, {"error": "not available for this account"})
             return
+        import order_stages
         from order_form import STATUSES
         conn = db()
         try:
@@ -2778,7 +2834,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # supplier_cost is the supplier's OWN price to us — safe to
                 # return here, unlike price_inr (what the customer pays),
                 # which stays absent from this SELECT entirely.
-                "SELECT id, received_at, product, quantity, status, "
+                "SELECT id, order_no, received_at, product, quantity, status, "
                 "case_style, dial_colour, dial_style, case_colour, movement, "
                 "watch_size, local_photos, tracking_code, ref_code, "
                 "supplier_cost, supplier_cost_ccy, bill_id FROM orders "
@@ -2818,7 +2874,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             dc, dl = self._default_cost(d.get("product"), d.get("movement"))
             d["default_cost"], d["default_label"] = dc, dl
             out.append(d)
-        self._json(200, {"orders": out, "statuses": STATUSES})
+        self._json(200, {"orders": out, "statuses": STATUSES,
+                         "pipeline": order_stages.PIPELINE,
+                         "labels": order_stages.LABELS})
 
     def _handle_supplier_status(self):
         """Status-only, and only on an order actually shared with this role —
@@ -2858,9 +2916,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         conn.execute("UPDATE orders SET status=? WHERE id=?", (status, oid))
         order_event(conn, oid, "status", f"{was} -> {status}", actor)
+        onum = conn.execute("SELECT order_no FROM orders WHERE id=?", (oid,)).fetchone()["order_no"]
         conn.commit()
         conn.close()
-        hub_event("order_updated", f"#{oid}: status -> {status}", actor, app="orders")
+        import order_stages
+        import google_api
+        # Keep the sheet's Status column in step — best-effort, never fatal.
+        try:
+            access = google_api.access_token()
+            if access and onum is not None:
+                google_api.update_order_field(access, onum, "Status",
+                                              order_stages.label(status))
+        except Exception:
+            pass
+        hub_event("order_updated", f"#{onum or oid}: status -> {status}", actor, app="orders")
         self._json(200, {"ok": True, "id": oid, "status": status})
 
     # Same effective INR/USD rate the Ledger and Home dashboard already use —

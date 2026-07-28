@@ -3,7 +3,7 @@
 > Self-contained brief on **Labs OS**, the self-hosted business OS for Timelabs Co, running at `ops.timelabsco.in`.
 > Paste this into a new Claude/agent session — on this machine or another one — to onboard it instantly.
 > Canonical copy lives in the repo at `CONTEXT.md` (pulled via `git clone`/`git pull`); a standalone copy sits at `/root/labs-os-context.md` on the primary server. Keep both in sync when either changes materially.
-> Last updated 2026-07-22.
+> Last updated 2026-07-28.
 
 ## What it is (the vision)
 Labs OS is **not a website builder** — it's a **full autonomous AI assistant for the business** (Timelabs Co, an India-based Shopify DTC brand selling Seiko watch-mod parts and complete builds; store `xd2fwj-1h.myshopify.com`). The end goal: it **automates, schedules, and does everything that currently takes manual effort**. It runs entirely on one VPS; the browser is the only client. Brand family (Google-style): **Labs Home** (dashboard), **Labs Drop** (files), **Labs Ledger** (costs), **Labs Chat** (agent), **Labs Tools** (launcher). Umbrella = "Labs OS". Company is still "Timelabs Co". **Not wanted: logo/image generation.**
@@ -59,6 +59,12 @@ If you're a fresh Claude Code session (or a developer) on a **second machine**, 
   - **Customers** (`customers.py`, `customers` table) roll up from orders keyed on phone→email→name: counts, spend, AOV, first/last order, first source, and auto tags (`repeat` ≥2 orders, `VIP` ≥5 orders or ₹50k). Totals are **recomputed from `orders` each save**, never incremented, so edits/deletes can't drift them.
   - **Sheet mirror** has two tabs — Orders (append) and Customers (upsert by id in column A). `orders_resync.py` rebuilds both tabs from the DB (`--backfill` fills columns on old rows, `--sheets` re-pushes); it only ever writes sheet-from-DB.
   - Endpoints: `POST /orders/{create,parse}`, `GET /orders/{list,meta}`, `GET /customers/list`. Inputs are **16px** — anything smaller makes iOS Safari zoom on focus and not zoom back.
+
+## Order lifecycle & the supplier queue (`order_stages.py`, `supplier.py`)
+- **One canonical pipeline** lives in `order_stages.py` — the supplier queue, order form, sheet and server all read it, so nothing drifts. The five stages: **Pending → Ordered to supplier → Shipped from China → Received → Delivered**, plus `cancelled` as an off-pipeline side state (hidden from the supplier queue). `orders.status` stores the stage *key* (`pending`, `ordered`, `shipped`, `received`, `delivered`); `LABELS` maps to the words people see. This replaced an 8-status model (`new/acknowledged/paid/in transit/assembled/shipped/delivered`) on 2026-07-28 — `from order_form import STATUSES` still works because order_form re-exports from order_stages.
+- **Supplier page** (`/ops/supplier.html`) is a build queue with **one tab per stage** (built in JS from the pipeline the server sends, `drawStageBar`), each card carrying a single advance button to the next stage. New orders (form/bulk/Shopify) land in Pending with `supplier_visible=1`.
+- **Migration is one-shot, gated on `PRAGMA user_version`** (not value-based), because old "shipped" (to customer = done) had to become "delivered" while "shipped" is *also* a new key — a value guard can't tell them apart. `user_version=1` means it's done. Bumping the pipeline again needs a new version + one-shot block, not a value CASE.
+- **`orders.order_no`** is the human-facing number (`#61`), kept separate from `orders.id` (which photos, the sheet join and Shopify links key off, so it can't be renumbered). Existing rows seeded to their id; new orders get `MAX(order_no)+1` — gapless from the highest, assigned in create/bulk/Shopify-sync. A stage change best-effort-syncs the sheet's Status cell (`google_api.update_order_field`).
 
 ## Google (Drive + Sheets)
 `google_api.py` is the shared access layer for both — stdlib `urllib` only (no `gspread`), so system python can import it. Client at `/root/oauth-client.json`, token at `.gdrive-token.json`, IDs cached in `.orders-sheet.json` (all gitignored).

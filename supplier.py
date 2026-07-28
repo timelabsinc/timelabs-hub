@@ -78,19 +78,20 @@ SUP_CSS = r"""
      see. Icons carry it so four stages fit a phone width without wrapping;
      the label is hidden on narrow screens but kept for screen readers. */
   #queue-controls{margin-top:16px;}
-  .stagebar{display:flex;gap:6px;}
-  .stg{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;
+  /* Section tabs: one per stage, scrolling sideways when they don't fit
+     rather than shrinking labels away — the stage names are the whole point. */
+  .stagebar{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    scrollbar-width:none;padding-bottom:2px;}
+  .stagebar::-webkit-scrollbar{display:none;}
+  .stg{flex:none;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
     border:1px solid var(--border);background:var(--card);color:var(--muted);
-    border-radius:var(--r-s);padding:7px 4px;font:inherit;font-size:11px;font-weight:650;
-    cursor:pointer;min-height:46px;justify-content:center;
-    transition:background .12s,color .12s,border-color .12s;}
-  .stg svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.9;
-    stroke-linecap:round;stroke-linejoin:round;}
-  .stg b{font-size:13px;font-weight:800;line-height:1;}
-  .stg .lbl{font-size:10px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
+    border-radius:999px;padding:8px 14px;font:inherit;font-size:13px;font-weight:650;
+    cursor:pointer;transition:background .12s,color .12s,border-color .12s;}
+  .stg b{font-size:12px;font-weight:800;line-height:1;background:var(--card-2);
+    color:var(--muted);border-radius:999px;padding:1px 7px;min-width:8px;text-align:center;}
+  .stg .lbl{font-size:13px;}
   .stg.on{background:var(--ink);color:var(--bg);border-color:var(--ink);}
-  .stg.attn.on{background:var(--accent);border-color:var(--accent);color:#fff;}
-  @media(max-width:380px){ .stg .lbl{display:none;} }
+  .stg.on b{background:rgba(255,255,255,.22);color:#fff;}
 
   /* Filters collapse behind a button so they never eat the space the queue
      itself needs — but the active count stays visible on the button, so a
@@ -449,6 +450,7 @@ SUP_CSS = r"""
   .owedbar .b{font-size:12.5px;color:var(--muted);}
   .owedbar .b b{color:var(--ink);font-weight:650;}
   .sempty{text-align:center;color:var(--muted);font-size:14px;line-height:1.6;padding:44px 20px;}
+  .sempty.small{padding:20px;font-size:13px;}
   .sempty svg{width:40px;height:40px;stroke:var(--border-2);fill:none;stroke-width:1.4;margin-bottom:12px;}
   .sfoot{text-align:center;color:var(--muted);font-size:11.5px;padding:26px 0 34px;}
 
@@ -473,21 +475,11 @@ SUP_CSS = r"""
   @media(min-width:1000px){
     #queue-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;
       margin-top:16px;}
-    .stagebar{gap:0;width:max-content;max-width:100%;
-      border:1px solid var(--border);border-radius:999px;overflow:hidden;
-      background:var(--card);}
-    .stg{flex:none;flex-direction:row;gap:7px;justify-content:flex-start;
-      border:none;border-radius:0;padding:0 14px;min-height:36px;font-size:12.5px;}
-    .stg + .stg{border-left:1px solid var(--border);}
-    .stg svg{width:15px;height:15px;}
-    .stg b{font-size:12.5px;font-weight:750;}
-    .stg .lbl{font-size:12.5px;opacity:1;}
-    .stg.on{background:var(--accent-bg);color:var(--accent);}
-    .stg.attn.on{background:var(--accent);color:#fff;}
-    /* shrinkable rather than flex:none, so a three-digit filter count or a
-       longer stage label costs the search a few pixels instead of throwing
-       the whole bar onto a second line */
-    .fbar{margin-top:0;margin-left:auto;flex:0 1 auto;min-width:0;}
+    /* The five section names plus a running count don't fit on one line beside
+       the search, so the tabs take their own full-width row (still pills) and
+       the search sits below. */
+    .stagebar{flex:1 1 100%;}
+    .fbar{margin-top:0;flex:1 1 100%;min-width:0;}
     .ssearch{flex:1 1 220px;width:auto;min-width:150px;max-width:220px;
       font-size:13.5px;padding:8px 12px;}
     .fbtn{min-height:36px;font-size:12.5px;}
@@ -539,26 +531,21 @@ function ago(s){
 }
 function cls(s){return String(s||'').replace(/[^a-z]/gi,'');}
 
-var STATUSES=[], ORDERS=[], filter='attn', q='', openDetail={}, sort='oldest', onlyPhotos=false, IS_ADMIN=false;
-var stageF='', caseF='', moveF='', selectMode=false, SEL={};
-/* Everything before "shipped" still wants something from them; the tail end
-   is history. This split is what makes the queue a to-do list. */
-var DONE=['shipped','delivered'];
+var STATUSES=[], PIPELINE=[], LABELS={}, ORDERS=[], filter='pending', q='', openDetail={}, sort='oldest', onlyPhotos=false, IS_ADMIN=false;
+var caseF='', moveF='', selectMode=false, SEL={};
 
+/* The five sections, in order. Each stage IS its own section now — a build
+   sits in exactly one, and the button on its card walks it to the next. */
+function stLabel(k){return LABELS[k]||k;}
 function nextOf(st){
-  var i=STATUSES.indexOf(st);
-  if(i<0||i>=STATUSES.length-1)return null;
-  var n=STATUSES[i+1];
-  return n==='cancelled'?null:n;
+  var i=PIPELINE.indexOf(st);
+  if(i<0||i>=PIPELINE.length-1)return null;   // last stage or off-pipeline
+  return PIPELINE[i+1];
 }
-function bucket(o){
-  if(DONE.indexOf(o.status)>=0)return 'done';
-  if(o.status==='new')return 'attn';
-  return 'wip';
-}
+/* The section a build belongs to is simply its stage. */
+function bucket(o){return o.status;}
 function matches(o){
   if(onlyPhotos&&!o.photos)return false;
-  if(stageF&&o.status!==stageF)return false;
   if(caseF&&(o.case_style||'')!==caseF)return false;
   if(moveF&&(o.movement||'')!==moveF)return false;
   if(!q)return true;
@@ -572,7 +559,6 @@ function activeFilters(){
   if(onlyPhotos)n++;
   if(sort!=='oldest')n++;
   if(q)n++;
-  if(stageF)n++;
   if(caseF)n++;
   if(moveF)n++;
   return n;
@@ -671,14 +657,18 @@ function costEl(o){
 }
 
 function cardEl(o){
-  var nxt=nextOf(o.status), le=lastEvent(o), attn=bucket(o)==='attn';
+  var nxt=nextOf(o.status), le=lastEvent(o);
+  /* Only the first section (Pending) is a to-do; give those cards the accent
+     edge. Once moving, the section itself says where it is. */
+  var attn=(o.status===PIPELINE[0]);
+  var onum=o.order_no||o.id;
   return '<article class="ocard'+(attn?' attn':'')+(selectMode?' selectable':'')+
       (SEL[o.id]?' sel':'')+'" data-id="'+o.id+'">'+
     (selectMode?'<button class="osel'+(SEL[o.id]?' on':'')+'" data-sel="'+o.id+
-      '" aria-label="Select order '+o.id+'"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>':'')+
+      '" aria-label="Select order '+onum+'"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>':'')+
     '<div class="otop">'+photoEl(o)+
       '<div class="omid">'+
-        '<div class="onum">'+(o.ref_code?'ORDER '+esc(o.ref_code):'ORDER #'+o.id)+'</div>'+
+        '<div class="onum">'+(o.ref_code?'ORDER '+esc(o.ref_code):'ORDER #'+onum)+'</div>'+
         '<h3 class="oprod">'+esc(o.product||'—')+
           (o.quantity>1?'<span class="oqty">x'+o.quantity+'</span>':'')+'</h3>'+
         specEl(o)+
@@ -687,14 +677,14 @@ function cardEl(o){
       '</div>'+
     '</div>'+
     '<div class="obar">'+
-      '<span class="ost s-'+cls(o.status)+'"><i></i>'+esc(o.status)+
+      '<span class="ost s-'+cls(o.status)+'"><i></i>'+esc(stLabel(o.status))+
         (le?' <span class="when">· '+esc(ago(le.at))+'</span>':'')+'</span>'+
     '</div>'+
     '<div class="oact">'+
       (nxt?'<button class="obtn" data-adv="'+o.id+'" data-to="'+esc(nxt)+'">'+
-        '<svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>Mark '+esc(nxt)+'</button>'
-       :'<button class="obtn" data-sheet="'+o.id+'">Change status</button>')+
-      (nxt?'<button class="obtn ghost" data-sheet="'+o.id+'" aria-label="Other status">&#8943;</button>':'')+
+        '<svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>'+esc(stLabel(nxt))+'</button>'
+       :'<button class="obtn" data-sheet="'+o.id+'">Change stage</button>')+
+      (nxt?'<button class="obtn ghost" data-sheet="'+o.id+'" aria-label="Other stage">&#8943;</button>':'')+
       '<button class="obtn ghost" data-share="'+o.id+'" aria-label="Share status">'+
         '<svg viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="M12 15V3M8 7l4-4 4 4"/></svg></button>'+
       '<button class="obtn ghost" data-det="'+o.id+'" aria-label="Details">&#9432;</button>'+
@@ -727,34 +717,51 @@ function refreshCard(id){
   drawBulk();
 }
 
+/* The section tabs are built from the pipeline the server sends, so adding or
+   renaming a stage is a one-file change in order_stages.py — nothing here
+   hardcodes the five. */
+function drawStageBar(counts){
+  var bar=$('stagebar');
+  if(!bar)return;
+  var html=PIPELINE.map(function(k){
+    return '<button class="stg'+(k===filter?' on':'')+'" data-f="'+esc(k)+'">'+
+      '<b>'+(counts[k]||0)+'</b><span class="lbl">'+esc(stLabel(k))+'</span></button>';
+  });
+  html.push('<button class="stg'+('all'===filter?' on':'')+'" data-f="all">'+
+    '<b>'+(counts.all||0)+'</b><span class="lbl">All</span></button>');
+  bar.innerHTML=html.join('');
+  bar.querySelectorAll('.stg').forEach(function(c){
+    c.onclick=function(){ filter=c.dataset.f; render(); window.scrollTo({top:0,behavior:'smooth'}); };
+  });
+}
+
 function render(){
   var vis=ORDERS.filter(matches);
-  var groups={attn:[],wip:[],done:[]};
-  vis.forEach(function(o){groups[bucket(o)].push(o);});
-  var show = filter==='all' ? ['attn','wip','done'] : [filter];
-  var titles={attn:'Needs acknowledging',wip:'In progress',done:'Done'};
+  /* One bucket per stage, in pipeline order. */
+  var groups={};
+  PIPELINE.forEach(function(k){groups[k]=[];});
+  vis.forEach(function(o){ (groups[o.status]||(groups[o.status]=[])).push(o); });
+  var show = filter==='all' ? PIPELINE : [filter];
   var html='';
   show.forEach(function(k){
-    var list=sortOrders(groups[k]);
-    if(!list.length)return;
-    html+='<div class="shead"><h2>'+titles[k]+'</h2><span class="n">'+list.length+'</span></div>'+
-      '<div class="ogrid">'+list.map(cardEl).join('')+'</div>';
+    var list=sortOrders(groups[k]||[]);
+    /* In a single-section view, show the empty state rather than nothing; in
+       the All view, skip empty stages so it stays scannable. */
+    if(!list.length && filter==='all')return;
+    html+='<div class="shead"><h2>'+esc(stLabel(k))+'</h2><span class="n">'+list.length+'</span></div>'+
+      (list.length?'<div class="ogrid">'+list.map(cardEl).join('')+'</div>'
+        :'<div class="sempty small"><div>Nothing in '+esc(stLabel(k))+' right now.</div></div>');
   });
   if(!html){
     html='<div class="sempty"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg><div>'+
-      (q||onlyPhotos?'Nothing matches the current filters.'
-        :filter==='attn'?'Nothing waiting on you. Everything here has been acknowledged.'
-        :'Nothing in the queue yet. New builds appear here as soon as they&rsquo;re shared.')+
+      (q||onlyPhotos||caseF||moveF?'Nothing matches the current filters.'
+        :'Nothing in the queue yet. New orders land in Pending the moment they&rsquo;re logged.')+
       '</div></div>';
   }
   $('list').innerHTML=html;
-  var counts={attn:groups.attn.length,wip:groups.wip.length,done:groups.done.length,all:vis.length};
-  document.querySelectorAll('.stg').forEach(function(c){
-    c.classList.toggle('on',c.dataset.f===filter);
-  });
-  ['attn','wip','done','all'].forEach(function(k){
-    var el=$('c-'+k); if(el)el.textContent=counts[k];
-  });
+  var counts={all:vis.length};
+  PIPELINE.forEach(function(k){counts[k]=(groups[k]||[]).length;});
+  drawStageBar(counts);
   document.querySelectorAll('.schip[data-sort]').forEach(function(c){
     c.classList.toggle('on',c.dataset.sort===sort);
   });
@@ -762,7 +769,6 @@ function render(){
   $('newbatch').classList.toggle('on',selectMode);
   $('newbatch').querySelector('span').textContent=selectMode?'Cancel':'New batch';
   $('pickhint').classList.toggle('on',selectMode);
-  chipRow('f-stages','status',stageF,function(v){stageF=v;});
   chipRow('f-case','case_style',caseF,function(v){caseF=v;});
   chipRow('f-move','movement',moveF,function(v){moveF=v;});
   var n=activeFilters(), badge=$('fcount');
@@ -1297,9 +1303,9 @@ $('newbatch').onclick=function(){
 $('pick-all').onclick=function(){ enterSelect(true); };
 $('pick-none').onclick=function(){ clearSel(); };
 $('bulk-status').onclick=function(){
-  $('sheet-title').textContent=selIds().length+' orders — set status';
+  $('sheet-title').textContent=selIds().length+' orders — set stage';
   $('sheet-opts').innerHTML=STATUSES.map(function(s){
-    return '<button class="opt" data-s="'+esc(s)+'"><i></i>'+esc(s)+'</button>';}).join('');
+    return '<button class="opt" data-s="'+esc(s)+'"><i></i>'+esc(stLabel(s))+'</button>';}).join('');
   $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
     b.onclick=function(){ closeSheet(); bulkDo({status:b.dataset.s},'Status set'); };
   });
@@ -1311,10 +1317,8 @@ $('bulk-pdf').onclick=function(){
   window.open(API+'/supplier/ledger?ids='+ids.join(','),'_blank');
 };
 
-/* filters + search */
-document.querySelectorAll('.stg').forEach(function(c){
-  c.onclick=function(){ filter=c.dataset.f; render(); window.scrollTo({top:0,behavior:'smooth'}); };
-});
+/* filters + search — the stage tabs wire themselves in drawStageBar, since
+   they're rebuilt from the pipeline on every render */
 document.querySelectorAll('.schip[data-sort]').forEach(function(c){
   c.onclick=function(){ sort=c.dataset.sort; render(); };
 });
@@ -1325,7 +1329,7 @@ $('fbtn').onclick=function(){
   $('fbtn').setAttribute('aria-expanded',open?'true':'false');
 };
 $('fclear').onclick=function(){
-  q='';onlyPhotos=false;sort='oldest';stageF='';caseF='';moveF='';
+  q='';onlyPhotos=false;sort='oldest';caseF='';moveF='';
   $('q').value='';render();
 };
 var qT;
@@ -1345,6 +1349,8 @@ async function load(quiet){
   try{
     var d=await api('/supplier/orders');
     STATUSES=d.statuses||[];
+    PIPELINE=d.pipeline||STATUSES.filter(function(s){return s!=='cancelled';});
+    LABELS=d.labels||{};
     ORDERS=d.orders||[];
     $('sync').textContent='Updated '+new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
     $('sync').classList.remove('err');
@@ -1410,20 +1416,9 @@ def build():
     </div>
 
     <div id="queue-controls">
-      <div class="stagebar">
-        <button class="stg attn on" data-f="attn" aria-label="Needs you">
-          <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
-          <b id="c-attn">0</b><span class="lbl">Needs you</span></button>
-        <button class="stg" data-f="wip" aria-label="In progress">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-          <b id="c-wip">0</b><span class="lbl">In progress</span></button>
-        <button class="stg" data-f="done" aria-label="Done">
-          <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
-          <b id="c-done">0</b><span class="lbl">Done</span></button>
-        <button class="stg" data-f="all" aria-label="Everything">
-          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
-          <b id="c-all">0</b><span class="lbl">All</span></button>
-      </div>
+      <!-- One tab per pipeline stage, built in drawStageBar() from what the
+           server sends. Starts empty so it's never briefly wrong. -->
+      <div class="stagebar" id="stagebar"></div>
       <div class="fbar">
         <input id="q" class="ssearch" type="search" placeholder="Search number, product, spec, tracking"
                aria-label="Search the queue" autocomplete="off">
@@ -1438,8 +1433,6 @@ def build():
         </button>
       </div>
       <div class="fpanel" id="fpanel">
-        <p class="flab">Exact stage</p>
-        <div class="frow" id="f-stages"></div>
         <p class="flab">Case style</p>
         <div class="frow" id="f-case"></div>
         <p class="flab">Movement</p>

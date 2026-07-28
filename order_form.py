@@ -33,12 +33,11 @@ from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS
 
 OUT = "/var/www/ops/order-form.html"
 
-# Matches the real supplier pipeline (acknowledged and paid are separate,
-# on-purpose, tracked-apart states — that gap was the whole reason tracking
-# used to fall apart): sent -> acknowledged by supplier -> we've paid them ->
-# parts in transit -> received & assembled -> shipped -> delivered.
-STATUSES = ["new", "acknowledged", "paid", "in transit", "assembled", "shipped",
-            "delivered", "cancelled"]
+# The order lifecycle lives in one place now (order_stages) so the supplier
+# queue, this form, the sheet and the server can't drift apart. STATUSES stays
+# importable from here for the handlers that already do `from order_form import
+# STATUSES`.
+from order_stages import STATUSES, STAGES, LABELS as STAGE_LABELS  # noqa: F401
 DEFAULT_SOURCES = ["CC", "TLC", "Offkicks"]
 
 OF_CSS = r"""
@@ -192,7 +191,7 @@ OF_CSS = r"""
   .o-num{white-space:nowrap;}
   .pill{display:inline-block;font-size:10.5px;font-weight:650;text-transform:uppercase;
     letter-spacing:.04em;padding:3px 8px;border-radius:6px;color:var(--muted);background:var(--card-2);}
-  .pill.new{color:var(--accent);background:var(--accent-bg);}
+  .pill.pending{color:var(--accent);background:var(--accent-bg);}
   .pill.delivered{color:var(--good);background:var(--good-bg);}
   .pill.cancelled{opacity:.6;}
   .pill.vip{color:var(--accent);background:var(--accent-bg);}
@@ -247,7 +246,7 @@ OF_CSS = r"""
     color:var(--muted);background-color:var(--card-2);-webkit-appearance:none;appearance:none;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
     background-repeat:no-repeat;background-position:right 5px center;background-size:10px;}
-  select.pill-select.new{color:var(--accent);background-color:var(--accent-bg);}
+  select.pill-select.pending{color:var(--accent);background-color:var(--accent-bg);}
   select.pill-select.delivered{color:var(--good);background-color:var(--good-bg);}
   select.pill-select.cancelled{opacity:.6;}
   select.pill-select[disabled]{opacity:.5;cursor:wait;}
@@ -651,14 +650,14 @@ $('save').onclick=async function(){
       photo_paths:shots.map(function(p){return p.path;})};
     Object.keys(attrs).forEach(function(k){body[k]=attrs[k];});
     var d=await jpost('/orders/create',body);
-    var msg='Order #'+d.id+' saved';
+    var msg='Order #'+(d.order_no||d.id)+' saved';
     if(d.customer&&d.customer.orders>1)msg+=' — '+d.customer.orders+' orders from this customer'+
       (d.customer.tags?' ('+d.customer.tags+')':'');
     $('warn').innerHTML='<div class="okbox">'+esc(msg)+'</div>';
     reset();
     loaded={};                     /* other tabs are stale now */
     if($('pane-orders').classList.contains('on'))loadOrders();
-    toast('Order #'+d.id+' saved');
+    toast('Order #'+(d.order_no||d.id)+' saved');
     if((d.warnings||[]).length)showWarnings(d.warnings);
   }catch(e){toast(e.message);}
   btn.textContent=label;canSave();
@@ -670,7 +669,7 @@ document.addEventListener('keydown',function(e){
 function reset(){
   ['f-cust','f-phone','f-email','f-address','f-pincode','f-city','f-state',
    'f-product','f-price','f-notes','paste'].forEach(function(id){$(id).value='';});
-  $('f-qty').value='1';$('f-status').value='new';
+  $('f-qty').value='1';$('f-status').value='pending';
   $('caught').innerHTML='';
   attrs={};dropped={};drawAttrs();
   /* release the blob URLs before dropping the records, or a long session of
@@ -721,9 +720,9 @@ async function loadOrders(){
       '<th>#</th><th>Logged</th><th>Source</th><th>Customer</th><th>Ship to</th><th>Product</th>'+
       '<th>Qty</th><th>Price</th><th>Status</th><th>Photos</th><th></th></tr></thead><tbody>'+
       rows.map(function(o){
-        var st=String(o.status||'new'), spec=specOf(o);
+        var st=String(o.status||'pending'), spec=specOf(o);
         return '<tr>'+
-          '<td data-l="Order" class="o-num">#'+o.id+
+          '<td data-l="Order" class="o-num">#'+orderNo(o)+
             (o.ref_code?'<div class="o-sub">was '+esc(o.ref_code)+'</div>':'')+'</td>'+
           '<td data-l="Logged" class="o-when">'+esc(when(o.received_at))+'</td>'+
           '<td data-l="Source">'+(o.source?'<span class="pill">'+esc(o.source)+'</span>':'')+
@@ -741,7 +740,7 @@ async function loadOrders(){
           '<td data-l="Qty" class="o-num">'+(o.quantity||1)+'</td>'+
           '<td data-l="Price" class="o-num">'+esc(money(o.price_inr))+'</td>'+
           '<td data-l="Status"><select class="pill-select '+stClass(st)+'" data-id="'+o.id+'">'+
-            STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(s)+'</option>';}).join('')+
+            STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(stLabel(s))+'</option>';}).join('')+
             '</select></td>'+
           '<td data-l="Photos">'+photoCell(o)+'</td>'+
           '<td data-l=""><button class="rowdel" data-del="'+o.id+'" title="Delete order #'+o.id+'" aria-label="Delete order '+o.id+'">&times;</button></td>'+
@@ -774,7 +773,7 @@ async function loadOrders(){
           await jpost('/orders/update',{id:+id,status:next});
           sel.className='pill-select '+stClass(next);
           sel.dataset.was=next;
-          toast('Order #'+id+' → '+next);
+          toast('Order → '+stLabel(next));
         }catch(e){sel.value=was;toast(e.message);}
         sel.disabled=false;
       };
@@ -1025,6 +1024,12 @@ $('bulk-save').onclick=async function(){
 
 /* ---------------- boot ---------------- */
 var STATUSES_LIST=Array.prototype.map.call($('f-status').options,function(o){return o.value;});
+/* key -> label, read off the same <select> the server rendered, so the Orders
+   tab shows "Ordered to supplier" while still sending the "ordered" key. */
+var STAGE_LABELS={};
+Array.prototype.forEach.call($('f-status').options,function(o){STAGE_LABELS[o.value]=o.textContent;});
+function stLabel(s){return STAGE_LABELS[s]||s;}
+function orderNo(o){return o.order_no||o.id;}
 (async function(){
   drawShots();drawAttrs();
   try{
@@ -1047,7 +1052,8 @@ var STATUSES_LIST=Array.prototype.map.call($('f-status').options,function(o){ret
 
 def build():
     generated = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
-    status_opts = "".join(f'<option value="{s}">{s}</option>' for s in STATUSES)
+    status_opts = "".join(
+        f'<option value="{k}">{STAGE_LABELS.get(k, k)}</option>' for k in STATUSES)
     doc = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">

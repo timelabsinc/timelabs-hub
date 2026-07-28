@@ -332,6 +332,32 @@ def upsert_customer_row(access, headers, row):
     return sid
 
 
+def update_order_field(access, order_no, header, value):
+    """Patch one column of one order's row in the Orders tab, matched on the
+    Order # in column A. Best-effort: an order that never reached the sheet
+    (bulk/WhatsApp/Shopify rows often haven't) simply isn't found and nothing
+    happens — a stage change must never fail because the mirror is behind.
+    """
+    sid = _state().get("sheet_id")
+    if not sid or header not in SHEET_HEADERS:
+        return False
+    col = _values(access, sid, f"{ORDERS_TAB}!A:A")
+    key = str(order_no)
+    at = None
+    for i, r in enumerate(col):
+        if r and str(r[0]).strip() == key:
+            at = i + 1
+            break
+    if not at:
+        return False
+    a1col = chr(ord("A") + SHEET_HEADERS.index(header))   # <=26 cols, fine
+    _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
+          + urllib.parse.quote(f"{ORDERS_TAB}!{a1col}{at}")
+          + "?valueInputOption=USER_ENTERED",
+          access, "PUT", {"values": [[value]]})
+    return True
+
+
 # ------------------------------------------------------------- sheet reshape
 BACKUP_DIR = "/root/ops-dashboard/.sheet-backups"
 
