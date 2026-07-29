@@ -751,6 +751,7 @@ function specOf(o){
     .map(function(k){return o[k];}).filter(Boolean).join(' · ');
 }
 var orderRows={};
+var editPhotos=[], editPhotoRemove=[], editPhotoAdds=[];
 function isPaidOrder(o){return String((o&&o.financial_status)||'').toLowerCase()==='paid';}
 function paymentLabel(o){
   var s=String((o&&o.financial_status)||'').toLowerCase();
@@ -765,6 +766,33 @@ function paymentClass(o){
   return s==='paid'?'paid':(s==='partially_paid'?'partpaid':'');
 }
 function editVal(id,v){$(id).value=(v===null||v===undefined)?'':v;}
+function drawEditPhotos(){
+  var id=+$('e-id').value;
+  $('e-shots').innerHTML=editPhotos.map(function(p){
+    var src=p.url||(API+'/orders/photo?id='+id+'&n='+p.index);
+    return '<div class="shot"><img src="'+src+'" alt="Order reference">'+
+      '<button class="rm" type="button" data-eprm="'+p.key+
+      '" aria-label="Remove photo">&times;</button></div>';
+  }).join('');
+  $('e-shots').querySelectorAll('[data-eprm]').forEach(function(b){
+    b.onclick=function(){
+      var key=b.dataset.eprm, p=editPhotos.filter(function(x){return x.key===key;})[0];
+      if(p&&p.index!=null)editPhotoRemove.push(p.index);
+      if(p&&p.path)editPhotoAdds=editPhotoAdds.filter(function(x){return x.path!==p.path;});
+      editPhotos=editPhotos.filter(function(x){return x.key!==key;});
+      drawEditPhotos();
+    };
+  });
+}
+async function addEditPhotos(files){
+  for(var i=0;i<files.length&&editPhotos.length<10;i++){
+    var f=files[i], fd=new FormData();fd.append('image',f,f.name||('photo-'+Date.now()+'.jpg'));
+    var r=await fetch(API+'/upload',{method:'POST',body:fd});
+    var d=await r.json();if(!r.ok)throw new Error(d.error||'Upload failed');
+    var rec={key:'new-'+Date.now()+'-'+i,path:d.path,url:URL.createObjectURL(f)};
+    editPhotoAdds.push(rec);editPhotos.push(rec);drawEditPhotos();
+  }
+}
 function openOrderEdit(id){
   var o=orderRows[id];
   if(!o)return;
@@ -780,6 +808,10 @@ function openOrderEdit(id){
   editVal('e-dial-colour',o.dial_colour);editVal('e-dial-style',o.dial_style);
   editVal('e-case-colour',o.case_colour);editVal('e-movement',o.movement);
   editVal('e-size',o.watch_size);$('e-stock').checked=!!Number(o.is_stock);
+  var local=[];try{local=JSON.parse(o.local_photos||'[]');}catch(e){}
+  editPhotoRemove=[];editPhotoAdds=[];
+  editPhotos=local.map(function(_,i){return {key:'old-'+i,index:i};});
+  drawEditPhotos();
   $('order-edit').hidden=false;
   document.body.style.overflow='hidden';
   setTimeout(function(){$('e-cust').focus();},0);
@@ -805,6 +837,10 @@ async function saveOrderEdit(){
   btn.disabled=true;btn.textContent='Saving…';
   try{
     var d=await jpost('/orders/update',body);
+    if(editPhotoRemove.length||editPhotoAdds.length){
+      await jpost('/orders/photos/update',{id:id,remove:editPhotoRemove,
+        photo_paths:editPhotoAdds.map(function(x){return x.path;})});
+    }
     closeOrderEdit();
     await loadOrders();
     loaded.customers=false;loaded.selling=false;
@@ -1170,6 +1206,11 @@ function orderNo(o){return o.order_no||o.id;}
 $('e-cancel').onclick=closeOrderEdit;
 $('e-close').onclick=closeOrderEdit;
 $('e-save').onclick=saveOrderEdit;
+$('e-add-photo').onclick=function(){$('e-photo-input').click();};
+$('e-photo-input').onchange=function(){
+  addEditPhotos(Array.from(this.files||[])).catch(function(e){toast(e.message);});
+  this.value='';
+};
 $('order-edit').querySelector('.omask').onclick=closeOrderEdit;
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape'&&!$('order-edit').hidden)closeOrderEdit();
@@ -1384,6 +1425,11 @@ def build():
         <label class="checkline"><input id="e-stock" type="checkbox">Made for stock</label></div>
     </div>
     <div class="of-field"><label>Notes</label><textarea id="e-notes" class="pin"></textarea></div>
+    <div class="of-field"><label>Reference images</label>
+      <div class="shots" id="e-shots"></div>
+      <button class="btn" type="button" id="e-add-photo">+ Add image</button>
+      <input id="e-photo-input" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+    </div>
     <div class="of-sep"></div>
     <div class="of-legend">Build details</div>
     <div class="of-row3">

@@ -531,7 +531,7 @@ function ago(s){
 }
 function cls(s){return String(s||'').replace(/[^a-z]/gi,'');}
 
-var STATUSES=[], PIPELINE=[], LABELS={}, ORDERS=[], filter='pending', q='', openDetail={}, sort='oldest', onlyPhotos=false, IS_ADMIN=false;
+var STATUSES=[], PIPELINE=[], LABELS={}, ORDERS=[], filter='pending', q='', openDetail={}, sort='newest', onlyPhotos=false, IS_ADMIN=false;
 var caseF='', moveF='', selectMode=false, SEL={};
 
 /* The five sections, in order. Each stage IS its own section now — a build
@@ -557,7 +557,7 @@ function matches(o){
 function activeFilters(){
   var n=0;
   if(onlyPhotos)n++;
-  if(sort!=='oldest')n++;
+  if(sort!=='newest')n++;
   if(q)n++;
   if(caseF)n++;
   if(moveF)n++;
@@ -584,7 +584,8 @@ function chipRow(host,key,cur,setter){
 }
 function sortOrders(list){
   var c=list.slice();
-  if(sort==='newest')c.reverse();
+  if(sort==='newest')c.sort(function(a,b){return b.id-a.id;});
+  else if(sort==='oldest')c.sort(function(a,b){return a.id-b.id;});
   else if(sort==='stage')c.sort(function(a,b){
     return STATUSES.indexOf(a.status)-STATUSES.indexOf(b.status)||a.id-b.id;});
   /* Sorting by price uses the default rate for anything unpriced, because
@@ -608,6 +609,21 @@ function photoEl(o){
   return '<div class="oshot" data-lb="'+o.id+'" data-n="'+o.photos+'">'+
     '<img src="'+API+'/supplier/photo?id='+o.id+'&n=0" alt="Reference photo for order '+o.id+'" loading="lazy">'+
     (o.photos>1?'<span class="more">+'+(o.photos-1)+'</span>':'')+'</div>';
+}
+var photoOrderId=0;
+async function uploadSupplierPhoto(id,file){
+  var fd=new FormData();fd.append('image',file,file.name||('photo-'+Date.now()+'.jpg'));
+  var r=await fetch(API+'/upload',{method:'POST',body:fd}), d=await r.json();
+  if(!r.ok)throw new Error(d.error||'Upload failed');
+  await jpost('/supplier/photos/update',{id:id,photo_paths:[d.path]});
+}
+async function removeSupplierPhoto(o){
+  if(!o.photos){toast('This order has no images');return;}
+  var raw=prompt('Image number to remove (1–'+o.photos+'):',String(o.photos));
+  if(raw===null)return;
+  var n=parseInt(raw,10);
+  if(!(n>=1&&n<=o.photos)){toast('Enter a number from 1 to '+o.photos);return;}
+  await jpost('/supplier/photos/update',{id:o.id,remove:[n-1]});
 }
 function specEl(o){
   var keys=['case_style','dial_colour','dial_style','case_colour','movement','watch_size'];
@@ -694,7 +710,10 @@ function cardEl(o){
       '<form class="noteform" data-note="'+o.id+'">'+
         '<input type="text" placeholder="Add a note — e.g. dial out of stock" aria-label="Add a note">'+
         '<button type="submit">Send</button>'+
-      '</form>'+
+      '</form><div class="bact">'+
+        '<button type="button" data-photoadd="'+o.id+'">+ Add image</button>'+
+        (o.photos?'<button type="button" data-photorm="'+o.id+'">Remove image</button>':'')+
+      '</div>'+
     '</div>'+
   '</article>';
 }
@@ -859,6 +878,16 @@ function wire(){
   });
   L.querySelectorAll('[data-share]').forEach(function(b){
     b.onclick=function(){ openShare(+b.dataset.share); };
+  });
+  L.querySelectorAll('[data-photoadd]').forEach(function(b){
+    b.onclick=function(){photoOrderId=+b.dataset.photoadd;$('supplier-photo-input').click();};
+  });
+  L.querySelectorAll('[data-photorm]').forEach(function(b){
+    b.onclick=function(){
+      var o=byId(+b.dataset.photorm);
+      removeSupplierPhoto(o).then(function(){toast('Image removed');load(true);})
+        .catch(function(e){toast(e.message);});
+    };
   });
   /* Inline edit, same pattern as tracking — typing a number in place beats
      a modal for a field entered dozens of times a week. */
@@ -1083,6 +1112,7 @@ function billCard(b){
       '<button data-billpdf="'+b.id+'">Bill PDF</button>'+
       '<button data-billwa="'+b.id+'">Send to WhatsApp</button>'+
       '<button data-billlink="'+b.id+'">Copy link</button>'+
+      (!ack?'<button data-billedit="'+b.id+'">Edit bill</button>':'')+
       (CAN_ACK&&!ack?'<button class="go" data-billack="'+b.id+'">Agree this batch</button>':'')+
       (CAN_ACK&&ack?'<button data-billpay="'+b.id+'">Record payment</button>':'')+
       (CAN_ACK?'<button class="danger" data-billdel="'+b.id+'">Delete</button>':'')+
@@ -1126,6 +1156,25 @@ function drawBills(){
         toast('Agreed — sent to your Ledger');
         loadBills(); load(true);
       }).catch(function(e){ toast(e.message); });
+    };
+  });
+  L.querySelectorAll('[data-billedit]').forEach(function(btn){
+    btn.onclick=async function(){
+      var b=BILLS.filter(function(x){return x.id===+btn.dataset.billedit;})[0];
+      if(!b)return;
+      var costs={};
+      for(var i=0;i<(b.items||[]).length;i++){
+        var it=b.items[i], raw=prompt('Cost for '+(it.ref_code||('#'+it.order_id))+':',it.cost);
+        if(raw===null)return;
+        costs[String(it.id)]=raw;
+      }
+      var shipping=prompt('Shipping cost:',b.shipping_cost||0);if(shipping===null)return;
+      var notes=prompt('Bill notes:',b.notes||'');if(notes===null)return;
+      try{
+        await jpost('/supplier/bill/update',{id:b.id,costs:costs,
+          shipping_cost:shipping,notes:notes});
+        toast('Bill updated');await loadBills();await loadOrders();
+      }catch(e){toast(e.message);}
     };
   });
   L.querySelectorAll('[data-billdel]').forEach(function(b){
@@ -1323,13 +1372,19 @@ document.querySelectorAll('.schip[data-sort]').forEach(function(c){
   c.onclick=function(){ sort=c.dataset.sort; render(); };
 });
 $('f-photos').onclick=function(){ onlyPhotos=!onlyPhotos; render(); };
+$('supplier-photo-input').onchange=function(){
+  var f=(this.files||[])[0];this.value='';
+  if(!f||!photoOrderId)return;
+  uploadSupplierPhoto(photoOrderId,f).then(function(){toast('Image added');load(true);})
+    .catch(function(e){toast(e.message);});
+};
 $('fbtn').onclick=function(){
   var open=$('fpanel').classList.toggle('on');
   $('fbtn').classList.toggle('open',open);
   $('fbtn').setAttribute('aria-expanded',open?'true':'false');
 };
 $('fclear').onclick=function(){
-  q='';onlyPhotos=false;sort='oldest';caseF='';moveF='';
+  q='';onlyPhotos=false;sort='newest';caseF='';moveF='';
   $('q').value='';render();
 };
 var qT;
@@ -1530,6 +1585,7 @@ def build():
   </div>
 </div>
 
+<input id="supplier-photo-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>{SUP_JS}</script>
 </body></html>"""

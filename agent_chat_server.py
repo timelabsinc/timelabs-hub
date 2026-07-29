@@ -2980,6 +2980,80 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         self._serve_order_photo(query, supplier_only=True)
 
+    def _handle_order_photos_update(self, supplier_only=False):
+        """Add uploaded images and/or remove existing images from an order.
+        Supplier callers may only touch orders explicitly shared with them;
+        staff may touch any logged order. Filenames never come from the
+        browser, and removals are expressed as stable list indexes."""
+        if supplier_only:
+            allowed = self._supplier_ok()
+        else:
+            allowed = self._has_tool("orders")
+        if not allowed:
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 65536)).decode())
+            oid = int(p.get("id"))
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        incoming = p.get("photo_paths") or []
+        if not isinstance(incoming, list):
+            incoming = []
+        incoming = incoming[:10]
+        remove = p.get("remove") or []
+        if not isinstance(remove, list):
+            remove = []
+        remove = {int(i) for i in remove if str(i).isdigit()}
+        upload_root = os.path.realpath(UPLOAD_DIR) + os.sep
+        validated = []
+        for candidate in incoming:
+            path = os.path.realpath(str(candidate))
+            if not path.startswith(upload_root) or not os.path.isfile(path):
+                self._json(400, {"error": "a photo upload expired — attach it again"})
+                return
+            validated.append(path)
+
+        conn = db()
+        q = "SELECT local_photos, order_no FROM orders WHERE id=?"
+        if supplier_only:
+            q += " AND supplier_visible=1"
+        row = conn.execute(q, (oid,)).fetchone()
+        if not row:
+            conn.close()
+            self._json(404, {"error": "no such order"})
+            return
+        try:
+            current = [os.path.basename(n) for n in
+                       json.loads(row["local_photos"] or "[]") if isinstance(n, str)]
+        except (json.JSONDecodeError, TypeError):
+            current = []
+        order_dir = os.path.join(ORDER_PHOTOS, str(oid))
+        os.makedirs(order_dir, mode=0o750, exist_ok=True)
+        kept = []
+        for idx, name in enumerate(current):
+            if idx in remove:
+                try:
+                    os.remove(os.path.join(order_dir, name))
+                except FileNotFoundError:
+                    pass
+            else:
+                kept.append(name)
+        for path in validated:
+            ext = os.path.splitext(path)[1].lower()
+            name = secrets.token_hex(8) + ext
+            os.replace(path, os.path.join(order_dir, name))
+            kept.append(name)
+        conn.execute("UPDATE orders SET local_photos=?, has_image=? WHERE id=?",
+                     (json.dumps(kept), 1 if kept else 0, oid))
+        order_event(conn, oid, "photos",
+                    f"reference photos updated ({len(kept)} total)", self._order_user())
+        conn.commit()
+        conn.close()
+        self._json(200, {"ok": True, "id": oid, "photos": len(kept)})
+
     # --- Supplier build queue: what to build, never who for -----------------
     def _supplier_ok(self):
         """admin or supplier role — anyone else, including a signed-in person
@@ -3019,10 +3093,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # which stays absent from this SELECT entirely.
                 "SELECT id, order_no, received_at, product, quantity, status, "
                 "case_style, dial_colour, dial_style, case_colour, movement, "
-                "watch_size, local_photos, tracking_code, ref_code, "
+                "watch_size, notes, local_photos, tracking_code, ref_code, "
                 "supplier_cost, supplier_cost_ccy, bill_id FROM orders "
                 "WHERE supplier_visible=1 AND status != 'cancelled' "
-                "ORDER BY id ASC").fetchall()
+                "ORDER BY id DESC").fetchall()
             events = {}
             for e in conn.execute(
                     "SELECT order_id, created_at, actor, kind, detail FROM order_events "
@@ -3355,6 +3429,71 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "bill_id": bill_id, "bill_no": bill_no,
                          "subtotal": subtotal, "shipping_cost": shipping,
                          "total": total, "defaulted": defaulted})
+
+    def _handle_supplier_bill_update(self):
+        """Edit a draft bill until staff acknowledge it or any payment clears.
+        Re-pricing lines updates the corresponding order costs as well, so the
+        queue and bill can never show two different agreed figures."""
+        if not self._supplier_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 65536)).decode())
+            bid = int(p.get("id"))
+            shipping = float(p.get("shipping_cost") or 0)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        if shipping < 0:
+            self._json(400, {"error": "shipping cannot be negative"})
+            return
+        notes = str(p.get("notes") or "").strip()[:400]
+        costs = p.get("costs") or {}
+        if not isinstance(costs, dict):
+            costs = {}
+        conn = db()
+        bill = conn.execute("SELECT status FROM supplier_bills WHERE id=?", (bid,)).fetchone()
+        paid = conn.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM supplier_payments WHERE bill_id=?",
+            (bid,)).fetchone()[0]
+        if not bill:
+            conn.close()
+            self._json(404, {"error": "no such batch"})
+            return
+        if bill["status"] != "draft" or float(paid or 0) > 0:
+            conn.close()
+            self._json(409, {"error": "accepted or paid batches cannot be edited"})
+            return
+        items = conn.execute(
+            "SELECT id, order_id, cost FROM supplier_bill_items WHERE bill_id=?",
+            (bid,)).fetchall()
+        subtotal = 0.0
+        for item in items:
+            raw = costs.get(str(item["id"]), item["cost"])
+            try:
+                cost = float(raw)
+            except (TypeError, ValueError):
+                conn.close()
+                self._json(400, {"error": "every line needs a valid cost"})
+                return
+            if cost < 0:
+                conn.close()
+                self._json(400, {"error": "costs cannot be negative"})
+                return
+            subtotal += cost
+            conn.execute("UPDATE supplier_bill_items SET cost=? WHERE id=?",
+                         (cost, item["id"]))
+            conn.execute("UPDATE orders SET supplier_cost=? WHERE id=?",
+                         (cost, item["order_id"]))
+            order_event(conn, item["order_id"], "cost",
+                        f"bill line updated to {cost:,.2f}", self._order_user())
+        total = subtotal + shipping
+        conn.execute("UPDATE supplier_bills SET subtotal=?, shipping_cost=?, total=?, notes=? "
+                     "WHERE id=?", (subtotal, shipping, total, notes, bid))
+        conn.commit()
+        conn.close()
+        self._json(200, {"ok": True, "id": bid, "subtotal": subtotal, "total": total})
 
     def _handle_supplier_bill_whatsapp(self):
         """Post a batch's bill straight into the team WhatsApp, PDF attached.
@@ -5111,10 +5250,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _handle_upload(self):
         # This endpoint backs role-visible image features in Orders, Intake,
-        # Command, and Reddit. Supplier and other restricted roles still have
-        # no upload capability.
-        if not any(self._has_tool(tool)
-                   for tool in ("orders", "intake", "chat", "reddit")):
+        # Supplier, Command, and Reddit. The follow-up endpoint still decides
+        # which records the caller is allowed to attach the upload to.
+        if not (self._supplier_ok() or any(self._has_tool(tool)
+                   for tool in ("orders", "intake", "chat", "reddit"))):
             self._json(403, {"error": "not available for this account"})
             return
         ctype = self.headers.get("Content-Type", "")
@@ -5287,10 +5426,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_orders_parse()
         elif path == "/orders/update":
             self._handle_orders_update()
+        elif path == "/orders/photos/update":
+            self._handle_order_photos_update()
         elif path == "/orders/items/relabel":
             self._handle_order_items_relabel()
         elif path == "/supplier/status":
             self._handle_supplier_status()
+        elif path == "/supplier/photos/update":
+            self._handle_order_photos_update(supplier_only=True)
         elif path == "/supplier/note":
             self._handle_supplier_note()
         elif path == "/supplier/tracking":
@@ -5309,6 +5452,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_cost_bulk()
         elif path == "/supplier/bill/create":
             self._handle_supplier_bill_create()
+        elif path == "/supplier/bill/update":
+            self._handle_supplier_bill_update()
         elif path == "/supplier/bill/acknowledge":
             self._handle_supplier_bill_acknowledge()
         elif path == "/supplier/bill/delete":
