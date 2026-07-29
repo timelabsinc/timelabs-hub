@@ -824,7 +824,7 @@ def _appnav(active="face", drop_ready=False):
         ("face", 'href="/ops/#overview"', "Home", ""),
         ("drop", drop_attr, "Drop", ""),
         ("orders", 'href="/ops/order-form.html"', "Orders", ""),
-        ("chat", 'href="/ops/agent/"', "Chat", ""),
+        ("chat", 'href="/ops/command.html"', "Command", ""),
         ("tools", 'href="/ops/tools.html"', "Tools", ""),
     ]
     out = []
@@ -838,7 +838,7 @@ def _appnav(active="face", drop_ready=False):
 # Labs Drop, Labs Ledger, Labs Chat, Labs Tools — like Google Drive/Docs. The
 # collective name is "Labs OS" (shown in the footer). One header for every page.
 SECTION_LABEL = {"face": "Home", "drop": "Drop", "ledger": "Ledger",
-                 "chat": "Chat", "tools": "Tools", "orders": "Orders"}
+                 "chat": "Command", "tools": "Tools", "orders": "Orders"}
 
 
 def hub_header(active, actions=""):
@@ -962,7 +962,7 @@ ASSIST_JS = r"""
     return {name:'Labs OS',chips:["What's new today?",'What can you do?']};}
   var PC=ctx();
   var fab=el('<button class="lx-fab" title="Ask Labs (Ctrl/Cmd K)" aria-label="Ask Labs"><svg viewBox="0 0 24 24"><path d="M9 3l1.3 3.5L14 7.8l-3.7 1.3L9 12.5 7.7 9.1 4 7.8l3.7-1.3z"/><path d="M17.5 13l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg></button>');
-  var panel=el('<div class="lx-panel" role="dialog" aria-label="Ask Labs"><div class="lx-head"><span class="lx-dot">L</span><b>Ask Labs</b><span class="lx-ctx"></span><a class="lx-full" href="/ops/agent/" title="Open full chat">&#10530;</a><button class="lx-x" aria-label="Close">&times;</button></div><div class="lx-thread" id="lxThread"></div><div class="lx-chips" id="lxChips"></div><form class="lx-input" id="lxForm"><textarea id="lxIn" rows="1" placeholder="Ask anything, or tell me what to do..."></textarea><button type="submit" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z"/></svg></button></form></div>');
+  var panel=el('<div class="lx-panel" role="dialog" aria-label="Ask Labs"><div class="lx-head"><span class="lx-dot">L</span><b>Ask Labs</b><span class="lx-ctx"></span><a class="lx-full" href="/ops/command.html" title="Open Labs Command">&#10530;</a><button class="lx-x" aria-label="Close">&times;</button></div><div class="lx-thread" id="lxThread"></div><div class="lx-chips" id="lxChips"></div><form class="lx-input" id="lxForm"><textarea id="lxIn" rows="1" placeholder="Ask anything, or tell me what to do..."></textarea><button type="submit" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z"/></svg></button></form></div>');
   document.body.appendChild(fab); document.body.appendChild(panel);
   panel.querySelector('.lx-ctx').textContent=PC.name!=='Labs OS'?('· '+PC.name):'';
   var thread=panel.querySelector('#lxThread'),input=panel.querySelector('#lxIn'),chips=panel.querySelector('#lxChips'),greeted=false;
@@ -991,7 +991,7 @@ ASSIST_JS = r"""
   async function poll(sid,w){for(var i=0;i<45;i++){await new Promise(function(r){setTimeout(r,2600);});
       var h=await api('/history?session='+encodeURIComponent(sid));var m=h.messages||[];
       if(m.length&&m[m.length-1].role==='agent'){w.remove();addBot(m[m.length-1].text);return;}}
-    w.remove();addBot("Still working on it — open the [full chat](/ops/agent/) and it'll appear there when it lands.");
+    w.remove();addBot("Still working on it — open [Labs Command](/ops/command.html) and it'll appear there when it lands.");
   }
   panel.querySelector('#lxForm').addEventListener('submit',function(e){e.preventDefault();send();});
   input.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});

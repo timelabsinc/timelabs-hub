@@ -972,7 +972,7 @@ def main():
 
     # drop_chrome doesn't render a page — it re-syncs Drop's header/nav from
     # hub_shell so the hand-written SPA can't drift out of step with the rest.
-    generators = ("tools", "blog", "product_updater", "product_builder",
+    generators = ("command", "tools", "blog", "product_updater", "product_builder",
                   "content_updater", "theme_editor", "files", "order_form",
                   "supplier", "access", "architecture", "blog_uploader",
                   "drop_chrome", "reddit")

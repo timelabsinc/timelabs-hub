@@ -41,7 +41,7 @@ TOOLS = [
         ("face", "Home", "The live dashboard — sales, funnel, plan, findings.", "/ops/#overview", "live"),
         ("drop", "Drop", "Files &amp; product video — upload, share, organize.", "/drop/", "live"),
         ("ledger", "Ledger", "Costs &amp; margins from your supplier invoices.", "/ops/ledger.html", "live"),
-        ("chat", "Chat", "Ask the team (Hermes / Claude) with photos.", "/ops/agent/", "live"),
+        ("chat", "Command", "Run the business with Hermes — conversations, context and controlled actions.", "/ops/command.html", "live"),
         ("orders", "Order form", "Log an order in seconds — with a photo; syncs to Orders &amp; Customers.", "/ops/order-form.html", "live"),
     ]),
     ("Content &amp; growth", [
