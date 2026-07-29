@@ -14,11 +14,14 @@ watermark file just keeps each run's Shopify query small; it is not what
 protects against duplicates, so it's safe to delete and re-backfill from
 scratch at any time.
 """
+import argparse
 import json
 import os
 import sqlite3
 import sys
 import time
+import urllib.parse
+import urllib.request
 
 sys.path.insert(0, "/root/ops-dashboard")
 import shopify_api
@@ -26,7 +29,9 @@ import customers as customers_mod
 
 DB = "/root/ops-dashboard/data/hermes.db"
 WATERMARK = "/root/ops-dashboard/.shopify-order-sync.json"
+ORDER_PHOTOS = "/root/ops-dashboard/data/order-photos"
 PAGE_SIZE = 50
+MAX_IMAGE_BYTES = 12 * 1024 * 1024
 
 ORDERS_QUERY = """
 query($n: Int!, $after: String, $q: String) {
@@ -38,7 +43,10 @@ query($n: Int!, $after: String, $q: String) {
       customer { displayName phone email }
       shippingAddress { address1 address2 city province zip phone }
       lineItems(first: 20) {
-        nodes { title quantity discountedUnitPriceSet { shopMoney { amount } } }
+        nodes {
+          title quantity image { url altText }
+          discountedUnitPriceSet { shopMoney { amount } }
+        }
       }
     }
   }
@@ -66,6 +74,102 @@ def _address(o):
     return ", ".join(p for p in parts if p)
 
 
+def _image_urls(order):
+    """One stable reference image per distinct Shopify line-item image."""
+    out = []
+    for item in (order.get("lineItems") or {}).get("nodes") or []:
+        url = str((item.get("image") or {}).get("url") or "").strip()
+        if url and url not in out:
+            out.append(url)
+    return out[:10]
+
+
+def _image_extension(data):
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
+def _shopify_image_url(url):
+    """Keep this downloader from becoming an SSRF path through Shopify data."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and (
+        host == "cdn.shopify.com"
+        or host.endswith(".shopifycdn.com")
+        or host == "shopifycdn.net"
+        or host.endswith(".shopifycdn.net")
+    )
+
+
+def _store_images(conn, order_id, urls):
+    """Download Shopify CDN images into the same protected store as form photos.
+
+    Files are written atomically and the database is updated only after at
+    least one complete, recognizable image is present.
+    """
+    if not urls:
+        return []
+    row = conn.execute(
+        "SELECT local_photos FROM orders WHERE id=?", (order_id,)).fetchone()
+    if row and row[0] not in (None, "", "[]"):
+        try:
+            current = json.loads(row[0])
+            if current:
+                return current
+        except (TypeError, json.JSONDecodeError):
+            pass
+
+    dest = os.path.join(ORDER_PHOTOS, str(order_id))
+    os.makedirs(dest, exist_ok=True)
+    stored = []
+    for url in urls:
+        if not _shopify_image_url(url):
+            print(f"[shopify-sync] refused non-Shopify image URL for order {order_id}",
+                  flush=True)
+            continue
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "Labs-OS-Shopify-Order-Sync/1.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                declared = int(resp.headers.get("Content-Length") or 0)
+                if declared > MAX_IMAGE_BYTES:
+                    raise ValueError("image exceeds size limit")
+                data = resp.read(MAX_IMAGE_BYTES + 1)
+            if len(data) > MAX_IMAGE_BYTES:
+                raise ValueError("image exceeds size limit")
+            ext = _image_extension(data)
+            if not ext:
+                raise ValueError("response is not a supported image")
+            name = f"{len(stored) + 1}{ext}"
+            final = os.path.join(dest, name)
+            tmp = final + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, final)
+            stored.append(name)
+        except Exception as e:
+            print(f"[shopify-sync] image for order {order_id} skipped: {e}", flush=True)
+    if stored:
+        conn.execute(
+            "UPDATE orders SET has_image=1, local_photos=? WHERE id=?",
+            (json.dumps(stored), order_id))
+        conn.commit()
+    else:
+        try:
+            os.rmdir(dest)
+        except OSError:
+            pass
+    return stored
+
+
 def _fetch_new(since):
     """Every order created after `since`, oldest first, one page at a time —
     ascending order matters: it's what makes the local id sequence a true
@@ -80,6 +184,48 @@ def _fetch_new(since):
             break
         after = conn["pageInfo"]["endCursor"]
     return out
+
+
+def backfill_images(actor="shopify-image-backfill"):
+    """Attach images to already-logged Shopify orders without changing orders."""
+    try:
+        remote = _fetch_new("2020-01-01T00:00:00Z")
+    except Exception as e:
+        return {"updated": 0, "missing": 0, "failed": 0, "error": str(e)}
+    by_id = {o.get("id"): o for o in remote if o.get("id")}
+    conn = sqlite3.connect(DB, timeout=5)
+    rows = conn.execute(
+        "SELECT id, shopify_order_id FROM orders "
+        "WHERE shopify_order_id IS NOT NULL "
+        "AND COALESCE(NULLIF(local_photos,''),'[]')='[]' "
+        "ORDER BY id").fetchall()
+    updated = missing = failed = 0
+    for oid, shopify_id in rows:
+        order = by_id.get(shopify_id)
+        if not order:
+            missing += 1
+            continue
+        try:
+            if _store_images(conn, oid, _image_urls(order)):
+                updated += 1
+            else:
+                missing += 1
+        except Exception as e:
+            failed += 1
+            print(f"[shopify-sync] image backfill for order {oid} failed: {e}", flush=True)
+    conn.close()
+    if updated:
+        try:
+            hconn = sqlite3.connect(DB, timeout=5)
+            hconn.execute(
+                "INSERT INTO hub_events (app, kind, actor, detail) VALUES (?,?,?,?)",
+                ("orders", "shopify_image_backfill", actor,
+                 f"Added product photos to {updated} storefront order(s)"))
+            hconn.commit()
+            hconn.close()
+        except Exception:
+            pass
+    return {"updated": updated, "missing": missing, "failed": failed}
 
 
 def sync(actor="shopify-sync"):
@@ -141,7 +287,7 @@ def sync(actor="shopify-sync"):
                     "customer_email, address, pincode, city, state, source, product, "
                     "price_inr, quantity, status, order_no, shopify_order_id, shopify_name, "
                     "financial_status, supplier_visible) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)",
                     ((o.get("createdAt") or "")[:19].replace("T", " "),
                      name, phone, email, _address(o), addr.get("zip") or "",
                      addr.get("city") or "", addr.get("province") or "",
@@ -164,6 +310,13 @@ def sync(actor="shopify-sync"):
                     "line_total) VALUES (?,?,?,?,?)",
                     (oid, item.get("title") or "—", iqty, unit, unit * iqty))
             conn.commit()
+            try:
+                _store_images(conn, oid, _image_urls(o))
+            except Exception as e:
+                # The order is the record of sale and must survive even if its
+                # optional reference image is temporarily unavailable.
+                print(f"[shopify-sync] order {o.get('name', '?')} image skipped: {e}",
+                      flush=True)
             synced += 1
 
             cust_row = None
@@ -222,4 +375,9 @@ def sync(actor="shopify-sync"):
 
 
 if __name__ == "__main__":
-    print(json.dumps(sync(), indent=2))
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--backfill-images", action="store_true",
+        help="attach Shopify product images to existing local storefront orders")
+    args = parser.parse_args()
+    print(json.dumps(backfill_images() if args.backfill_images else sync(), indent=2))

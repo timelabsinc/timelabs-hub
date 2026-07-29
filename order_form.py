@@ -169,6 +169,9 @@ OF_CSS = r"""
   .btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink);width:100%;
     justify-content:center;padding:15px;font-size:16px;margin-top:2px;}
   .btn.primary[disabled]{opacity:.42;cursor:not-allowed;}
+  .supplier-toggle{white-space:nowrap;}
+  .supplier-toggle.sent{background:var(--good-bg);border-color:transparent;color:var(--good);}
+  .supplier-toggle[disabled]{opacity:.7;cursor:default;transform:none;}
   .savehint{text-align:center;font-size:12px;color:var(--muted);margin-top:9px;}
   .warnbox{background:var(--accent-bg);color:var(--accent);border-radius:var(--r-s);
     padding:11px 13px;font-size:13px;line-height:1.55;margin-bottom:14px;}
@@ -181,7 +184,7 @@ OF_CSS = r"""
   .sec-head .sp{flex:1;}
   .sec-head a{font-size:12.5px;color:var(--accent);}
   .tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
-  table.dt{width:100%;border-collapse:collapse;font-size:13.5px;min-width:700px;}
+  table.dt{width:100%;border-collapse:collapse;font-size:13.5px;min-width:820px;}
   table.dt th{text-align:left;font-size:11px;font-weight:650;color:var(--muted);
     text-transform:uppercase;letter-spacing:.04em;padding:0 10px 9px;white-space:nowrap;}
   table.dt td{padding:11px 10px;border-top:1px solid var(--border);vertical-align:top;}
@@ -718,9 +721,11 @@ async function loadOrders(){
     if(!rows.length){$('list').innerHTML='<div class="empty">No orders yet — the first one you save shows up here.</div>';return;}
     $('list').innerHTML='<table class="dt"><thead><tr>'+
       '<th>#</th><th>Logged</th><th>Source</th><th>Customer</th><th>Ship to</th><th>Product</th>'+
-      '<th>Qty</th><th>Price</th><th>Status</th><th>Photos</th><th></th></tr></thead><tbody>'+
+      '<th>Qty</th><th>Price</th><th>Supplier</th><th>Status</th><th>Photos</th><th></th></tr></thead><tbody>'+
       rows.map(function(o){
-        var st=String(o.status||'pending'), spec=specOf(o);
+        var st=String(o.status||'pending'), spec=specOf(o), sent=!!Number(o.supplier_visible);
+        var cancelled=st==='cancelled', effectiveSent=sent&&!cancelled;
+        var canRemove=effectiveSent&&st==='pending'&&!o.shipment_id&&!o.bill_id;
         return '<tr>'+
           '<td data-l="Order" class="o-num">#'+orderNo(o)+
             (o.ref_code?'<div class="o-sub">was '+esc(o.ref_code)+'</div>':'')+'</td>'+
@@ -739,6 +744,11 @@ async function loadOrders(){
             (o.notes?'<div class="o-sub">'+esc(o.notes)+'</div>':'')+'</td>'+
           '<td data-l="Qty" class="o-num">'+(o.quantity||1)+'</td>'+
           '<td data-l="Price" class="o-num">'+esc(money(o.price_inr))+'</td>'+
+          '<td data-l="Supplier"><button class="btn sm supplier-toggle'+(effectiveSent?' sent':'')+
+            '" data-supplier="'+o.id+'" data-on="'+(sent?'1':'0')+'"'+
+            (cancelled?' disabled title="Cancelled orders stay out of the supplier queue"':
+             (sent&&!canRemove?' disabled title="Already in progress, shipped, or billed"':''))+'>'+
+            (cancelled?'Not sent':(sent?'With supplier':'Send to supplier'))+'</button></td>'+
           '<td data-l="Status"><select class="pill-select '+stClass(st)+'" data-id="'+o.id+'">'+
             STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(stLabel(s))+'</option>';}).join('')+
             '</select></td>'+
@@ -776,6 +786,18 @@ async function loadOrders(){
           toast('Order → '+stLabel(next));
         }catch(e){sel.value=was;toast(e.message);}
         sel.disabled=false;
+      };
+    });
+    $('list').querySelectorAll('.supplier-toggle').forEach(function(b){
+      b.onclick=async function(){
+        var id=+b.dataset.supplier, sent=b.dataset.on==='1', next=sent?0:1;
+        if(sent&&!confirm('Remove this pending order from the supplier queue?'))return;
+        b.disabled=true;
+        try{
+          await jpost('/orders/update',{id:id,supplier_visible:next});
+          toast(next?'Order sent to supplier':'Order removed from supplier');
+          await loadOrders();
+        }catch(e){b.disabled=false;toast(e.message);}
       };
     });
   }catch(e){$('list').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
@@ -1011,13 +1033,13 @@ $('bulk-save').onclick=async function(){
     var d=await jpost('/orders/bulk',{source:bulkSrc,items:items});
     var n=(d.created||[]).length, bad=(d.failed||[]).length;
     $('bulk-result').innerHTML='<div class="bresult'+(bad?' warn':'')+'">'+
-      '<b>'+n+' build'+(n===1?'':'s')+' added</b> to the '+
-      '<a href="/ops/supplier.html">supplier queue</a>.'+
+      '<b>'+n+' order'+(n===1?'':'s')+' logged.</b> Review them in Orders, then '+
+      'send the chosen builds to the supplier.'+
       (bad?' '+bad+' row'+(bad===1?'':'s')+' couldn\'t be added.':'')+'</div>';
     bulkRows.forEach(function(x){ if(x.url){ try{URL.revokeObjectURL(x.url);}catch(e){} } });
     bulkRows=[]; bulkDraw();
     loaded={};
-    toast(n+' build'+(n===1?'':'s')+' added');
+    toast(n+' order'+(n===1?'':'s')+' logged');
   }catch(e){ toast(e.message); }
   btn.disabled=false;
 };
@@ -1065,7 +1087,7 @@ def build():
   <main>
     <div class="page-head">
       <h1 class="page-title">Order form</h1>
-      <p class="page-sub">Paste the customer's details, add a photo, save. It lands here, in the Orders sheet, and the photos go to Drive.</p>
+      <p class="page-sub">Every order lands here first. Review it, then send only the orders that need building to the supplier.</p>
     </div>
 
     <div class="tabs">
@@ -1153,11 +1175,11 @@ def build():
 
     <section class="pane" id="pane-bulk">
       <div class="of-card">
-        <div class="of-legend">Backfill builds from photos</div>
+        <div class="of-legend">Backfill orders from photos</div>
         <p class="o-sub" style="margin:0 0 13px;line-height:1.5">Drop a batch of watch
-          screenshots — each becomes a build on the supplier queue. Add the original
-          order number per photo so your supplier still recognises it. No customer or
-          price needed now; add those later on any build that sells.</p>
+          screenshots — each becomes an order in the log. Add the original order number
+          per photo, review the batch in Orders, then send only the chosen builds to the
+          supplier. No customer or price is required at this stage.</p>
         <div class="dz" id="bulk-dz">
           <div class="dz-t">Add screenshots</div>
           <div class="dz-s">Tap to pick from your photos &middot; or drag them here</div>

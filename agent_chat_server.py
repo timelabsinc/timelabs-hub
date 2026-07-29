@@ -156,9 +156,8 @@ def _ensure_orders_schema():
             # other channel and shows up in the same lists, totals and sheet.
             "shopify_order_id": "TEXT", "shopify_name": "TEXT",
             "financial_status": "TEXT",
-            # Off by default so the supplier queue starts empty rather than
-            # dumping every historical order on day one; every new order
-            # (either write path) turns this on for itself at creation.
+            # Every channel lands in the unified order log first. A person
+            # explicitly chooses which orders enter the supplier queue.
             "supplier_visible": "INTEGER DEFAULT 0",
             # Courier/tracking reference, entered by whoever has it — usually
             # the supplier once a build ships.
@@ -221,12 +220,6 @@ def _ensure_orders_schema():
             conn.execute(f"UPDATE orders SET status='pending' "
                          f"WHERE status IS NULL OR status NOT IN ({valid})")
 
-            # The pipeline is now how orders are managed, so make the real
-            # backlog visible instead of leaving it stranded behind the
-            # off-by-default flag. Cancelled stays hidden; the queue skips it
-            # anyway. Idempotent.
-            conn.execute("UPDATE orders SET supplier_visible=1 "
-                        "WHERE supplier_visible=0 AND status != 'cancelled'")
             conn.commit()
         conn.close()
     except Exception as e:
@@ -2199,7 +2192,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "pincode, city, state, source, product, price_inr, quantity, notes, status, "
             "has_image, drive_link, photo_links, case_style, dial_colour, dial_style, "
             "case_colour, movement, watch_size, is_stock, order_no, supplier_visible) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)",
             (customer, phone, email, address, pincode, city, state, source, product,
              price, qty, notes, status, 1 if photos else 0, drive_link,
              json.dumps(links) if links else None,
@@ -2237,7 +2230,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not access:
             warnings.append(
                 "Google isn't connected, so this order didn't reach the sheet"
-                + (" (the photos are saved here and visible to your supplier)" if stored else "")
+                + (" (the photos are saved here)" if stored else "")
                 + ". Open Drop and reconnect Google.")
 
         conn.execute(
@@ -2307,7 +2300,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "customer_email, address, pincode, city, state, source, product, quantity, "
                 "price_inr, notes, status, drive_link, photo_links, local_photos, case_style, "
                 "dial_colour, dial_style, case_colour, movement, watch_size, shopify_name, "
-                "ref_code, is_stock FROM orders ORDER BY id DESC LIMIT 100").fetchall()
+                "ref_code, is_stock, supplier_visible, shipment_id, bill_id "
+                "FROM orders ORDER BY id DESC LIMIT 100").fetchall()
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
@@ -2444,7 +2438,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "dial_style": 60, "case_colour": 60, "movement": 60,
                     "watch_size": 60}
         conn = db()
-        before = conn.execute("SELECT status FROM orders WHERE id=?", (oid,)).fetchone()
+        before = conn.execute(
+            "SELECT order_no, status, supplier_visible, shipment_id, bill_id "
+            "FROM orders WHERE id=?", (oid,)).fetchone()
         if not before:
             conn.close()
             self._json(404, {"error": "no such order"})
@@ -2472,6 +2468,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._json(400, {"error": f"'{p['status']}' isn't a real status"})
             return
+        supplier_change = None
+        if "supplier_visible" in p:
+            raw = p["supplier_visible"]
+            if not isinstance(raw, (bool, int)) or raw not in (0, 1, False, True):
+                conn.close()
+                self._json(400, {"error": "supplier selection must be on or off"})
+                return
+            supplier_change = 1 if raw else 0
+            if supplier_change and cur_status == "cancelled":
+                conn.close()
+                self._json(409, {"error": "A cancelled order can't be sent to the supplier"})
+                return
+            if (not supplier_change and before["supplier_visible"]
+                    and (cur_status != order_stages.DEFAULT_STAGE
+                         or before["shipment_id"] is not None
+                         or before["bill_id"] is not None)):
+                conn.close()
+                self._json(409, {
+                    "error": "This build is already in progress, shipped, or billed, "
+                             "so it can't be removed from the supplier queue."})
+                return
         updatable = dict(always)
         if not locked:
             updatable.update(lockable)
@@ -2480,6 +2497,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if k in p:
                 sets.append(f"{k}=?")
                 vals.append(str(p[k]).strip()[:maxlen])
+        if supplier_change is not None:
+            sets.append("supplier_visible=?")
+            vals.append(supplier_change)
         if not sets:
             conn.close()
             self._json(400, {"error": "nothing to update"})
@@ -2491,16 +2511,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if "status" in p and str(p["status"]).strip() != (before["status"] or ""):
             order_event(conn, oid, "status",
                        f'{before["status"] or "new"} -> {str(p["status"]).strip()}', actor)
+        if (supplier_change is not None
+                and supplier_change != int(before["supplier_visible"] or 0)):
+            order_event(
+                conn, oid, "supplier",
+                "sent to supplier queue" if supplier_change else "removed from supplier queue",
+                actor)
         conn.commit()
         conn.close()
-        hub_event("order_updated", f"#{oid}: " + ", ".join(k for k in updatable if k in p),
+        changed = [k for k in updatable if k in p]
+        if supplier_change is not None:
+            changed.append("sent to supplier" if supplier_change else "removed from supplier")
+        hub_event("order_updated",
+                 f"#{before['order_no'] or oid}: " + ", ".join(changed),
                  actor, app="orders")
         self._json(200, {"ok": True, "id": oid})
 
     def _handle_orders_bulk(self):
         """One build per screenshot. Send a batch of watch photos and each
-        becomes its own order on the supplier queue — no customer yet, that
-        gets attached when it sells.
+        becomes its own order in the unified log — no customer yet, that gets
+        attached when it sells. Staff decide which ones enter the supplier
+        queue after reviewing the batch.
 
         Each photo is filed against its own order id, so the queue shows the
         right reference against the right build rather than a shared album
@@ -2567,7 +2598,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "INSERT INTO orders (customer_name, source, product, price_inr, "
                     "quantity, notes, status, has_image, ref_code, case_style, dial_colour, "
                     "dial_style, case_colour, movement, watch_size, order_no, supplier_visible) "
-                    "VALUES ('',?,?,?,?,?,'pending',?,?,?,?,?,?,?,?,?,1)",
+                    "VALUES ('',?,?,?,?,?,'pending',?,?,?,?,?,?,?,?,?,0)",
                     (source, product, price, qty, notes, 1 if rp else 0, ref or None,
                      attrs.get("case_style"), attrs.get("dial_colour"),
                      attrs.get("dial_style"), attrs.get("case_colour"),
@@ -2600,7 +2631,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 failed.append({"i": i, "error": str(e)[:120]})
         conn.close()
         if created:
-            hub_event("orders_bulk", f"{len(created)} build(s) queued from a photo batch",
+            hub_event("orders_bulk", f"{len(created)} order(s) logged from a photo batch",
                      actor, app="orders")
         self._json(200, {"ok": True, "created": created, "failed": failed})
 
