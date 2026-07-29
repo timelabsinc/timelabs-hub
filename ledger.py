@@ -134,15 +134,20 @@ def build():
     try {{
       var res = await fetch('/ops/agent/api/ledger/import', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{}}'}});
       var d = await res.json();
+      if(!res.ok) throw new Error(d.error || 'Scan failed');
       var ok = (d.results||[]).filter(function(r){{return !r.error;}});
       if(!ok.length){{ alert('No new invoices in Drop — Ledger is up to date.'); b.disabled=false; b.textContent='Scan Drop for new invoices'; return; }}
       var lines = ok.map(function(r){{return '• ' + r.file + ' — ' + r.date + ' · ' + r.items + ' items · $' + r.total_usd;}}).join('\\n');
       if(confirm('Found ' + ok.length + ' new invoice(s):\\n\\n' + lines + '\\n\\nImport into Ledger? (Totals are best-effort — check against the invoice.)')){{
         b.textContent = 'Importing…';
-        await fetch('/ops/agent/api/ledger/import', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{\"commit\":true}}'}});
+        var committed = await fetch('/ops/agent/api/ledger/import', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{\"commit\":true}}'}});
+        var saved = await committed.json().catch(function(){{return {{}};}});
+        if(!committed.ok) throw new Error(saved.error || 'Import failed');
+        var failed = (saved.results||[]).filter(function(r){{return r.error;}});
+        if(failed.length) throw new Error(failed.map(function(r){{return r.file+': '+r.error;}}).join('\\n'));
         setTimeout(function(){{ location.reload(); }}, 1200);
       }} else {{ b.disabled=false; b.textContent='Scan Drop for new invoices'; }}
-    }} catch(e){{ alert('Scan failed — try again.'); b.disabled=false; b.textContent='Scan Drop for new invoices'; }}
+    }} catch(e){{ alert(e.message || 'Scan failed — try again.'); b.disabled=false; b.textContent='Scan Drop for new invoices'; }}
   }});
 </script>
 <script>{WHOAMI_JS}</script>

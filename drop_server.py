@@ -24,6 +24,7 @@ Storage layout under /srv/timelabs-drop:
   .trash/                  soft-deleted files, timestamp-prefixed
 """
 import hashlib
+import html
 import http.server
 import json
 import os
@@ -1324,10 +1325,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._thumb(rel, big=True)
 
     def _html(self, status, body_html, title="Labs Drop"):
+        safe_title = html.escape(str(title), quote=True)
         page = ('<!doctype html><html><head><meta charset="utf-8">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
                 '<meta name="robots" content="noindex">'
-                f'<title>{title}</title><style>'
+                f'<title>{safe_title}</title><style>'
                 ':root{color-scheme:light dark}'
                 'body{margin:0;background:#f8f8f7;color:#191918;'
                 'font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial;'
@@ -1410,6 +1412,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _share_file_page(self, tok, meta, target):
         name = os.path.basename(target)
+        display_name = html.escape(name)
         kind = kind_of(name)
         size = os.path.getsize(target)
         raw, thumb = f"/s/{tok}/raw", f"/s/{tok}?thumb=1"
@@ -1435,7 +1438,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             acts = f'<a class="dl" href="{raw}" download>Download</a>' + acts
         badge = '<p class="muted">Shared for viewing only</p>' if view_only else f'<p class="muted">{mb}</p>'
         extra = self._protect_script() if view_only else ""
-        self._html(200, f"<h2>{name}</h2>{badge}{hero}<div class=\"acts\">{acts}</div>"
+        self._html(200, f"<h2>{display_name}</h2>{badge}{hero}<div class=\"acts\">{acts}</div>"
                    + self._copy_script() + extra, name)
 
     def _share_folder_page(self, tok, meta, target):
@@ -1446,6 +1449,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              key=lambda e: e.name.lower())
         for e in entries:
             k = kind_of(e.name)
+            display_name = html.escape(e.name)
             size = e.stat().st_size
             mb = f"{size/1e6:.1f} MB" if size >= 1e6 else f"{size/1e3:.0f} KB"
             q = urllib.parse.quote(e.name)
@@ -1459,19 +1463,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         'onerror="this.style.visibility=\'hidden\'"></div>'
                         if k in ("image", "video")
                         else '<div class="gcell" style="cursor:default"></div>')
-                rows.append(f'<div>{cell}<div class="gcap">{e.name}</div></div>')
+                rows.append(f'<div>{cell}<div class="gcap">{display_name}</div></div>')
             else:
-                rows.append(f'<div class="f">{img}<span class="nm">{e.name}</span><small>{mb}</small>'
+                rows.append(f'<div class="f">{img}<span class="nm">{display_name}</span><small>{mb}</small>'
                             f'<a href="/s/{tok}/raw?f={q}" download>Download</a></div>')
         name = os.path.basename(target)
+        display_name = html.escape(name)
         badge = '<p class="muted">Shared for viewing only</p>' if view_only else ''
         acts = '<div class="acts"><button class="dl ghost" onclick="cpy(this)">Copy link</button></div>'
         if view_only:
-            body = (f"<h2>{name}</h2>{badge}{acts}"
+            body = (f"<h2>{display_name}</h2>{badge}{acts}"
                     + (f'<div class="grid">{"".join(rows)}</div>' if rows else "<p>Empty folder.</p>")
                     + self._copy_script() + self._lightbox_html_script() + self._protect_script())
         else:
-            body = (f"<h2>{name}</h2>{acts}" + ("".join(rows) or "<p>Empty folder.</p>")
+            body = (f"<h2>{display_name}</h2>{acts}" + ("".join(rows) or "<p>Empty folder.</p>")
                     + self._copy_script())
         self._html(200, body, name)
 

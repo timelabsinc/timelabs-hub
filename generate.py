@@ -254,7 +254,7 @@ def fetch_logged_orders(limit=60):
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
             "SELECT received_at, customer_name, product, price_inr, quantity, status, "
-            "source, sender_number, chat_id, id FROM orders "
+            "source, sender_number, chat_id, id, shopify_order_id, shopify_name FROM orders "
             f"WHERE received_at >= date('now', '-{LOOKBACK_DAYS} days') "
             "ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
@@ -272,7 +272,8 @@ def fetch_logged_orders(limit=60):
                     "qty": int(r[4] or 1), "status": (r[5] or "new").lower(),
                     # id is what lets shipment costs be looked up for exactly
                     # the orders on screen
-                    "source": src, "ref": "", "id": r[9]})
+                    "source": src, "ref": r[11] or "", "id": r[9],
+                    "shopify_id": r[10] or ""})
     return out
 
 
@@ -285,7 +286,7 @@ def fetch_shopify_orders(limit=30):
         if not shopify_api.configured():
             return []
         q = """query($n: Int!) { orders(first: $n, sortKey: CREATED_AT, reverse: true) {
-                 nodes { name createdAt displayFinancialStatus
+                 nodes { id name createdAt displayFinancialStatus
                          totalPriceSet { shopMoney { amount } }
                          customer { displayName }
                          lineItems(first: 5) { nodes { title quantity } } } } }"""
@@ -308,13 +309,22 @@ def fetch_shopify_orders(limit=30):
                     "customer": (n.get("customer") or {}).get("displayName") or "—",
                     "product": title, "amount": amt, "qty": qty,
                     "status": (n.get("displayFinancialStatus") or "").lower(),
-                    "source": "website", "ref": n.get("name") or ""})
+                    "source": "website", "ref": n.get("name") or "",
+                    "shopify_id": n.get("id") or ""})
     return out
 
 
 def fetch_orders(limit=40):
     """Every order, whatever door it came through, newest first."""
-    merged = fetch_logged_orders() + fetch_shopify_orders()
+    logged = fetch_logged_orders()
+    synced = {o.get("shopify_id") for o in logged if o.get("shopify_id")}
+    # Shopify sync already writes storefront orders into the local canonical
+    # log. Keep the live fetch only as a gap-filler for orders newer than the
+    # five-minute sync, otherwise Home shows and totals each storefront order
+    # twice.
+    live = [o for o in fetch_shopify_orders()
+            if not o.get("shopify_id") or o.get("shopify_id") not in synced]
+    merged = logged + live
     merged.sort(key=lambda o: o.get("when") or "", reverse=True)
     return merged[:limit]
 

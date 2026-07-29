@@ -344,6 +344,7 @@ OF_CSS = r"""
   .pname:hover{border-color:var(--accent);}
   .pname input{font:inherit;font-size:13.5px;font-weight:650;color:var(--ink);border:1px solid var(--accent);
     border-radius:5px;padding:3px 6px;width:100%;background:var(--bg);}
+  .intake .wrap{max-width:820px;}
 """
 
 OF_JS = r"""
@@ -356,7 +357,10 @@ function toast(m){var t=$('toast');t.textContent=m;t.classList.add('show');
   clearTimeout(toastT);toastT=setTimeout(function(){t.classList.remove('show');},3400);}
 async function api(path,opts){
   var res=await fetch(API+path,opts);
-  if(res.status===403){location.href='/oauth2/start?rd=/ops/order-form.html';throw new Error('auth');}
+  if(res.status===403){
+    if(location.pathname.indexOf('/intake/')===0)throw new Error('not available for this account');
+    location.href='/oauth2/start?rd=/ops/order-form.html';throw new Error('auth');
+  }
   var d=await res.json().catch(function(){return {};});
   if(!res.ok)throw new Error(d.error||'failed');
   return d;
@@ -849,7 +853,7 @@ async function loadOrders(){
             (cancelled?' disabled title="Cancelled orders stay out of the supplier queue"':
              (sent&&!canRemove?' disabled title="Already in progress, shipped, or billed"':''))+'>'+
             (cancelled?'Not sent':(sent?'With supplier':'Send to supplier'))+'</button></td>'+
-          '<td data-l="Status"><select class="pill-select '+stClass(st)+'" data-id="'+o.id+'">'+
+          '<td data-l="Status"><select class="pill-select '+stClass(st)+'" data-id="'+o.id+'" data-was="'+esc(st)+'">'+
             STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(stLabel(s))+'</option>';}).join('')+
             '</select></td>'+
           '<td data-l="Photos">'+photoCell(o)+'</td>'+
@@ -857,7 +861,7 @@ async function loadOrders(){
             '<button class="rowedit" data-edit="'+o.id+'"'+
               (paid?' disabled title="Paid orders are locked"':' title="Edit order #'+orderNo(o)+'"')+
               '>Edit</button>'+
-            '<button class="rowdel" data-del="'+o.id+'"'+
+            '<button class="rowdel" data-del="'+o.id+'" data-no="'+orderNo(o)+'"'+
               (paid?' disabled title="Paid orders cannot be deleted"':
                 ' title="Delete order #'+orderNo(o)+'"')+
               ' aria-label="Delete order '+orderNo(o)+'">&times;</button></div></td>'+
@@ -869,10 +873,10 @@ async function loadOrders(){
     $('list').querySelectorAll('.rowdel').forEach(function(b){
       b.onclick=async function(){
         if(b.disabled)return;
-        var id=b.dataset.del;
+        var id=b.dataset.del, no=b.dataset.no||id;
         var row=b.closest('tr');
         var who=row.querySelector('.o-strong');
-        if(!confirm('Delete order #'+id+(who?' ('+who.textContent+')':'')+
+        if(!confirm('Delete order #'+no+(who?' ('+who.textContent+')':'')+
                     '?\n\nThis removes the order, its photos and its history for good, '+
                     'and updates that customer\'s totals. It can\'t be undone.'))return;
         b.disabled=true;
@@ -880,7 +884,7 @@ async function loadOrders(){
           var d=await jpost('/orders/delete',{id:+id});
           row.style.transition='opacity .18s';row.style.opacity='0';
           setTimeout(function(){row.remove();},180);
-          toast('Order #'+id+' deleted'+
+          toast('Order #'+no+' deleted'+
             (d.customer_orders_left===0?' — that customer had no other orders, so they were removed too':''));
           loaded={};
         }catch(e){b.disabled=false;toast(e.message);}
@@ -888,7 +892,7 @@ async function loadOrders(){
     });
     $('list').querySelectorAll('.pill-select').forEach(function(sel){
       sel.onchange=async function(){
-        var id=sel.dataset.id, was=sel.dataset.was||sel.value, next=sel.value;
+        var id=sel.dataset.id, was=sel.dataset.was, next=sel.value;
         sel.disabled=true;
         try{
           await jpost('/orders/update',{id:+id,status:next});
@@ -1194,6 +1198,14 @@ def build():
     generated = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
     status_opts = "".join(
         f'<option value="{k}">{STAGE_LABELS.get(k, k)}</option>' for k in STATUSES)
+    header = hub_header("orders")
+    tabs = """<div class="tabs">
+      <button class="tab on" data-p="new">New order</button>
+      <button class="tab" data-p="bulk">Bulk add</button>
+      <button class="tab" data-p="orders">Orders</button>
+      <button class="tab" data-p="customers">Customers</button>
+      <button class="tab" data-p="selling">What's selling</button>
+    </div>"""
     doc = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -1201,20 +1213,14 @@ def build():
 <style>{HUB_STYLE}{OF_CSS}</style></head>
 <body>
 <div class="wrap">
-  {hub_header("orders")}
+  {header}
   <main>
     <div class="page-head">
       <h1 class="page-title">Order form</h1>
       <p class="page-sub">Every order lands here first. Review it, then send only the orders that need building to the supplier.</p>
     </div>
 
-    <div class="tabs">
-      <button class="tab on" data-p="new">New order</button>
-      <button class="tab" data-p="bulk">Bulk add</button>
-      <button class="tab" data-p="orders">Orders</button>
-      <button class="tab" data-p="customers">Customers</button>
-      <button class="tab" data-p="selling">What's selling</button>
-    </div>
+    {tabs}
 
     <section class="pane on" id="pane-new">
       <div class="of-card pastecard">
@@ -1400,12 +1406,26 @@ def build():
 {WHOAMI_JS}
 </script>
 </body></html>"""
-    tmp = OUT + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(doc)
-    os.replace(tmp, OUT)
-    os.system(f"chown www-data:www-data {OUT}")
-    print(f"wrote {OUT}")
+    intake_header = (
+        '<header style="display:flex;align-items:center;justify-content:space-between;'
+        'padding:16px 0;border-bottom:1px solid var(--border);margin-bottom:18px">'
+        '<b>Labs OS</b><span style="font-size:13px;color:var(--muted)">Order intake</span>'
+        '</header>')
+    intake_doc = doc.replace("<body>", '<body class="intake">', 1)
+    intake_doc = intake_doc.replace(header, intake_header, 1).replace(tabs, "", 1)
+    intake_doc = intake_doc.replace(
+        "Every order lands here first. Review it, then send only the orders that need building to the supplier.",
+        "Log a new order. Existing orders and business totals stay private.", 1)
+
+    outputs = ((OUT, doc), ("/var/www/intake/index.html", intake_doc))
+    for out, body in outputs:
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        tmp = out + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(body)
+        os.replace(tmp, out)
+        os.system(f"chown www-data:www-data {out}")
+        print(f"wrote {out}")
 
 
 if __name__ == "__main__":

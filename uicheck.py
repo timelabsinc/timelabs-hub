@@ -312,7 +312,8 @@ def cancelled(page):
 
 
 def main():
-    pages = sorted(glob.glob("/var/www/ops/*.html")) + ["/var/www/drop/index.html"]
+    pages = (sorted(glob.glob("/var/www/ops/*.html"))
+             + ["/var/www/drop/index.html", "/var/www/intake/index.html"])
     srcs = glob.glob("/root/ops-dashboard/*.py")
 
     print("═══ EVERY CLASS HAS A RULE ═══")

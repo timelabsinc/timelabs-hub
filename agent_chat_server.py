@@ -1267,6 +1267,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_shopify_page_detail(query)
             return
         if path == "/events":
+            if not (self._has_tool("face") or self._has_tool("chat")):
+                self._json(403, {"error": "not available for this account"})
+                return
             conn = db()
             try:
                 rows = conn.execute(
@@ -4960,6 +4963,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _handle_ledger_import(self):
         """Preview (default) or commit new supplier invoices from Drop into
         suppliers.db. Review-gated: the UI shows the parse before committing."""
+        if not self._has_tool("ledger"):
+            self._json(403, {"error": "not available for this account"})
+            return
         length = int(self.headers.get("Content-Length", 0))
         try:
             payload = json.loads(self.rfile.read(min(length, 4096)).decode()) if length else {}
@@ -5104,8 +5110,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(200, {"pending": True, "reply": None})
 
     def _handle_upload(self):
-        if not self._admin_email():
-            self._json(403, {"error": "admins only"})
+        # This endpoint backs role-visible image features in Orders, Intake,
+        # Command, and Reddit. Supplier and other restricted roles still have
+        # no upload capability.
+        if not any(self._has_tool(tool)
+                   for tool in ("orders", "intake", "chat", "reddit")):
+            self._json(403, {"error": "not available for this account"})
             return
         ctype = self.headers.get("Content-Type", "")
         m = re.search(r'boundary="?([^";]+)"?', ctype)
