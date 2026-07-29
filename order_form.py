@@ -198,6 +198,8 @@ OF_CSS = r"""
   .pill.delivered{color:var(--good);background:var(--good-bg);}
   .pill.cancelled{opacity:.6;}
   .pill.vip{color:var(--accent);background:var(--accent-bg);}
+  .pill.paid{color:var(--good);background:var(--good-bg);}
+  .pill.partpaid{color:var(--accent);background:var(--accent-bg);}
   .empty{color:var(--muted);font-size:13.5px;padding:16px 2px;}
 
   /* the same rows as stacked cards on a phone */
@@ -268,14 +270,46 @@ OF_CSS = r"""
   a.thumb .tn{position:absolute;right:2px;bottom:2px;background:rgba(0,0,0,.68);color:#fff;
     font-size:9.5px;font-weight:700;border-radius:4px;padding:0 4px;}
 
-  /* delete — quiet until you're on the row, never a primary action */
-  .rowdel{border:1px solid transparent;background:none;color:var(--muted);border-radius:6px;
+  /* row actions — quiet until you're on the row, never a primary action */
+  .rowacts{display:flex;align-items:center;gap:3px;white-space:nowrap;}
+  .rowedit,.rowdel{border:1px solid transparent;background:none;color:var(--muted);border-radius:6px;
+    height:28px;line-height:1;cursor:pointer;opacity:.45;
+    transition:opacity .12s,color .12s,border-color .12s;}
+  .rowedit{padding:0 7px;font-size:12px;font-weight:650;}
+  .rowdel{
     width:28px;height:28px;font-size:17px;line-height:1;cursor:pointer;opacity:.45;
     transition:opacity .12s,color .12s,border-color .12s;}
-  tr:hover .rowdel{opacity:1;}
+  tr:hover .rowedit,tr:hover .rowdel{opacity:1;}
+  .rowedit:hover{color:var(--accent);border-color:var(--accent);}
   .rowdel:hover{color:var(--bad);border-color:var(--bad);}
-  .rowdel[disabled]{opacity:.3;cursor:wait;}
-  @media(max-width:720px){ .rowdel{opacity:1;} }
+  .rowedit[disabled],.rowdel[disabled]{opacity:.3;cursor:not-allowed;color:var(--muted);
+    border-color:transparent;}
+  @media(max-width:720px){ .rowedit,.rowdel{opacity:1;} }
+
+  /* order editor */
+  .omodal{position:fixed;inset:0;z-index:120;display:flex;align-items:center;
+    justify-content:center;padding:18px;}
+  .omodal[hidden]{display:none;}
+  .omask{position:absolute;inset:0;background:rgba(0,0,0,.48);backdrop-filter:blur(2px);}
+  .odialog{position:relative;width:min(760px,100%);max-height:calc(100vh - 36px);overflow:auto;
+    background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+    box-shadow:var(--shadow-lg);padding:20px;}
+  .oedit-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:18px;}
+  .oedit-head h2{font-size:18px;margin:0;color:var(--ink);}
+  .oedit-head p{font-size:12.5px;color:var(--muted);margin:4px 0 0;}
+  .oedit-head .sp{flex:1;}
+  .oedit-close{border:none;background:none;color:var(--muted);font-size:24px;line-height:1;
+    cursor:pointer;padding:0 2px;}
+  .oedit-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;
+    padding-top:16px;border-top:1px solid var(--border);}
+  .oedit-actions .btn.primary{width:auto;margin:0;padding:10px 16px;font-size:13.5px;}
+  .checkline{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--ink);
+    cursor:pointer;margin-top:3px;}
+  .checkline input{width:16px;height:16px;accent-color:var(--accent);}
+  @media(max-width:600px){
+    .omodal{padding:0;align-items:flex-end;}
+    .odialog{width:100%;max-height:94vh;border-radius:18px 18px 0 0;padding:17px 15px;}
+  }
 
   /* bulk add rows */
   .brow{display:flex;gap:11px;align-items:flex-start;padding:11px;border:1px solid var(--border);
@@ -712,20 +746,84 @@ function specOf(o){
   return ['case_style','dial_colour','dial_style','case_colour','movement','watch_size']
     .map(function(k){return o[k];}).filter(Boolean).join(' · ');
 }
+var orderRows={};
+function isPaidOrder(o){return String((o&&o.financial_status)||'').toLowerCase()==='paid';}
+function paymentLabel(o){
+  var s=String((o&&o.financial_status)||'').toLowerCase();
+  if(s==='paid')return 'Paid';
+  if(s==='partially_paid')return 'Part paid';
+  if(s==='refunded')return 'Refunded';
+  if(s==='voided')return 'Voided';
+  return 'Unpaid';
+}
+function paymentClass(o){
+  var s=String((o&&o.financial_status)||'').toLowerCase();
+  return s==='paid'?'paid':(s==='partially_paid'?'partpaid':'');
+}
+function editVal(id,v){$(id).value=(v===null||v===undefined)?'':v;}
+function openOrderEdit(id){
+  var o=orderRows[id];
+  if(!o)return;
+  if(isPaidOrder(o)){toast('Paid orders are locked');return;}
+  $('e-id').value=o.id;
+  $('e-title').textContent='Edit order #'+orderNo(o);
+  editVal('e-cust',o.customer_name);editVal('e-phone',o.customer_phone);
+  editVal('e-email',o.customer_email);editVal('e-address',o.address);
+  editVal('e-city',o.city);editVal('e-state',o.state);editVal('e-pin',o.pincode);
+  editVal('e-source',o.source);editVal('e-product',o.product);
+  editVal('e-qty',o.quantity||1);editVal('e-price',o.price_inr);
+  editVal('e-notes',o.notes);editVal('e-case',o.case_style);
+  editVal('e-dial-colour',o.dial_colour);editVal('e-dial-style',o.dial_style);
+  editVal('e-case-colour',o.case_colour);editVal('e-movement',o.movement);
+  editVal('e-size',o.watch_size);$('e-stock').checked=!!Number(o.is_stock);
+  $('order-edit').hidden=false;
+  document.body.style.overflow='hidden';
+  setTimeout(function(){$('e-cust').focus();},0);
+}
+function closeOrderEdit(){
+  $('order-edit').hidden=true;
+  document.body.style.overflow='';
+}
+async function saveOrderEdit(){
+  var id=+$('e-id').value, btn=$('e-save');
+  var body={
+    id:id,customer_name:$('e-cust').value,customer_phone:$('e-phone').value,
+    customer_email:$('e-email').value,address:$('e-address').value,
+    city:$('e-city').value,state:$('e-state').value,pincode:$('e-pin').value,
+    source:$('e-source').value,product:$('e-product').value,
+    quantity:$('e-qty').value,price_inr:$('e-price').value,notes:$('e-notes').value,
+    case_style:$('e-case').value,dial_colour:$('e-dial-colour').value,
+    dial_style:$('e-dial-style').value,case_colour:$('e-case-colour').value,
+    movement:$('e-movement').value,watch_size:$('e-size').value,
+    is_stock:$('e-stock').checked
+  };
+  if(!body.product.trim()){toast('A product is needed');$('e-product').focus();return;}
+  btn.disabled=true;btn.textContent='Saving…';
+  try{
+    var d=await jpost('/orders/update',body);
+    closeOrderEdit();
+    await loadOrders();
+    loaded.customers=false;loaded.selling=false;
+    toast('Order updated'+((d.warnings||[]).length?' · '+d.warnings[0]:''));
+  }catch(e){toast(e.message);}
+  btn.disabled=false;btn.textContent='Save changes';
+}
 function stClass(s){return String(s||'').replace(/[^a-z]/gi,'');}
 async function loadOrders(){
   try{
     var d=await api('/orders/list');
     if(d.sheet_url){var a=$('sheet-link');a.href=d.sheet_url;a.style.display='';}
     var rows=d.orders||[];
+    orderRows={};rows.forEach(function(o){orderRows[o.id]=o;});
     if(!rows.length){$('list').innerHTML='<div class="empty">No orders yet — the first one you save shows up here.</div>';return;}
     $('list').innerHTML='<table class="dt"><thead><tr>'+
       '<th>#</th><th>Logged</th><th>Source</th><th>Customer</th><th>Ship to</th><th>Product</th>'+
-      '<th>Qty</th><th>Price</th><th>Supplier</th><th>Status</th><th>Photos</th><th></th></tr></thead><tbody>'+
+      '<th>Qty</th><th>Price</th><th>Payment</th><th>Supplier</th><th>Status</th><th>Photos</th><th></th></tr></thead><tbody>'+
       rows.map(function(o){
         var st=String(o.status||'pending'), spec=specOf(o), sent=!!Number(o.supplier_visible);
         var cancelled=st==='cancelled', effectiveSent=sent&&!cancelled;
         var canRemove=effectiveSent&&st==='pending'&&!o.shipment_id&&!o.bill_id;
+        var paid=isPaidOrder(o);
         return '<tr>'+
           '<td data-l="Order" class="o-num">#'+orderNo(o)+
             (o.ref_code?'<div class="o-sub">was '+esc(o.ref_code)+'</div>':'')+'</td>'+
@@ -744,6 +842,8 @@ async function loadOrders(){
             (o.notes?'<div class="o-sub">'+esc(o.notes)+'</div>':'')+'</td>'+
           '<td data-l="Qty" class="o-num">'+(o.quantity||1)+'</td>'+
           '<td data-l="Price" class="o-num">'+esc(money(o.price_inr))+'</td>'+
+          '<td data-l="Payment"><span class="pill '+paymentClass(o)+'">'+
+            esc(paymentLabel(o))+'</span></td>'+
           '<td data-l="Supplier"><button class="btn sm supplier-toggle'+(effectiveSent?' sent':'')+
             '" data-supplier="'+o.id+'" data-on="'+(sent?'1':'0')+'"'+
             (cancelled?' disabled title="Cancelled orders stay out of the supplier queue"':
@@ -753,11 +853,22 @@ async function loadOrders(){
             STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(stLabel(s))+'</option>';}).join('')+
             '</select></td>'+
           '<td data-l="Photos">'+photoCell(o)+'</td>'+
-          '<td data-l=""><button class="rowdel" data-del="'+o.id+'" title="Delete order #'+o.id+'" aria-label="Delete order '+o.id+'">&times;</button></td>'+
+          '<td data-l="Actions"><div class="rowacts">'+
+            '<button class="rowedit" data-edit="'+o.id+'"'+
+              (paid?' disabled title="Paid orders are locked"':' title="Edit order #'+orderNo(o)+'"')+
+              '>Edit</button>'+
+            '<button class="rowdel" data-del="'+o.id+'"'+
+              (paid?' disabled title="Paid orders cannot be deleted"':
+                ' title="Delete order #'+orderNo(o)+'"')+
+              ' aria-label="Delete order '+orderNo(o)+'">&times;</button></div></td>'+
         '</tr>';
       }).join('')+'</tbody></table>';
+    $('list').querySelectorAll('.rowedit').forEach(function(b){
+      b.onclick=function(){if(!b.disabled)openOrderEdit(+b.dataset.edit);};
+    });
     $('list').querySelectorAll('.rowdel').forEach(function(b){
       b.onclick=async function(){
+        if(b.disabled)return;
         var id=b.dataset.del;
         var row=b.closest('tr');
         var who=row.querySelector('.o-strong');
@@ -1052,6 +1163,13 @@ var STAGE_LABELS={};
 Array.prototype.forEach.call($('f-status').options,function(o){STAGE_LABELS[o.value]=o.textContent;});
 function stLabel(s){return STAGE_LABELS[s]||s;}
 function orderNo(o){return o.order_no||o.id;}
+$('e-cancel').onclick=closeOrderEdit;
+$('e-close').onclick=closeOrderEdit;
+$('e-save').onclick=saveOrderEdit;
+$('order-edit').querySelector('.omask').onclick=closeOrderEdit;
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'&&!$('order-edit').hidden)closeOrderEdit();
+});
 (async function(){
   drawShots();drawAttrs();
   try{
@@ -1219,6 +1337,62 @@ def build():
 
     {hub_footer()}
   </main>
+</div>
+
+<div id="order-edit" class="omodal" hidden>
+  <div class="omask"></div>
+  <section class="odialog" role="dialog" aria-modal="true" aria-labelledby="e-title">
+    <div class="oedit-head">
+      <div><h2 id="e-title">Edit order</h2>
+        <p>Payment locks these details only when the order is marked Paid.</p></div>
+      <span class="sp"></span>
+      <button class="oedit-close" id="e-close" aria-label="Close">&times;</button>
+    </div>
+    <input type="hidden" id="e-id">
+    <div class="of-legend">Customer</div>
+    <div class="of-row">
+      <div class="of-field"><label>Name</label><input id="e-cust" class="pin"></div>
+      <div class="of-field"><label>Phone</label><input id="e-phone" class="pin" inputmode="tel"></div>
+    </div>
+    <div class="of-field"><label>Email</label><input id="e-email" class="pin" inputmode="email"></div>
+    <div class="of-field"><label>Address</label><textarea id="e-address" class="pin"></textarea></div>
+    <div class="of-row3">
+      <div class="of-field"><label>City</label><input id="e-city" class="pin"></div>
+      <div class="of-field"><label>State</label><input id="e-state" class="pin"></div>
+      <div class="of-field"><label>Pincode</label><input id="e-pin" class="pin" inputmode="numeric"></div>
+    </div>
+    <div class="of-sep"></div>
+    <div class="of-legend">Order</div>
+    <div class="of-row">
+      <div class="of-field"><label>Source</label><input id="e-source" class="pin"></div>
+      <div class="of-field"><label>Product <span class="req">*</span></label>
+        <input id="e-product" class="pin"></div>
+    </div>
+    <div class="of-row3">
+      <div class="of-field"><label>Qty</label>
+        <input id="e-qty" class="pin" type="number" min="1" max="1000" step="1"></div>
+      <div class="of-field"><label>Price</label>
+        <div class="price-wrap"><span>&#8377;</span>
+          <input id="e-price" class="pin" type="number" min="0" step="0.01"></div></div>
+      <div class="of-field"><label>Stock build</label>
+        <label class="checkline"><input id="e-stock" type="checkbox">Made for stock</label></div>
+    </div>
+    <div class="of-field"><label>Notes</label><textarea id="e-notes" class="pin"></textarea></div>
+    <div class="of-sep"></div>
+    <div class="of-legend">Build details</div>
+    <div class="of-row3">
+      <div class="of-field"><label>Case style</label><input id="e-case" class="pin"></div>
+      <div class="of-field"><label>Dial colour</label><input id="e-dial-colour" class="pin"></div>
+      <div class="of-field"><label>Dial style</label><input id="e-dial-style" class="pin"></div>
+      <div class="of-field"><label>Case colour</label><input id="e-case-colour" class="pin"></div>
+      <div class="of-field"><label>Movement</label><input id="e-movement" class="pin"></div>
+      <div class="of-field"><label>Size</label><input id="e-size" class="pin"></div>
+    </div>
+    <div class="oedit-actions">
+      <button class="btn" id="e-cancel">Cancel</button>
+      <button class="btn primary" id="e-save">Save changes</button>
+    </div>
+  </section>
 </div>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>

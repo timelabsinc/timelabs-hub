@@ -2300,7 +2300,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "customer_email, address, pincode, city, state, source, product, quantity, "
                 "price_inr, notes, status, drive_link, photo_links, local_photos, case_style, "
                 "dial_colour, dial_style, case_colour, movement, watch_size, shopify_name, "
-                "ref_code, is_stock, supplier_visible, shipment_id, bill_id "
+                "ref_code, is_stock, financial_status, supplier_visible, shipment_id, bill_id "
                 "FROM orders ORDER BY id DESC LIMIT 100").fetchall()
         except sqlite3.OperationalError as e:
             conn.close()
@@ -2401,14 +2401,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                     "customers": ncust}})
 
     def _handle_orders_update(self):
-        """Patch an existing order. Built mainly so a status can move past
-        'new' at all — there was no write path for that before this — but
-        takes any of the same descriptive fields /orders/create does, so a
-        typo doesn't require re-entering the whole record. Deliberately
-        excludes product/quantity/price: those are the receipt of what was
-        actually ordered and charged, and shouldn't shift under a general
-        PATCH — renaming a product for analytics goes through
-        /orders/items/relabel instead, which is retroactive and explicit."""
+        """Patch an existing order.
+
+        Details shown in the order list stay editable until the customer
+        payment state is exactly ``paid``. Workflow fields remain writable
+        after payment because fulfilment and courier references still have to
+        move forward. The server enforces the paid lock; the browser's
+        hidden Edit button is only the first line of defence.
+        """
         actor = self._order_user()
         if not self._has_tool("orders"):
             self._json(403, {"error": "not available for this account"})
@@ -2424,44 +2424,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             self._json(400, {"error": "missing order id"})
             return
-        # Always editable: moving an order along, recording what happened, and
-        # correcting a courier reference are things you do *because* it's in
-        # flight, so locking them would be backwards.
-        always = {"status": 40, "notes": 1000, "tracking_code": 80}
-        # Everything describing what gets built and who it's for. Frozen once
-        # the supplier has been paid: from that point they've committed money
-        # to parts, and a spec that changes underneath them silently is how
-        # the wrong watch gets built.
+        # Always editable: moving fulfilment along and correcting a courier
+        # reference are things you do *after* payment as often as before it.
+        always = {"status": 40, "tracking_code": 80}
+        # Everything a person edits from the Recent Orders list. Once the
+        # customer payment state is "paid", these values are the receipt and
+        # must not silently shift underneath it.
         lockable = {"customer_name": 120, "customer_phone": 40, "customer_email": 200,
                     "address": 600, "city": 80, "state": 80, "pincode": 20,
                     "product": 200, "case_style": 60, "dial_colour": 60,
                     "dial_style": 60, "case_colour": 60, "movement": 60,
-                    "watch_size": 60}
+                    "watch_size": 60, "source": 40, "notes": 1000,
+                    "quantity": None, "price_inr": None, "is_stock": None}
         conn = db()
         before = conn.execute(
-            "SELECT order_no, status, supplier_visible, shipment_id, bill_id "
+            "SELECT order_no, status, financial_status, supplier_visible, shipment_id, "
+            "bill_id, customer_name, customer_phone, customer_email, address, city, "
+            "state, pincode, product, quantity, price_inr, source, is_stock, notes, "
+            "case_style, dial_colour, dial_style, case_colour, movement, watch_size, "
+            "tracking_code "
             "FROM orders WHERE id=?", (oid,)).fetchone()
         if not before:
             conn.close()
             self._json(404, {"error": "no such order"})
             return
-        import order_stages
         from order_form import STATUSES
+        import order_stages
         cur_status = before["status"] or order_stages.DEFAULT_STAGE
-        try:
-            locked = (order_stages.PIPELINE.index(cur_status)
-                      >= order_stages.PIPELINE.index(order_stages.LOCK_FROM))
-        except ValueError:
-            locked = False          # off-pipeline (e.g. cancelled): don't guess
+        locked = (before["financial_status"] or "").strip().lower() == "paid"
         if locked:
             blocked = [k for k in lockable if k in p]
             if blocked:
                 conn.close()
                 self._json(409, {
-                    "error": f"This order is already \"{order_stages.label(cur_status)}\" — "
-                             f"it's been placed with the supplier, who may have bought "
-                             f"parts, so the build details are locked. You can still change "
-                             f"its stage, notes and tracking.",
+                    "error": "This order is marked Paid, so its customer, build and "
+                             "price details are locked. You can still change its "
+                             "fulfilment stage and tracking.",
                     "locked_fields": blocked})
                 return
         if "status" in p and p["status"] not in STATUSES:
@@ -2489,25 +2487,114 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "error": "This build is already in progress, shipped, or billed, "
                              "so it can't be removed from the supplier queue."})
                 return
+        item_fields = {"product", "quantity", "price_inr"}
         updatable = dict(always)
         if not locked:
             updatable.update(lockable)
-        sets, vals = [], []
+        sets, vals, normalized = [], [], {}
         for k, maxlen in updatable.items():
-            if k in p:
-                sets.append(f"{k}=?")
-                vals.append(str(p[k]).strip()[:maxlen])
+            if k not in p:
+                continue
+            raw = p[k]
+            if k == "quantity":
+                try:
+                    value = int(raw)
+                except (TypeError, ValueError):
+                    conn.close()
+                    self._json(400, {"error": "quantity must be a whole number"})
+                    return
+                if value < 1 or value > 1000:
+                    conn.close()
+                    self._json(400, {"error": "quantity must be between 1 and 1000"})
+                    return
+            elif k == "price_inr":
+                if str(raw).strip() == "":
+                    value = None
+                else:
+                    try:
+                        value = float(raw)
+                    except (TypeError, ValueError):
+                        conn.close()
+                        self._json(400, {"error": "price must be a number"})
+                        return
+                    if value < 0 or value > 100000000:
+                        conn.close()
+                        self._json(400, {"error": "price is outside the allowed range"})
+                        return
+            elif k == "is_stock":
+                if not isinstance(raw, (bool, int)) or raw not in (0, 1, False, True):
+                    conn.close()
+                    self._json(400, {"error": "stock must be on or off"})
+                    return
+                value = 1 if raw else 0
+            else:
+                value = str(raw).strip()[:maxlen]
+                if k == "product" and not value:
+                    conn.close()
+                    self._json(400, {"error": "a product is needed"})
+                    return
+            old = before[k]
+            if k == "quantity":
+                unchanged = value == int(old or 1)
+            elif k == "price_inr":
+                unchanged = value == (float(old) if old is not None else None)
+            elif k == "is_stock":
+                unchanged = value == int(old or 0)
+            else:
+                unchanged = value == str(old or "")
+            if unchanged:
+                continue
+            sets.append(f"{k}=?")
+            vals.append(value)
+            normalized[k] = value
+        if item_fields.intersection(normalized):
+            item_count = conn.execute(
+                "SELECT COUNT(*) FROM order_items WHERE order_id=?", (oid,)).fetchone()[0]
+            if item_count > 1:
+                conn.close()
+                self._json(409, {
+                    "error": "This storefront order contains multiple products. "
+                             "Edit its product lines in Shopify; customer and shipping "
+                             "details can still be changed here."})
+                return
         if supplier_change is not None:
-            sets.append("supplier_visible=?")
-            vals.append(supplier_change)
+            if supplier_change == int(before["supplier_visible"] or 0):
+                supplier_change = None
+            else:
+                sets.append("supplier_visible=?")
+                vals.append(supplier_change)
         if not sets:
             conn.close()
-            self._json(400, {"error": "nothing to update"})
+            self._json(200, {"ok": True, "id": oid, "unchanged": True, "warnings": []})
             return
         vals.append(oid)
         conn.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id=?", vals)
-        # A status move goes on the order's own timeline, so the supplier sees
-        # "paid" appear with a date rather than a value silently changing.
+
+        # Keep the one-line analytics record in step with list edits. A
+        # multi-product Shopify order was rejected above rather than flattened
+        # into one synthetic line.
+        if item_fields.intersection(normalized):
+            product = normalized.get("product", before["product"]) or ""
+            qty = normalized.get("quantity", before["quantity"]) or 1
+            price = normalized.get("price_inr", before["price_inr"])
+            item = conn.execute(
+                "SELECT id FROM order_items WHERE order_id=? ORDER BY id LIMIT 1",
+                (oid,)).fetchone()
+            if item:
+                conn.execute(
+                    "UPDATE order_items SET product=?, quantity=?, price_inr=?, "
+                    "line_total=?, canonical_product=CASE WHEN ? THEN NULL "
+                    "ELSE canonical_product END, updated_at=datetime('now') WHERE id=?",
+                    (product, qty, price, (price or 0) * qty,
+                     1 if "product" in normalized else 0, item["id"]))
+            else:
+                conn.execute(
+                    "INSERT INTO order_items "
+                    "(order_id, product, quantity, price_inr, line_total) "
+                    "VALUES (?,?,?,?,?)",
+                    (oid, product, qty, price, (price or 0) * qty))
+
+        # A status move goes on the order's own timeline.
         if "status" in p and str(p["status"]).strip() != (before["status"] or ""):
             order_event(conn, oid, "status",
                        f'{before["status"] or "new"} -> {str(p["status"]).strip()}', actor)
@@ -2517,15 +2604,72 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 conn, oid, "supplier",
                 "sent to supplier queue" if supplier_change else "removed from supplier queue",
                 actor)
+        detail_changes = [k for k in normalized if k not in ("status", "tracking_code")]
+        if detail_changes:
+            order_event(conn, oid, "edited",
+                        "updated " + ", ".join(detail_changes), actor)
         conn.commit()
+
+        # Customer metrics are derived from orders. Recount the previous
+        # identity and then upsert the edited identity so name/contact changes
+        # and price changes cannot leave lifetime spend or VIP tags stale.
+        if set(normalized).intersection({
+                "customer_name", "customer_phone", "customer_email", "address",
+                "city", "state", "pincode", "source", "price_inr", "quantity"}):
+            import customers as customers_mod
+            old_key = customers_mod.key_for(
+                before["customer_phone"], before["customer_email"], before["customer_name"])
+            try:
+                customers_mod.recount(conn, old_key)
+                current = conn.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
+                current = dict(current)
+                if (current.get("customer_name") or current.get("customer_phone")
+                        or current.get("customer_email")):
+                    customers_mod.upsert_from_order(conn, current)
+            except Exception as e:
+                print(f"[orders-update] customer repair skipped: {e}", flush=True)
         conn.close()
-        changed = [k for k in updatable if k in p]
+        changed = list(normalized)
         if supplier_change is not None:
             changed.append("sent to supplier" if supplier_change else "removed from supplier")
+
+        # The local database is authoritative; sheet mirroring is best-effort.
+        # Update only columns that changed rather than appending a second row.
+        warnings = []
+        try:
+            import google_api
+            access = google_api.access_token()
+            if access and before["order_no"] is not None:
+                sheet_fields = {
+                    "status": "Status", "source": "Source",
+                    "customer_name": "Customer", "customer_phone": "Phone",
+                    "customer_email": "Email", "address": "Address",
+                    "city": "City", "state": "State", "pincode": "Pincode",
+                    "product": "Product", "quantity": "Qty", "price_inr": "Price (INR)",
+                    "notes": "Notes", "case_style": "Case style",
+                    "dial_colour": "Dial colour", "dial_style": "Dial style",
+                    "case_colour": "Case colour", "movement": "Movement",
+                    "watch_size": "Size"}
+                for key in changed:
+                    if key not in sheet_fields:
+                        continue
+                    value = normalized.get(key)
+                    if key == "status":
+                        value = order_stages.label(value)
+                    google_api.update_order_field(
+                        access, before["order_no"], sheet_fields[key],
+                        "" if value is None else value)
+                if item_fields.intersection(normalized):
+                    google_api.update_order_field(
+                        access, before["order_no"], "Line total (INR)",
+                        (normalized.get("price_inr", before["price_inr"]) or 0)
+                        * (normalized.get("quantity", before["quantity"]) or 1))
+        except Exception as e:
+            warnings.append(f"Sheet not updated: {e}")
         hub_event("order_updated",
                  f"#{before['order_no'] or oid}: " + ", ".join(changed),
                  actor, app="orders")
-        self._json(200, {"ok": True, "id": oid})
+        self._json(200, {"ok": True, "id": oid, "warnings": warnings})
 
     def _handle_orders_bulk(self):
         """One build per screenshot. Send a batch of watch photos and each
@@ -2661,11 +2805,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         conn = db()
         row = conn.execute(
-            "SELECT customer_name, customer_phone, customer_email, product "
+            "SELECT customer_name, customer_phone, customer_email, product, financial_status "
             "FROM orders WHERE id=?", (oid,)).fetchone()
         if not row:
             conn.close()
             self._json(404, {"error": "no such order"})
+            return
+        if (row["financial_status"] or "").strip().lower() == "paid":
+            conn.close()
+            self._json(409, {
+                "error": "This order is marked Paid and cannot be deleted."})
             return
         conn.execute("DELETE FROM order_items WHERE order_id=?", (oid,))
         conn.execute("DELETE FROM order_events WHERE order_id=?", (oid,))
