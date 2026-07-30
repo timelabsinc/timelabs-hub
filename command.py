@@ -195,10 +195,21 @@ function setSessionInUrl(id){
     history.replaceState({},'',u.toString());
   }catch(e){}
 }
+function getStoredSessionId(){
+  let v=parseInt(stored('labs_command_session')||stored('tl_session')||'1',10);
+  return Number.isFinite(v)?v:1;
+}
+function getSessionFromUrl(){
+  let v=parseInt(new URLSearchParams(location.search).get('session')||'',10);
+  return Number.isFinite(v)?v:getStoredSessionId();
+}
+function syncSession(id){
+  sid=Number.isFinite(id)?id:1;
+  rememberSession();
+  setSessionInUrl(sid);
+}
 function focusComposer(){if(!matchMedia('(pointer:coarse)').matches&&document.visibilityState==='visible')input.focus()}
-let requestedSid=parseInt(new URLSearchParams(location.search).get('session')||'',10);
-let sid=Number.isFinite(requestedSid)?requestedSid:
-  parseInt(stored('labs_command_session')||stored('tl_session')||'1',10);
+let sid=getSessionFromUrl();
 function rememberSession(){remember('labs_command_session',sid);remember('tl_session',sid)}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function inline(s){return s.replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
@@ -221,14 +232,13 @@ async function api(path,opt){let r=await fetch(API+path,opt);let ct=r.headers.ge
 async function loadSessions(){try{let d=await api('/sessions');sessionsEl.innerHTML='';
  if(!d.sessions.length){let n=await api('/session/new',{method:'POST'});sid=n.id;d=await api('/sessions')}
  if(d.sessions.length&&!d.sessions.some(x=>x.id===sid))sid=d.sessions[0].id;
- rememberSession();
- setSessionInUrl(sid);
+ syncSession(sid);
  d.sessions.forEach(s=>{let b=document.createElement('button');b.className='session'+(s.id===sid?' on':'');b.innerHTML='<b>'+esc(s.title)+'</b><span>'+s.n+' messages · '+esc((s.updated_at||'').slice(0,16).replace('T',' '))+'</span>';b.onclick=()=>switchSession(s.id);sessionsEl.appendChild(b)});
  let cur=d.sessions.find(x=>x.id===sid);document.getElementById('threadTitle').textContent=cur?cur.title:'New command'
  }catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
 async function loadHistory(){let gen=++historyGen,target=sid;statusEl.textContent='Loading';try{let d=await api('/history?session='+target);if(gen!==historyGen||target!==sid)return;threadEl.innerHTML='';if(!d.messages.length){threadEl.appendChild(empty)}else d.messages.forEach(m=>bubble(m.role,m.text));lastAgentCount=d.messages.filter(m=>m.role==='agent').length
  }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';if(e.message==='no such conversation'){try{let created=await api('/session/new',{method:'POST'});sid=created.id;rememberSession();await loadSessions();await loadHistory();return}catch(e2){notice('Could not load this conversation: '+(e2.message||e.message),true)};return;}notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
-async function switchSession(id){sid=id;rememberSession();setSessionInUrl(sid);closeMenu();await loadHistory();await loadSessions();focusComposer()}
+async function switchSession(id){syncSession(id);closeMenu();await loadHistory();await loadSessions();focusComposer()}
 async function newSession(){try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){alert(e.message)}}
 async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastAgentCount;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text||(at.length+' photo'+(at.length===1?'':'s')));busy=true;sendBtn.disabled=true;statusEl.textContent='Working';let wait=thinking();
  try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name}))})});
@@ -279,6 +289,7 @@ function openDrawer(el,trigger,focus){
 menuBtn.onclick=()=>openDrawer(rail,menuBtn,document.getElementById('newBtn'));
 contextBtn.onclick=()=>openDrawer(contextRail,contextBtn,document.getElementById('contextClose'));
 document.getElementById('contextClose').onclick=()=>closeMenu();shade.onclick=()=>closeMenu();
+window.addEventListener('popstate',()=>{let target=getSessionFromUrl();if(target===sid)return;sid=target;closeMenu(false);loadHistory();loadSessions();focusComposer()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&(rail.classList.contains('open')||contextRail.classList.contains('open')))closeMenu()});
 for(let mq of [leftMq,contextMq]){if(mq.addEventListener)mq.addEventListener('change',()=>closeMenu(false));else mq.addListener(()=>closeMenu(false))}
 syncDrawers();
