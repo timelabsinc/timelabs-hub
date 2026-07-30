@@ -219,7 +219,7 @@ async function loadSessions(){try{let d=await api('/sessions');sessionsEl.innerH
  let cur=d.sessions.find(x=>x.id===sid);document.getElementById('threadTitle').textContent=cur?cur.title:'New command'
  }catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
 async function loadHistory(){let gen=++historyGen,target=sid;statusEl.textContent='Loading';try{let d=await api('/history?session='+target);if(gen!==historyGen||target!==sid)return;threadEl.innerHTML='';if(!d.messages.length){threadEl.appendChild(empty)}else d.messages.forEach(m=>bubble(m.role,m.text));lastAgentCount=d.messages.filter(m=>m.role==='agent').length
- }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
+ }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';if(e.message==='no such conversation'){try{let created=await api('/session/new',{method:'POST'});sid=created.id;rememberSession();await loadSessions();await loadHistory();return}catch(e2){notice('Could not load this conversation: '+(e2.message||e.message),true)};return;}notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
 async function switchSession(id){sid=id;rememberSession();closeMenu();await loadHistory();await loadSessions();focusComposer()}
 async function newSession(){try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){alert(e.message)}}
 async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastAgentCount;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text||(at.length+' photo'+(at.length===1?'':'s')));busy=true;sendBtn.disabled=true;statusEl.textContent='Working';let wait=thinking();
@@ -228,7 +228,9 @@ async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.
   else if(d.pending){await poll(runSid,wait,baseline)}
   else{wait.remove();if(runSid===sid)notice('Hermes returned no result. Your message remains in this conversation.',true)}
   await loadSessions();loadEvents()
- }catch(e){wait.remove();if(runSid===sid){optimistic.remove();notice('Not sent: '+e.message,true);input.value=text;attachments=at;renderAttachments();autosize()}}
+ }catch(e){wait.remove();if(runSid===sid&&/already working with another task|still working on the previous task|agent is busy/.test(String(e.message).toLowerCase())){notice('Hermes is already working on another request. Tap send again when it finishes.',false);input.value=text;attachments=at;renderAttachments();autosize()}else if(runSid===sid){optimistic.remove();notice('Not sent: '+e.message,true);input.value=text;attachments=at;renderAttachments();autosize()}
+  }
+ }
  finally{busy=false;sendBtn.disabled=false;statusEl.textContent='Ready';focusComposer()}}
 async function poll(runSid,wait,baseline){for(let n=0;n<500;n++){await new Promise(r=>setTimeout(r,6000));let d=await api('/history?session='+runSid),agents=d.messages.filter(m=>m.role==='agent');if(agents.length>baseline){wait.remove();if(runSid===sid){bubble('agent',agents[agents.length-1].text);lastAgentCount=agents.length}else await loadSessions();return}}wait.remove();if(runSid===sid)notice('The job is still running. Its result will remain in this conversation.',false)}
 async function upload(f){if(!f)return;if(attachments.length>=8){alert('Up to 8 photos per message.');return}
