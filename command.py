@@ -188,6 +188,13 @@ const attachEl=document.getElementById('attachments'), composeWrap=document.quer
 let busy=false, attachments=[], lastAgentCount=0, historyGen=0;
 function stored(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function remember(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+function setSessionInUrl(id){
+  try{
+    var u=new URL(location.href);
+    u.searchParams.set('session', String(id));
+    history.replaceState({},'',u.toString());
+  }catch(e){}
+}
 function focusComposer(){if(!matchMedia('(pointer:coarse)').matches&&document.visibilityState==='visible')input.focus()}
 let requestedSid=parseInt(new URLSearchParams(location.search).get('session')||'',10);
 let sid=Number.isFinite(requestedSid)?requestedSid:
@@ -215,12 +222,13 @@ async function loadSessions(){try{let d=await api('/sessions');sessionsEl.innerH
  if(!d.sessions.length){let n=await api('/session/new',{method:'POST'});sid=n.id;d=await api('/sessions')}
  if(d.sessions.length&&!d.sessions.some(x=>x.id===sid))sid=d.sessions[0].id;
  rememberSession();
+ setSessionInUrl(sid);
  d.sessions.forEach(s=>{let b=document.createElement('button');b.className='session'+(s.id===sid?' on':'');b.innerHTML='<b>'+esc(s.title)+'</b><span>'+s.n+' messages · '+esc((s.updated_at||'').slice(0,16).replace('T',' '))+'</span>';b.onclick=()=>switchSession(s.id);sessionsEl.appendChild(b)});
  let cur=d.sessions.find(x=>x.id===sid);document.getElementById('threadTitle').textContent=cur?cur.title:'New command'
  }catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
 async function loadHistory(){let gen=++historyGen,target=sid;statusEl.textContent='Loading';try{let d=await api('/history?session='+target);if(gen!==historyGen||target!==sid)return;threadEl.innerHTML='';if(!d.messages.length){threadEl.appendChild(empty)}else d.messages.forEach(m=>bubble(m.role,m.text));lastAgentCount=d.messages.filter(m=>m.role==='agent').length
  }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';if(e.message==='no such conversation'){try{let created=await api('/session/new',{method:'POST'});sid=created.id;rememberSession();await loadSessions();await loadHistory();return}catch(e2){notice('Could not load this conversation: '+(e2.message||e.message),true)};return;}notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
-async function switchSession(id){sid=id;rememberSession();closeMenu();await loadHistory();await loadSessions();focusComposer()}
+async function switchSession(id){sid=id;rememberSession();setSessionInUrl(sid);closeMenu();await loadHistory();await loadSessions();focusComposer()}
 async function newSession(){try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){alert(e.message)}}
 async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastAgentCount;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text||(at.length+' photo'+(at.length===1?'':'s')));busy=true;sendBtn.disabled=true;statusEl.textContent='Working';let wait=thinking();
  try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name}))})});
@@ -229,9 +237,9 @@ async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.
   else{wait.remove();if(runSid===sid)notice('Hermes returned no result. Your message remains in this conversation.',true)}
   await loadSessions();loadEvents()
  }catch(e){wait.remove();if(runSid===sid&&/already working with another task|still working on the previous task|agent is busy/.test(String(e.message).toLowerCase())){notice('Hermes is already working on another request. Tap send again when it finishes.',false);input.value=text;attachments=at;renderAttachments();autosize()}else if(runSid===sid){optimistic.remove();notice('Not sent: '+e.message,true);input.value=text;attachments=at;renderAttachments();autosize()}
-  }
  }
- finally{busy=false;sendBtn.disabled=false;statusEl.textContent='Ready';focusComposer()}}
+ finally{busy=false;sendBtn.disabled=false;statusEl.textContent='Ready';focusComposer()}
+}
 async function poll(runSid,wait,baseline){for(let n=0;n<500;n++){await new Promise(r=>setTimeout(r,6000));let d=await api('/history?session='+runSid),agents=d.messages.filter(m=>m.role==='agent');if(agents.length>baseline){wait.remove();if(runSid===sid){bubble('agent',agents[agents.length-1].text);lastAgentCount=agents.length}else await loadSessions();return}}wait.remove();if(runSid===sid)notice('The job is still running. Its result will remain in this conversation.',false)}
 async function upload(f){if(!f)return;if(attachments.length>=8){alert('Up to 8 photos per message.');return}
  if(f.size>32*1024*1024){alert((f.name||'This image')+' is larger than 32 MB.');return}
