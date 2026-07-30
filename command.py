@@ -185,7 +185,7 @@ const API='/ops/agent/api', threadEl=document.getElementById('thread'), empty=do
 const input=document.getElementById('input'), sendBtn=document.getElementById('sendBtn');
 const statusEl=document.getElementById('agentStatus'), sessionsEl=document.getElementById('sessions');
 const attachEl=document.getElementById('attachments'), composeWrap=document.querySelector('.compose-wrap');
-let busy=false, attachments=[], lastAgentCount=0, historyGen=0;
+let busy=false, attachments=[], lastAgentCount=0, historyGen=0, sessionsGen=0;
 function stored(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function remember(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 function setSessionInUrl(id, push){
@@ -238,18 +238,33 @@ function notice(text,bad){let n=document.createElement('div');n.className='notic
 async function api(path,opt){let r=await fetch(API+path,opt);let ct=r.headers.get('content-type')||'';
  if((r.status===401||r.status===403)&&ct.indexOf('application/json')<0){location.href='/oauth2/start?rd='+encodeURIComponent(location.pathname);throw new Error('Sign-in required')}
  let d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||('Request failed ('+r.status+')'));return d}
-async function loadSessions(){try{let d=await api('/sessions');sessionsEl.innerHTML='';
- if(!d.sessions.length){let n=await api('/session/new',{method:'POST'});sid=n.id;d=await api('/sessions')}
- if(d.sessions.length&&!d.sessions.some(x=>x.id===sid))sid=d.sessions[0].id;
- syncSession(sid);
- selectedSessionButton=null;
- d.sessions.forEach(s=>{
-  let b=document.createElement('button');b.className='session'+(s.id===sid?' on':'');b.innerHTML='<b>'+esc(s.title)+'</b><span>'+s.n+' messages · '+esc((s.updated_at||'').slice(0,16).replace('T',' '))+'</span>';
-  b.onclick=()=>switchSession(s.id);sessionsEl.appendChild(b);
-  if(s.id===sid)selectedSessionButton=b;
- });
- if(selectedSessionButton)selectedSessionButton.scrollIntoView({block:'nearest'});
- let cur=d.sessions.find(x=>x.id===sid);document.getElementById('threadTitle').textContent=cur?cur.title:'New command'
+async function loadSessions(){
+ let gen=++sessionsGen;
+ try{
+  let d=await api('/sessions');
+  if(gen!==sessionsGen)return;
+  sessionsEl.innerHTML='';
+  if(!d.sessions.length){
+    let n=await api('/session/new',{method:'POST'});
+    if(gen!==sessionsGen)return;
+    sid=n.id;
+    d=await api('/sessions');
+    if(gen!==sessionsGen)return;
+  }
+  if(d.sessions.length&&!d.sessions.some(x=>x.id===sid))sid=d.sessions[0].id;
+  if(gen!==sessionsGen)return;
+  syncSession(sid);
+  selectedSessionButton=null;
+  d.sessions.forEach(s=>{
+    let b=document.createElement('button');
+    b.className='session'+(s.id===sid?' on':'');
+    b.innerHTML='<b>'+esc(s.title)+'</b><span>'+s.n+' messages · '+esc((s.updated_at||'').slice(0,16).replace('T',' '))+'</span>';
+    b.onclick=()=>switchSession(s.id);sessionsEl.appendChild(b);
+    if(s.id===sid)selectedSessionButton=b;
+  });
+  if(selectedSessionButton)selectedSessionButton.scrollIntoView({block:'nearest'});
+  let cur=d.sessions.find(x=>x.id===sid);
+  document.getElementById('threadTitle').textContent=cur?cur.title:'New command';
 }catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
 async function loadHistory(){let gen=++historyGen,target=sid;statusEl.textContent='Loading';try{let d=await api('/history?session='+target);if(gen!==historyGen||target!==sid)return;threadEl.innerHTML='';if(!d.messages.length){threadEl.appendChild(empty)}else d.messages.forEach(m=>bubble(m.role,m.text));lastAgentCount=d.messages.filter(m=>m.role==='agent').length
  }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';if((e.message||'').toLowerCase()==='no such conversation'){try{let created=await api('/session/new',{method:'POST'});sid=created.id;syncSession(sid);await loadSessions();await loadHistory();return}catch(e2){notice('Could not load this conversation: '+(e2.message||e.message),true)};return;}notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
