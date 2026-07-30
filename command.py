@@ -188,11 +188,15 @@ const attachEl=document.getElementById('attachments'), composeWrap=document.quer
 let busy=false, attachments=[], lastAgentCount=0, historyGen=0;
 function stored(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function remember(k,v){try{localStorage.setItem(k,v)}catch(e){}}
-function setSessionInUrl(id){
+function setSessionInUrl(id, push){
   try{
     var u=new URL(location.href);
     u.searchParams.set('session', String(id));
-    history.replaceState({},'',u.toString());
+    if(push){
+      history.pushState({},'',u.toString());
+    }else{
+      history.replaceState({},'',u.toString());
+    }
   }catch(e){}
 }
 function getStoredSessionId(){
@@ -203,10 +207,10 @@ function getSessionFromUrl(){
   let v=parseInt(new URLSearchParams(location.search).get('session')||'',10);
   return Number.isFinite(v)?v:getStoredSessionId();
 }
-function syncSession(id){
+function syncSession(id, push){
   sid=Number.isFinite(id)?id:1;
   rememberSession();
-  setSessionInUrl(sid);
+  setSessionInUrl(sid,push);
 }
 function focusComposer(){if(!matchMedia('(pointer:coarse)').matches&&document.visibilityState==='visible')input.focus()}
 let sid=getSessionFromUrl();
@@ -237,8 +241,8 @@ async function loadSessions(){try{let d=await api('/sessions');sessionsEl.innerH
  let cur=d.sessions.find(x=>x.id===sid);document.getElementById('threadTitle').textContent=cur?cur.title:'New command'
  }catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
 async function loadHistory(){let gen=++historyGen,target=sid;statusEl.textContent='Loading';try{let d=await api('/history?session='+target);if(gen!==historyGen||target!==sid)return;threadEl.innerHTML='';if(!d.messages.length){threadEl.appendChild(empty)}else d.messages.forEach(m=>bubble(m.role,m.text));lastAgentCount=d.messages.filter(m=>m.role==='agent').length
- }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';if(e.message==='no such conversation'){try{let created=await api('/session/new',{method:'POST'});sid=created.id;rememberSession();await loadSessions();await loadHistory();return}catch(e2){notice('Could not load this conversation: '+(e2.message||e.message),true)};return;}notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
-async function switchSession(id){syncSession(id);closeMenu();await loadHistory();await loadSessions();focusComposer()}
+ }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';if((e.message||'').toLowerCase()==='no such conversation'){try{let created=await api('/session/new',{method:'POST'});sid=created.id;syncSession(sid);await loadSessions();await loadHistory();return}catch(e2){notice('Could not load this conversation: '+(e2.message||e.message),true)};return;}notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
+async function switchSession(id){syncSession(id,true);closeMenu();await loadHistory();await loadSessions();focusComposer()}
 async function newSession(){try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){alert(e.message)}}
 async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastAgentCount;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text||(at.length+' photo'+(at.length===1?'':'s')));busy=true;sendBtn.disabled=true;statusEl.textContent='Working';let wait=thinking();
  try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name}))})});
