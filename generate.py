@@ -260,6 +260,7 @@ def fetch_logged_orders(limit=2000):
             "quantity, status, source, sender_number, chat_id, id, shopify_order_id, "
             "shopify_name, financial_status, COALESCE(is_stock,0) FROM orders "
             f"WHERE received_at >= date('now', '-{LOOKBACK_DAYS} days') "
+            "AND COALESCE(local_hidden,0)=0 "
             "ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         conn.close()

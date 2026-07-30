@@ -41,6 +41,14 @@ from order_stages import STATUSES, STAGES, LABELS as STAGE_LABELS  # noqa: F401
 DEFAULT_SOURCES = ["CC", "TLC", "Offkicks"]
 
 OF_CSS = r"""
+  /* currentColor + underline rather than a bordered pill: the toast's own
+     background/text invert with theme (dark pill in light mode, light pill
+     in dark mode), so any one hardcoded border color would vanish half the
+     time. This adapts for free. */
+  .toast-act{margin-left:2px;border:none;background:none;color:inherit;font:inherit;
+    font-weight:700;font-size:inherit;text-decoration:underline;text-underline-offset:2px;
+    cursor:pointer;padding:0;}
+  .toast-act:hover{opacity:.8;}
   /* 16px inputs — anything smaller makes iOS Safari zoom on focus */
   .pin{width:100%;font-size:16px;border:1px solid var(--border);border-radius:var(--r-s);
     background:var(--bg);color:var(--ink);padding:11px 13px;font-family:inherit;
@@ -359,8 +367,17 @@ var API='/ops/agent/api';
 function $(id){return document.getElementById(id);}
 function esc(s){var d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
 var toastT;
-function toast(m){var t=$('toast');t.textContent=m;t.classList.add('show');
-  clearTimeout(toastT);toastT=setTimeout(function(){t.classList.remove('show');},3400);}
+function toast(m,action){
+  var t=$('toast');
+  if(action){
+    t.innerHTML=esc(m)+' <button type="button" class="toast-act">'+esc(action.label)+'</button>';
+    t.querySelector('.toast-act').onclick=function(){t.classList.remove('show');action.onClick();};
+  }else{
+    t.textContent=m;
+  }
+  t.classList.add('show');
+  clearTimeout(toastT);toastT=setTimeout(function(){t.classList.remove('show');},action?7000:3400);
+}
 async function api(path,opts){
   var res=await fetch(API+path,opts);
   if(res.status===403){
@@ -368,7 +385,13 @@ async function api(path,opts){
     location.href='/oauth2/start?rd=/ops/order-form.html';throw new Error('auth');
   }
   var d=await res.json().catch(function(){return {};});
-  if(!res.ok)throw new Error(d.error||'failed');
+  if(!res.ok){
+    var err=new Error(d.error||'failed');
+    err.data=d;   // callers that need more than the message (e.g. a
+                  // machine-readable "resettable" flag) read it off here
+                  // instead of parsing the English error text.
+    throw err;
+  }
   return d;
 }
 function jpost(path,body){return api(path,{method:'POST',
@@ -894,29 +917,24 @@ async function loadOrders(){
     orderRows={};rows.forEach(function(o){orderRows[o.id]=o;});
     if(!rows.length){$('list').innerHTML='<div class="empty">No orders yet — the first one you save shows up here.</div>';return;}
     $('list').innerHTML='<table class="dt"><thead><tr>'+
-      '<th>#</th><th>Logged</th><th>Source</th><th>Customer</th><th>Ship to</th><th>Product</th>'+
-      '<th>Qty</th><th>Price</th><th>Payment</th><th>Supplier</th><th>Status</th><th>Photos</th><th></th></tr></thead><tbody>'+
+      '<th>#</th><th>Product</th><th>Status</th><th>Photos</th>'+
+      '<th>Qty</th><th>Price</th><th>Payment</th><th>Supplier</th>'+
+      '<th>Customer</th><th>Ship to</th><th>Source</th><th>Logged</th><th></th></tr></thead><tbody>'+
       rows.map(function(o){
         var st=String(o.status||'pending'), spec=specOf(o), sent=!!Number(o.supplier_visible);
         var cancelled=st==='cancelled', effectiveSent=sent&&!cancelled;
         var canRemove=effectiveSent&&st==='pending'&&!o.shipment_id&&!o.bill_id;
         var paid=isPaidOrder(o);
-        return '<tr>'+
+        return '<tr'+(o.shopify_order_id?' data-shopify="1"':'')+'>'+
           '<td data-l="Order" class="o-num">#'+orderNo(o)+
             (o.ref_code?'<div class="o-sub">was '+esc(o.ref_code)+'</div>':'')+'</td>'+
-          '<td data-l="Logged" class="o-when">'+esc(when(o.received_at))+'</td>'+
-          '<td data-l="Source">'+(o.source?'<span class="pill">'+esc(o.source)+'</span>':'')+
-            (o.shopify_name?'<div class="o-sub">'+esc(o.shopify_name)+'</div>':'')+'</td>'+
-          '<td data-l="Customer"><div class="o-strong">'+esc(o.customer_name||'')+
-            (o.is_stock?' <span class="pill stock">stock</span>':'')+'</div>'+
-            (o.customer_phone?'<div class="o-sub">'+esc(o.customer_phone)+'</div>':'')+
-            (o.customer_email?'<div class="o-sub">'+esc(o.customer_email)+'</div>':'')+'</td>'+
-          '<td data-l="Ship to"><div class="o-sub">'+esc(o.address||'')+
-            (o.city?'<br>'+esc(o.city):'')+(o.state?', '+esc(o.state):'')+
-            (o.pincode?' '+esc(o.pincode):'')+'</div></td>'+
           '<td data-l="Product">'+esc(o.product||'')+
             (spec?'<div class="o-sub">'+esc(spec)+'</div>':'')+
             (o.notes?'<div class="o-sub">'+esc(o.notes)+'</div>':'')+'</td>'+
+          '<td data-l="Status"><select class="pill-select '+stClass(st)+'" aria-label="Status for order '+esc(orderNo(o))+'" data-id="'+o.id+'" data-was="'+esc(st)+'">'+
+            STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(stLabel(s))+'</option>';}).join('')+
+            '</select></td>'+
+          '<td data-l="Photos">'+photoCell(o)+'</td>'+
           '<td data-l="Qty" class="o-num">'+(o.quantity||1)+'</td>'+
           '<td data-l="Price" class="o-num">'+esc(money(o.price_inr))+'</td>'+
           '<td data-l="Payment"><span class="pill '+paymentClass(o)+'">'+
@@ -926,18 +944,26 @@ async function loadOrders(){
             (cancelled?' disabled title="Cancelled orders stay out of the supplier queue"':
              (sent&&!canRemove?' disabled title="Already in progress, shipped, or billed"':''))+'>'+
             (cancelled?'Not sent':(sent?'With supplier':'Send to supplier'))+'</button></td>'+
-          '<td data-l="Status"><select class="pill-select '+stClass(st)+'" aria-label="Status for order '+esc(orderNo(o))+'" data-id="'+o.id+'" data-was="'+esc(st)+'">'+
-            STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(stLabel(s))+'</option>';}).join('')+
-            '</select></td>'+
-          '<td data-l="Photos">'+photoCell(o)+'</td>'+
+          '<td data-l="Customer"><div class="o-strong">'+esc(o.customer_name||'')+
+            (o.is_stock?' <span class="pill stock">stock</span>':'')+'</div>'+
+            (o.customer_phone?'<div class="o-sub">'+esc(o.customer_phone)+'</div>':'')+
+            (o.customer_email?'<div class="o-sub">'+esc(o.customer_email)+'</div>':'')+'</td>'+
+          '<td data-l="Ship to"><div class="o-sub">'+esc(o.address||'')+
+            (o.city?'<br>'+esc(o.city):'')+(o.state?', '+esc(o.state):'')+
+            (o.pincode?' '+esc(o.pincode):'')+'</div></td>'+
+          '<td data-l="Source">'+(o.source?'<span class="pill">'+esc(o.source)+'</span>':'')+
+            (o.shopify_name?'<div class="o-sub">'+esc(o.shopify_name)+'</div>':'')+'</td>'+
+          '<td data-l="Logged" class="o-when">'+esc(when(o.received_at))+'</td>'+
           '<td data-l="Actions"><div class="rowacts">'+
             '<button class="rowedit" data-edit="'+o.id+'"'+
               (paid?' disabled title="Paid orders are locked"':' title="Edit order #'+orderNo(o)+'"')+
               '>Edit</button>'+
             '<button class="rowdel" data-del="'+o.id+'" data-no="'+orderNo(o)+'"'+
-              (paid?' disabled title="Paid orders cannot be deleted"':
-                ' title="Delete order #'+orderNo(o)+'"')+
-              ' aria-label="Delete order '+orderNo(o)+'">&times;</button></div></td>'+
+              (paid?' disabled title="Paid orders cannot be deleted" aria-label="Paid orders cannot be deleted"':
+                (o.shopify_order_id
+                  ?' title="Remove order #'+orderNo(o)+'" aria-label="Remove order '+orderNo(o)+'"'
+                  :' title="Delete order #'+orderNo(o)+'" aria-label="Delete order '+orderNo(o)+'"'))+
+              '>&times;</button></div></td>'+
         '</tr>';
       }).join('')+'</tbody></table>';
     $('list').querySelectorAll('.rowedit').forEach(function(b){
@@ -949,17 +975,30 @@ async function loadOrders(){
         var id=b.dataset.del, no=b.dataset.no||id;
         var row=b.closest('tr');
         var who=row.querySelector('.o-strong');
-        if(!confirm('Delete order #'+no+(who?' ('+who.textContent+')':'')+
-                    '?\n\nThis removes the order, its photos and its history for good, '+
-                    'and updates that customer\'s totals. It can\'t be undone.'))return;
+        var fromWebsite=row.dataset.shopify==='1';
+        var msg=fromWebsite
+          ? 'Remove order #'+no+(who?' ('+who.textContent+')':'')+' from Labs OS?\n\n'+
+            'Its Shopify order is untouched — this only removes it from here, and you '+
+            'can undo it right after.'
+          : 'Delete order #'+no+(who?' ('+who.textContent+')':'')+
+            '?\n\nThis removes the order, its photos and its history for good, '+
+            'and updates that customer\'s totals. It can\'t be undone.';
+        if(!confirm(msg))return;
         b.disabled=true;
         try{
           var d=await jpost('/orders/delete',{id:+id});
           row.style.transition='opacity .18s';row.style.opacity='0';
           setTimeout(function(){row.remove();},180);
-          toast('Order #'+no+' deleted'+
-            (d.customer_orders_left===0?' — that customer had no other orders, so they were removed too':''));
           loaded={};
+          if(d.hidden){
+            toast('Order #'+no+' removed from Labs OS',{label:'Undo',onClick:async function(){
+              try{await jpost('/orders/unhide',{id:+id});loaded={};loadOrders();toast('Order #'+no+' restored');}
+              catch(e){toast(e.message);}
+            }});
+          }else{
+            toast('Order #'+no+' deleted'+
+              (d.customer_orders_left===0?' — that customer had no other orders, so they were removed too':''));
+          }
         }catch(e){b.disabled=false;toast(e.message);}
       };
     });
@@ -972,7 +1011,26 @@ async function loadOrders(){
           sel.className='pill-select '+stClass(next);
           sel.dataset.was=next;
           toast('Order → '+stLabel(next));
-        }catch(e){sel.value=was;toast(e.message);}
+        }catch(e){
+          // A committed build refuses to move backward by default — that's
+          // the point. resettable:true means nothing financial (shipment,
+          // bill) is attached, so an explicit, confirmed override is safe;
+          // resettable is absent/false for anything sturdier, and this just
+          // reports the refusal like normal.
+          if(e.data&&e.data.resettable&&confirm(
+              e.message+'\n\nForce it to "'+stLabel(next)+'" anyway? This is logged on '+
+              'the order\'s timeline as a manual reset.')){
+            try{
+              await jpost('/orders/update',{id:+id,status:next,force_status:true});
+              sel.className='pill-select '+stClass(next);
+              sel.dataset.was=next;
+              toast('Order reset → '+stLabel(next));
+              sel.disabled=false;
+              return;
+            }catch(e2){sel.value=was;toast(e2.message);sel.disabled=false;return;}
+          }
+          sel.value=was;toast(e.message);
+        }
         sel.disabled=false;
       };
     });

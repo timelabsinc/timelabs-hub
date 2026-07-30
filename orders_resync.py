@@ -125,8 +125,11 @@ def push_sheets():
         print("Google isn't connected — nothing pushed")
         return False
     conn = db()
+    # A full rebuild must not resurrect a locally-hidden website order in the
+    # mirror — its tombstone write already told the sheet it's gone.
     orders = [_order_row(dict(r)) for r in
-              conn.execute("SELECT * FROM orders ORDER BY id").fetchall()]
+              conn.execute("SELECT * FROM orders WHERE COALESCE(local_hidden,0)=0 "
+                           "ORDER BY id").fetchall()]
     customers_mod.ensure_schema(conn)
     custs = [customers_mod.sheet_row(dict(r)) for r in
              conn.execute("SELECT * FROM customers ORDER BY id").fetchall()]

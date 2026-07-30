@@ -300,6 +300,53 @@ SUP_CSS = r"""
   .btrk button{border:none;background:none;color:var(--accent);font:inherit;font-size:12px;
     font-weight:650;cursor:pointer;padding:4px 2px;min-height:30px;}
 
+  /* Edit-bill sheet: a real form (line items + an add-search) rather than a
+     chain of prompt()s — replaces the previous "type each cost into a popup,
+     one at a time" flow, and is where add/remove-a-build-from-the-batch
+     lives, since editing a draft's contents and editing its prices are the
+     same operation from here on. */
+  .be-item{display:flex;align-items:center;gap:10px;padding:9px 4px;
+    border-bottom:1px solid var(--border);}
+  .be-item.pending{background:var(--good-bg);border-radius:var(--r-s);
+    border-bottom-color:transparent;}
+  .be-item.removing{opacity:.4;}
+  .be-desc{flex:1;min-width:0;font-size:13.5px;color:var(--ink);}
+  .be-desc small{display:block;color:var(--muted);font-size:11.5px;margin-top:1px;}
+  .be-cost{width:100px;flex:none;font-size:15px;border:1px solid var(--border);
+    border-radius:var(--r-s);padding:8px 9px;font-family:inherit;background:var(--bg);
+    color:var(--ink);}
+  .be-rm{flex:none;width:30px;height:30px;border-radius:50%;border:none;
+    background:var(--card-2);color:var(--muted);font-size:16px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;padding:0;}
+  .be-rm:hover{background:var(--bad-bg,var(--card-2));color:var(--bad);}
+  .be-add{margin-top:14px;}
+  .be-add input{width:100%;font-size:15.5px;border:1px solid var(--border);
+    border-radius:var(--r-s);padding:9px 11px;font-family:inherit;background:var(--bg);
+    color:var(--ink);}
+  .be-results{max-height:160px;overflow-y:auto;margin-top:6px;}
+  .be-result{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+    border:none;background:none;padding:8px 4px;border-radius:var(--r-s);cursor:pointer;
+    font:inherit;font-size:13.5px;color:var(--ink);}
+  .be-result:hover{background:var(--card-2);}
+  .be-result b{color:var(--accent);font-weight:700;flex:none;}
+  .be-field{margin-top:14px;}
+  .be-field label{display:block;font-size:11.5px;font-weight:650;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;}
+  .be-field input,.be-field textarea{width:100%;font-size:15.5px;border:1px solid var(--border);
+    border-radius:var(--r-s);padding:9px 11px;font-family:inherit;background:var(--bg);
+    color:var(--ink);}
+  .be-total{display:flex;justify-content:space-between;align-items:baseline;
+    margin-top:16px;padding-top:12px;border-top:1px solid var(--border);
+    font-size:14.5px;font-weight:650;}
+  .be-total b{font-size:19px;}
+  .be-foot{display:flex;gap:10px;margin-top:16px;}
+  .be-foot button{flex:1;min-height:var(--tap);border-radius:var(--r-s);font:inherit;
+    font-size:14.5px;font-weight:650;cursor:pointer;}
+  .be-foot .cancel{border:1px solid var(--border);background:var(--card);color:var(--ink);}
+  .be-foot .save{border:none;background:var(--ink);color:var(--bg);}
+  .be-foot .save[disabled]{opacity:.5;cursor:not-allowed;}
+  .be-empty{color:var(--muted);font-size:13px;padding:8px 4px;}
+
   /* How the numbers are worked out. Collapsed by default — it's reference,
      not something to read every visit — but present, because the owner
      asked for the calculation to be explainable rather than trusted. */
@@ -694,7 +741,7 @@ function cardEl(o){
         '<h3 class="oprod">'+esc(o.product||'—')+
           (o.quantity>1?'<span class="oqty">x'+o.quantity+'</span>':'')+'</h3>'+
         specEl(o)+
-        (o.notes?'<div class="onote">'+esc(o.notes)+'</div>':'')+
+        (o.notes?'<div class="onote"><b>Note:</b> '+esc(o.notes)+'</div>':'')+
         (problem?cancelledCostEl(o):costEl(o))+
       '</div>'+
     '</div>'+
@@ -1186,23 +1233,9 @@ function drawBills(){
     };
   });
   L.querySelectorAll('[data-billedit]').forEach(function(btn){
-    btn.onclick=async function(){
+    btn.onclick=function(){
       var b=BILLS.filter(function(x){return x.id===+btn.dataset.billedit;})[0];
-      if(!b)return;
-      var costs={};
-      for(var i=0;i<(b.items||[]).length;i++){
-        var it=b.items[i], raw=prompt('Cost per watch for '+
-          (it.ref_code||('#'+(it.order_no||it.order_id)))+':',it.cost);
-        if(raw===null)return;
-        costs[String(it.id)]=raw;
-      }
-      var shipping=prompt('Shipping cost:',b.shipping_cost||0);if(shipping===null)return;
-      var notes=prompt('Bill notes:',b.notes||'');if(notes===null)return;
-      try{
-        await jpost('/supplier/bill/update',{id:b.id,costs:costs,
-          shipping_cost:shipping,notes:notes});
-        toast('Bill updated');await loadBills();await loadOrders();
-      }catch(e){toast(e.message);}
+      if(b)openBillEdit(b);
     };
   });
   L.querySelectorAll('[data-billdel]').forEach(function(b){
@@ -1267,6 +1300,132 @@ function drawBills(){
     };
   });
 }
+/* ---------------- edit-bill sheet ----------------
+   Replaces a chain of prompt()s with a real small form: per-line cost,
+   remove a build from the batch, search-and-add one that's still unbilled.
+   Nothing is sent to the server until Save — Cancel discards the draft. */
+var billEdit=null;
+function beCandidates(){
+  var onThis={};
+  (billEdit.items||[]).forEach(function(it){onThis[it.order_id]=1;});
+  return ORDERS.filter(function(o){
+    return o.status!=='cancelled' && !o.bill_id && !onThis[o.id];
+  });
+}
+function openBillEdit(b){
+  billEdit={
+    id:b.id, bill_no:b.bill_no, currency:b.currency||'INR',
+    items:(b.items||[]).map(function(it){return {
+      id:it.id, order_id:it.order_id, order_no:it.order_no,
+      ref_code:it.ref_code, description:it.description,
+      quantity:Math.max(1,Number(it.quantity||1)), cost:Number(it.cost||0)};}),
+    removed:[], toAdd:[], shipping:b.shipping_cost||0, notes:b.notes||''
+  };
+  $('be-billno').textContent=b.bill_no;
+  $('be-ship').value=billEdit.shipping;
+  $('be-notes').value=billEdit.notes;
+  $('be-addq').value='';
+  renderBillEdit();
+  $('bill-edit-sheet').classList.add('on');
+  document.body.style.overflow='hidden';
+}
+function closeBillEdit(){
+  $('bill-edit-sheet').classList.remove('on');
+  document.body.style.overflow='';
+  billEdit=null;
+}
+function beTotal(){
+  var t=billEdit.items.reduce(function(n,it){return n+it.cost*it.quantity;},0);
+  t+=billEdit.toAdd.reduce(function(n,o){return n+(o.default_cost||0);},0);
+  t+=Number($('be-ship').value||0);
+  return t;
+}
+function renderBillEdit(){
+  var rows=billEdit.items.map(function(it,i){
+    return '<div class="be-item"><div class="be-desc">'+
+      esc(it.ref_code||('#'+(it.order_no||it.order_id)))+
+      (it.quantity>1?' <small style="display:inline">×'+it.quantity+'</small>':'')+
+      '<small>'+esc(it.description||'')+'</small></div>'+
+      '<input class="be-cost" type="number" min="0" step="0.01" inputmode="decimal" '+
+      'value="'+it.cost+'" data-i="'+i+'">'+
+      '<button type="button" class="be-rm" data-rm="'+i+'" aria-label="Remove this build from the batch">&times;</button></div>';
+  }).join('');
+  var pending=billEdit.toAdd.map(function(o,i){
+    return '<div class="be-item pending"><div class="be-desc">#'+(o.order_no||o.id)+
+      ' <small style="display:inline">(new)</small>'+
+      '<small>'+esc(o.product||'')+'</small></div>'+
+      '<div class="be-cost" style="text-align:right;border:none;background:none;">'+
+      inr(o.default_cost||0)+'</div>'+
+      '<button type="button" class="be-rm" data-unadd="'+i+'" aria-label="Don’t add this build">&times;</button></div>';
+  }).join('');
+  $('be-items').innerHTML=(rows+pending)||'<div class="be-empty">No builds left on this batch.</div>';
+  $('be-items').querySelectorAll('[data-i]').forEach(function(inp){
+    inp.oninput=function(){billEdit.items[+inp.dataset.i].cost=Number(inp.value||0);drawBeTotal();};
+  });
+  $('be-items').querySelectorAll('[data-rm]').forEach(function(btn){
+    btn.onclick=function(){
+      var i=+btn.dataset.rm, it=billEdit.items[i];
+      billEdit.removed.push(it.order_id);
+      billEdit.items.splice(i,1);
+      renderBillEdit();
+    };
+  });
+  $('be-items').querySelectorAll('[data-unadd]').forEach(function(btn){
+    btn.onclick=function(){ billEdit.toAdd.splice(+btn.dataset.unadd,1); renderBillEdit(); };
+  });
+  renderBeResults();
+  drawBeTotal();
+}
+function drawBeTotal(){ $('be-total-amt').textContent=rs(beTotal(),billEdit.currency); }
+function renderBeResults(){
+  var q=($('be-addq').value||'').trim().toLowerCase();
+  var box=$('be-results');
+  if(!q){box.innerHTML='';return;}
+  var already={}; billEdit.toAdd.forEach(function(o){already[o.id]=1;});
+  var hits=beCandidates().filter(function(o){
+    if(already[o.id])return false;
+    var hay=('#'+(o.order_no||o.id)+' '+(o.product||'')).toLowerCase();
+    return hay.indexOf(q)>=0;
+  }).slice(0,8);
+  box.innerHTML=hits.length?hits.map(function(o){
+    return '<button type="button" class="be-result" data-add="'+o.id+'">'+
+      '<b>#'+(o.order_no||o.id)+'</b><span>'+esc(o.product||'')+'</span></button>';
+  }).join(''):'<div class="be-empty">No unbilled build matches.</div>';
+  box.querySelectorAll('[data-add]').forEach(function(btn){
+    btn.onclick=function(){
+      var o=ORDERS.filter(function(x){return x.id===+btn.dataset.add;})[0];
+      if(!o)return;
+      billEdit.toAdd.push(o);
+      $('be-addq').value='';
+      renderBillEdit();
+    };
+  });
+}
+$('be-addq').addEventListener('input',renderBeResults);
+$('be-ship').addEventListener('input',drawBeTotal);
+$('be-cancel').onclick=closeBillEdit;
+$('be-bg').onclick=closeBillEdit;
+$('be-save').onclick=async function(){
+  var btn=$('be-save');
+  if(!billEdit.items.length&&!billEdit.toAdd.length){
+    toast('A batch needs at least one build');return;
+  }
+  btn.disabled=true;var label=btn.textContent;btn.textContent='Saving…';
+  var costs={};
+  billEdit.items.forEach(function(it){costs[String(it.id)]=it.cost;});
+  try{
+    await jpost('/supplier/bill/update',{
+      id:billEdit.id, costs:costs,
+      shipping_cost:$('be-ship').value||0, notes:$('be-notes').value.trim(),
+      remove_order_ids:billEdit.removed,
+      add_ids:billEdit.toAdd.map(function(o){return o.id;})});
+    toast('Bill updated');
+    closeBillEdit();
+    await loadBills(); await load(true);
+  }catch(e){toast(e.message);}
+  btn.disabled=false;btn.textContent=label;
+};
+
 /* Someone arriving on #batch-7 should land on it, not on the queue. */
 function batchFromHash(){
   var m=/^#batch-(\d+)$/.exec(location.hash||'');
@@ -1607,6 +1766,28 @@ def build():
     <div class="sheet-grab"></div>
     <h3 id="sheet-title">Order</h3>
     <div id="sheet-opts"></div>
+  </div>
+</div>
+
+<div class="sheet" id="bill-edit-sheet" role="dialog" aria-modal="true" aria-label="Edit bill">
+  <div class="sheet-bg" id="be-bg"></div>
+  <div class="sheet-in">
+    <div class="sheet-grab"></div>
+    <h3>Edit <span id="be-billno"></span></h3>
+    <div id="be-items"></div>
+    <div class="be-add">
+      <input id="be-addq" type="text" placeholder="Add a build — search by number or product" autocomplete="off">
+      <div class="be-results" id="be-results"></div>
+    </div>
+    <div class="be-field"><label for="be-ship">Shipping</label>
+      <input id="be-ship" type="number" min="0" step="0.01" inputmode="decimal"></div>
+    <div class="be-field"><label for="be-notes">Notes</label>
+      <textarea id="be-notes" rows="2"></textarea></div>
+    <div class="be-total"><span>Total</span><b id="be-total-amt">—</b></div>
+    <div class="be-foot">
+      <button type="button" class="cancel" id="be-cancel">Cancel</button>
+      <button type="button" class="save" id="be-save">Save changes</button>
+    </div>
   </div>
 </div>
 

@@ -465,6 +465,21 @@ def _ensure_orders_schema():
             "shopify_contact_fingerprint": "TEXT",
             "shopify_contact_override": "INTEGER DEFAULT 0",
             "shopify_conflict_fingerprint": "TEXT",
+            # Same idea, for the build itself. A staff edit to product/quantity
+            # on an order not yet committed to the supplier used to be
+            # silently reverted by the next sync (it treats "not committed"
+            # as "still take Shopify's word for it"). Once this is set, the
+            # sync leaves product/quantity alone — permanently, there is no
+            # auto-clear the way contact has, since a corrected build spec
+            # has no Shopify-side value to eventually "catch up" to.
+            "shopify_build_override": "INTEGER DEFAULT 0",
+            # A staff-requested removal of a website/messaging order that the
+            # permanent-record rule (below, in _handle_orders_delete) would
+            # otherwise refuse outright. The row, and critically its
+            # shopify_order_id, are kept — hiding is the only way to grant
+            # "delete" without letting the next sync treat the gone row as a
+            # new order and resurrect it under a new number.
+            "local_hidden": "INTEGER DEFAULT 0",
             # Every channel lands in the unified order log first. A person
             # explicitly chooses which orders enter the supplier queue.
             "supplier_visible": "INTEGER DEFAULT 0",
@@ -3251,8 +3266,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "customer_email, address, pincode, city, state, source, product, quantity, "
                 "price_inr, notes, status, drive_link, photo_links, local_photos, case_style, "
                 "dial_colour, dial_style, case_colour, movement, watch_size, shopify_name, "
-                "ref_code, is_stock, financial_status, supplier_visible, shipment_id, bill_id "
-                "FROM orders ORDER BY id DESC LIMIT 100").fetchall()
+                "ref_code, is_stock, financial_status, supplier_visible, shipment_id, bill_id, "
+                "shopify_order_id "
+                "FROM orders WHERE COALESCE(local_hidden,0)=0 "
+                "ORDER BY id DESC LIMIT 100").fetchall()
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
@@ -3329,7 +3346,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             stock = conn.execute(
                 "SELECT COUNT(*) n FROM orders WHERE COALESCE(is_stock,0)=1 "
                 "AND status!='cancelled' AND (financial_status IS NULL OR "
-                "LOWER(financial_status) NOT IN ('refunded','voided'))").fetchone()["n"]
+                "LOWER(financial_status) NOT IN ('refunded','voided')) "
+                "AND COALESCE(local_hidden,0)=0").fetchone()["n"]
             ncust = conn.execute("SELECT COUNT(*) n FROM customers").fetchone()["n"]
             top_products = [dict(r) for r in conn.execute(
                 "SELECT COALESCE(NULLIF(oi.canonical_product,''), oi.product) AS name, "
@@ -3434,13 +3452,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._json(400, {"error": f"'{p['status']}' isn't a real status"})
             return
-        if ("status" in p and not order_stages.staff_transition_allowed(
-                cur_status, p["status"], bool(before["supplier_visible"]) or build_locked)):
-            conn.close()
-            self._json(409, {
-                "error": "A committed supplier build cannot be cancelled or moved "
-                         "backwards. Correct the supplier, shipment, or bill linkage first."})
-            return
+        # Staff can force a stage past the normal forward-only rule (the
+        # supplier fat-fingered a tap, or a batch needs correcting) but never
+        # past a shipment or bill — those are financial/logistics facts a
+        # stage reset must not silently contradict. Bypasses
+        # staff_transition_allowed only; every other lock in this handler
+        # (paid, build spec once committed, multi-item Shopify orders) is
+        # untouched by this flag.
+        force_reset = False
+        status_committed = bool(before["supplier_visible"]) or build_locked
+        if ("status" in p and p["status"] != cur_status
+                and not order_stages.staff_transition_allowed(
+                    cur_status, p["status"], status_committed)):
+            hard_linked = before["shipment_id"] is not None or before["bill_id"] is not None
+            if not p.get("force_status"):
+                conn.close()
+                self._json(409, {
+                    "error": "A committed supplier build cannot be cancelled or moved "
+                             "backwards. Correct the supplier, shipment, or bill linkage "
+                             "first.",
+                    "resettable": status_committed and not hard_linked})
+                return
+            if hard_linked:
+                conn.close()
+                self._json(409, {
+                    "error": "This build has a shipment or bill attached, so its stage "
+                             "can't be force-reset — remove that link first.",
+                    "resettable": False})
+                return
+            force_reset = True
         supplier_change = None
         if "supplier_visible" in p:
             raw = p["supplier_visible"]
@@ -3544,6 +3584,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 vals.append(supplier_change)
         if before["shopify_order_id"] and contact_fields.intersection(normalized):
             sets.append("shopify_contact_override=1")
+        # Mirrors the contact override immediately above: reaching here with a
+        # product/quantity change means build_locked was false (those fields
+        # are in blocked_fields and rejected earlier once committed), so this
+        # is specifically the "still pending, edited before it was ever sent
+        # to the supplier" case the sync would otherwise stomp on next run.
+        if before["shopify_order_id"] and {"product", "quantity"}.intersection(normalized):
+            sets.append("shopify_build_override=1")
         if not sets:
             conn.close()
             self._json(200, {"ok": True, "id": oid, "unchanged": True, "warnings": []})
@@ -3575,10 +3622,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "VALUES (?,?,?,?,?)",
                     (oid, product, qty, price, (price or 0) * qty))
 
-        # A status move goes on the order's own timeline.
+        # A status move goes on the order's own timeline. Flagged distinctly
+        # when forced, so "why did this jump backward" is always answerable
+        # from the history alone.
         if "status" in p and str(p["status"]).strip() != (before["status"] or ""):
             order_event(conn, oid, "status",
-                       f'{before["status"] or "new"} -> {str(p["status"]).strip()}', actor)
+                       f'{before["status"] or "new"} -> {str(p["status"]).strip()}'
+                       + (" (reset by staff)" if force_reset else ""), actor)
         if (supplier_change is not None
                 and supplier_change != int(before["supplier_visible"] or 0)):
             order_event(
@@ -3791,14 +3841,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "created": created, "failed": failed})
 
     def _handle_orders_delete(self):
-        """Remove an order completely — the row, its line items, its timeline
-        and its photos. A real delete, not a hidden flag, because the request
-        was to get rid of test and mistaken orders rather than archive them.
+        """Remove an order — hard-deleted (row, line items, timeline, photos:
+        all gone) for a manually-created Test/Mistake/Draft record, or hidden
+        (row and history kept, just flagged off every list/total) for a
+        website order, since a hard delete there would free its
+        shopify_order_id and let the very next sync recreate it as a
+        "new" order under a fresh number. Messaging-captured orders (a
+        transcribed customer conversation) get neither path — they stay
+        exactly as permanent as before.
 
-        The derived customer is repaired afterwards rather than left behind:
-        their totals are recomputed from what's left, and a customer with no
-        remaining orders is removed too, so deleting an order can't leave a
-        phantom buyer with inflated lifetime spend in the list."""
+        Eligibility is identical either way: untouched Pending, never sent to
+        the supplier, no shipment/bill/tracking, no history beyond its own
+        creation. The derived customer is repaired afterwards — recomputed
+        from what's left, and removed entirely if nothing remains — so
+        neither path can leave a phantom buyer with inflated lifetime spend."""
         actor = self._order_user()
         if not self._has_tool("orders"):
             self._json(403, {"error": "not available for this account"})
@@ -3842,16 +3898,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._json(409, {
                 "error": "This order has already been shared, shipped, billed, or tracked "
-                         "and cannot be hard-deleted."})
+                         "and cannot be removed."})
             return
-        if (row["shopify_order_id"] or row["chat_id"] or row["sender_number"]
-                or row["raw_message"]):
+        if row["chat_id"] or row["sender_number"] or row["raw_message"]:
             conn.close()
             self._json(409, {
-                "error": "Imported, storefront, and messaging orders are permanent records. "
-                         "Cancel the order instead of deleting it."})
+                "error": "Messaging-captured orders are a transcript of what a customer "
+                         "actually sent and are permanent records. Cancel the order instead."})
             return
-        if (row["source"] or "").strip().lower() not in ("test", "mistake", "draft"):
+        is_website = bool(row["shopify_order_id"])
+        if not is_website and (row["source"] or "").strip().lower() not in (
+                "test", "mistake", "draft"):
             conn.close()
             self._json(409, {
                 "error": "Only a record explicitly marked Test, Mistake, or Draft can be "
@@ -3866,11 +3923,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._json(409, {
                 "error": "This record has workflow history or billing links and cannot "
-                         "be hard-deleted."})
+                         "be removed."})
             return
-        conn.execute("DELETE FROM order_items WHERE order_id=?", (oid,))
-        conn.execute("DELETE FROM order_events WHERE order_id=?", (oid,))
-        conn.execute("DELETE FROM orders WHERE id=?", (oid,))
+
+        if is_website:
+            # Hide, don't destroy: shopify_order_id stays on the row, so the
+            # UNIQUE index still blocks the next sync from re-inserting this
+            # order as if it were new. Nothing else about the record changes —
+            # it's recoverable via /orders/unhide, unlike a hard delete.
+            conn.execute("UPDATE orders SET local_hidden=1 WHERE id=?", (oid,))
+            order_event(conn, oid, "hidden", "removed from Labs OS (Shopify record untouched)",
+                       actor)
+        else:
+            conn.execute("DELETE FROM order_items WHERE order_id=?", (oid,))
+            conn.execute("DELETE FROM order_events WHERE order_id=?", (oid,))
+            conn.execute("DELETE FROM orders WHERE id=?", (oid,))
         conn.commit()
 
         import customers as customers_mod
@@ -3891,23 +3958,81 @@ class Handler(http.server.BaseHTTPRequestHandler):
             access = google_api.access_token()
             if access and row["order_no"] is not None:
                 google_api.update_order_field(
-                    access, row["order_no"], "Status", "Deleted — test/mistake")
+                    access, row["order_no"], "Status",
+                    "Removed locally (Shopify order)" if is_website
+                    else "Deleted — test/mistake")
         except Exception as e:
             print(f"[orders-delete] sheet tombstone skipped: {e}", flush=True)
 
-        photo_dir = os.path.join(ORDER_PHOTOS, str(oid))
-        if os.path.isdir(photo_dir):
-            try:
-                for fn in os.listdir(photo_dir):
-                    os.remove(os.path.join(photo_dir, fn))
-                os.rmdir(photo_dir)
-            except OSError as e:
-                print(f"[orders-delete] photo cleanup: {e}", flush=True)
-        hub_event("order_deleted",
+        if not is_website:
+            photo_dir = os.path.join(ORDER_PHOTOS, str(oid))
+            if os.path.isdir(photo_dir):
+                try:
+                    for fn in os.listdir(photo_dir):
+                        os.remove(os.path.join(photo_dir, fn))
+                    os.rmdir(photo_dir)
+                except OSError as e:
+                    print(f"[orders-delete] photo cleanup: {e}", flush=True)
+        hub_event("order_hidden" if is_website else "order_deleted",
                  f'#{row["order_no"] or oid} {row["product"] or ""} '
                  f'({row["customer_name"] or "?"})',
                  actor, app="orders")
-        self._json(200, {"ok": True, "id": oid, "customer_orders_left": remaining})
+        self._json(200, {"ok": True, "id": oid, "hidden": is_website,
+                         "customer_orders_left": remaining})
+
+    def _handle_orders_unhide(self):
+        """Undo a website order's local hide. Admin/orders only, matching the
+        delete endpoint it reverses — nothing was destroyed, so this is a
+        plain flag flip plus the same customer recompute delete does."""
+        actor = self._order_user()
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 2048)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            oid = int(p.get("id"))
+        except (TypeError, ValueError):
+            self._json(400, {"error": "missing order id"})
+            return
+        conn = db()
+        row = conn.execute(
+            "SELECT order_no, customer_name, customer_phone, customer_email, "
+            "local_hidden FROM orders WHERE id=?", (oid,)).fetchone()
+        if not row:
+            conn.close()
+            self._json(404, {"error": "no such order"})
+            return
+        if not row["local_hidden"]:
+            conn.close()
+            self._json(200, {"ok": True, "id": oid, "unchanged": True})
+            return
+        conn.execute("UPDATE orders SET local_hidden=0 WHERE id=?", (oid,))
+        order_event(conn, oid, "hidden", "restored to Labs OS", actor)
+        conn.commit()
+        current = dict(conn.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone())
+        try:
+            import customers as customers_mod
+            customers_mod.upsert_from_order(conn, current)
+        except Exception as e:
+            print(f"[orders-unhide] customer repair skipped: {e}", flush=True)
+        conn.close()
+        try:
+            import google_api
+            import order_stages
+            access = google_api.access_token()
+            if access and row["order_no"] is not None:
+                google_api.update_order_field(
+                    access, row["order_no"], "Status",
+                    order_stages.label(current.get("status")))
+        except Exception as e:
+            print(f"[orders-unhide] sheet restore skipped: {e}", flush=True)
+        hub_event("order_unhidden", f"#{row['order_no'] or oid} restored", actor, app="orders")
+        self._json(200, {"ok": True, "id": oid})
 
     def _handle_order_items_relabel(self):
         """Rename a product for analytics — retroactive across every order
@@ -4187,14 +4312,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _handle_supplier_orders(self):
         """The build queue: order number, what to build, quantity, status.
-        The SELECT itself never names a PII or price column, so there is no
-        code path here that could leak one even by accident — this isn't a
-        matter of the response happening to omit fields the UI doesn't show.
-        That's also why orders.notes (free-typed staff shorthand — sizing,
-        deadlines, and just as easily a customer's number or address) is
-        deliberately absent: it's a different channel from the supplier's
-        own note box, which travels through order_events (the 'note' kind
-        in the timeline below) and is fine for them to see.
+        The SELECT never names a customer-identity or price column (name,
+        phone, email, address, price_inr), so there is no code path here
+        that could leak one even by accident.
+
+        `notes` (owner's 2026-07-30 call, reversing the earlier default of
+        withholding it) IS included: staff's own sizing/deadline shorthand is
+        useful to the person actually building the watch. It is still
+        free-typed staff text, occasionally containing a stray customer
+        detail if someone pastes carelessly — the supplier's own running
+        note box (the 'note' timeline kind below) is the channel for
+        anything they add themselves.
 
         No separate "paid" flag: `status` already has a paid stage, and it
         means "we've paid the supplier" — Shopify's financial_status means
@@ -4212,7 +4340,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # supplier_cost is the supplier's OWN price to us — safe to
                 # return here, unlike price_inr (what the customer pays),
                 # which stays absent from this SELECT entirely.
-                "SELECT id, order_no, received_at, product, quantity, status, "
+                "SELECT id, order_no, received_at, product, quantity, status, notes, "
                 "case_style, dial_colour, dial_style, case_colour, movement, "
                 "watch_size, local_photos, tracking_code, ref_code, "
                 "supplier_cost, supplier_cost_ccy, bill_id FROM orders "
@@ -4688,12 +4816,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          "total": total, "defaulted": defaulted})
 
     def _handle_supplier_bill_update(self):
-        """Edit a draft bill until staff acknowledge it or any payment clears.
-        Re-pricing lines updates the corresponding order costs as well, so the
-        queue and bill can never show two different agreed figures."""
+        """Edit a draft bill until staff acknowledge it or any payment clears
+        — the same envelope `_handle_supplier_bill_create` requires to make
+        one in the first place. Re-pricing lines updates the corresponding
+        order costs as well, so the queue and bill can never show two
+        different agreed figures.
+
+        Membership is editable too, not just price: `remove_order_ids` takes
+        a build off the batch (it returns to the unbilled queue, free to
+        join another), `add_ids` puts one on (same eligibility as creating a
+        batch — supplier-visible, not cancelled, not already on a bill, and
+        priced in this bill's own currency or defaulted the same way create
+        does). A batch can't be edited down to zero items; delete the whole
+        batch for that."""
         if not self._supplier_ok():
             self._json(403, {"error": "not available for this account"})
             return
+        actor = self._order_user()
         length = int(self.headers.get("Content-Length", 0))
         try:
             p = json.loads(self.rfile.read(min(length, 65536)).decode())
@@ -4709,9 +4848,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         costs = p.get("costs") or {}
         if not isinstance(costs, dict):
             costs = {}
+        remove_ids = [int(i) for i in (p.get("remove_order_ids") or [])
+                     if str(i).strip().lstrip("-").isdigit()]
+        add_ids = [int(i) for i in (p.get("add_ids") or [])
+                  if str(i).strip().isdigit()][:200]
         conn = db()
         conn.execute("BEGIN IMMEDIATE")
-        bill = conn.execute("SELECT status, currency FROM supplier_bills WHERE id=?",
+        bill = conn.execute("SELECT status, currency, bill_no FROM supplier_bills WHERE id=?",
                             (bid,)).fetchone()
         if not bill:
             conn.rollback()
@@ -4726,9 +4869,96 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._json(409, {"error": "accepted or paid batches cannot be edited"})
             return
-        items = conn.execute(
+
+        items = list(conn.execute(
             "SELECT id, order_id, quantity, cost FROM supplier_bill_items WHERE bill_id=?",
-            (bid,)).fetchall()
+            (bid,)).fetchall())
+
+        if remove_ids:
+            kept = [it for it in items if it["order_id"] not in remove_ids]
+            if not kept and not add_ids:
+                conn.rollback()
+                conn.close()
+                self._json(409, {
+                    "error": "A batch needs at least one build — delete the whole "
+                             "batch instead of removing its last item."})
+                return
+            for it in items:
+                if it["order_id"] in remove_ids:
+                    conn.execute("DELETE FROM supplier_bill_items WHERE id=?", (it["id"],))
+                    conn.execute("UPDATE orders SET bill_id=NULL WHERE id=?", (it["order_id"],))
+                    order_event(conn, it["order_id"], "billed",
+                               f"removed from batch {bill['bill_no']}", actor)
+            items = kept
+
+        if add_ids:
+            new_rows = conn.execute(
+                "SELECT id, product, movement, ref_code, quantity, status, "
+                "supplier_cost, supplier_cost_ccy, bill_id FROM orders "
+                "WHERE id IN ({}) AND supplier_visible=1".format(
+                    ",".join("?" * len(add_ids))), add_ids).fetchall()
+            if len(new_rows) != len(add_ids):
+                conn.rollback()
+                conn.close()
+                self._json(409, {
+                    "error": "one or more builds to add left the supplier queue; "
+                             "refresh and try again"})
+                return
+            already = [r["id"] for r in new_rows if r["bill_id"] and r["bill_id"] != bid]
+            if already:
+                conn.rollback()
+                conn.close()
+                self._json(400, {"error": "already in another batch: "
+                                          + ", ".join(f"#{i}" for i in already)})
+                return
+            cancelled = [r["id"] for r in new_rows
+                        if str(r["status"] or "").strip().lower() in
+                        ("cancelled", "canceled", "refunded", "voided")]
+            if cancelled:
+                conn.rollback()
+                conn.close()
+                self._json(409, {"error": "cancelled builds cannot be billed: "
+                                          + ", ".join(f"#{i}" for i in cancelled)})
+                return
+            for r in new_rows:
+                if r["bill_id"] == bid:
+                    continue   # already on this exact batch — a harmless re-add
+                cost = r["supplier_cost"]
+                cost_currency = self._money_currency(r["supplier_cost_ccy"] or "INR")
+                default_label = None
+                if cost is None:
+                    cost, default_label = self._default_cost(r["product"], r["movement"])
+                    cost_currency = "INR"
+                parsed_cost = self._money_amount(cost)
+                if parsed_cost is None or not cost_currency:
+                    conn.rollback()
+                    conn.close()
+                    self._json(409, {"error": f"build #{r['id']} has an invalid saved cost"})
+                    return
+                if cost_currency != bill["currency"]:
+                    conn.rollback()
+                    conn.close()
+                    self._json(409, {
+                        "error": f"build #{r['id']} is priced in {cost_currency}; "
+                                 f"this batch is in {bill['currency']}"})
+                    return
+                if default_label:
+                    conn.execute("UPDATE orders SET supplier_cost=?, supplier_cost_ccy='INR' "
+                                "WHERE id=?", (parsed_cost, r["id"]))
+                    order_event(conn, r["id"], "cost",
+                               f"default {default_label} rate applied: INR "
+                               f"{parsed_cost:,.0f}", actor)
+                quantity = max(1, int(r["quantity"] or 1))
+                conn.execute(
+                    "INSERT INTO supplier_bill_items (bill_id, order_id, description, "
+                    "ref_code, quantity, cost) VALUES (?,?,?,?,?,?)",
+                    (bid, r["id"], r["product"], r["ref_code"], quantity, parsed_cost))
+                conn.execute("UPDATE orders SET bill_id=? WHERE id=?", (bid, r["id"]))
+                order_event(conn, r["id"], "billed", f"added to batch {bill['bill_no']}", actor)
+            items = list(conn.execute(
+                "SELECT id, order_id, quantity, cost FROM supplier_bill_items WHERE bill_id=?",
+                (bid,)).fetchall())
+
         subtotal = 0.0
         prepared = []
         for item in items:
@@ -4742,19 +4972,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
             subtotal += cost * max(1, int(item["quantity"] or 1))
             prepared.append((item, cost))
         for item, cost in prepared:
+            if cost == item["cost"]:
+                continue
             conn.execute("UPDATE supplier_bill_items SET cost=? WHERE id=?",
                          (cost, item["id"]))
             conn.execute("UPDATE orders SET supplier_cost=?, supplier_cost_ccy=? WHERE id=?",
                          (cost, bill["currency"], item["order_id"]))
             order_event(conn, item["order_id"], "cost",
-                        f"bill line updated to {bill['currency']} {cost:,.2f}",
-                        self._order_user())
+                        f"bill line updated to {bill['currency']} {cost:,.2f}", actor)
         total = subtotal + shipping
         conn.execute("UPDATE supplier_bills SET subtotal=?, shipping_cost=?, total=?, notes=? "
                      "WHERE id=?", (subtotal, shipping, total, notes, bid))
         conn.commit()
         conn.close()
-        self._json(200, {"ok": True, "id": bid, "subtotal": subtotal, "total": total})
+        if remove_ids or add_ids:
+            hub_event("supplier_bill",
+                     f"{bill['bill_no']} membership changed"
+                     f"{' +' + str(len(add_ids)) if add_ids else ''}"
+                     f"{' -' + str(len(remove_ids)) if remove_ids else ''}",
+                     actor, "supplier")
+        self._json(200, {"ok": True, "id": bid, "subtotal": subtotal, "total": total,
+                         "items": len(items)})
 
     def _handle_supplier_bill_whatsapp(self):
         """Post a batch's bill straight into the team WhatsApp, PDF attached.
@@ -7312,6 +7550,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_supplier_payment_record()
         elif path == "/orders/delete":
             self._handle_orders_delete()
+        elif path == "/orders/unhide":
+            self._handle_orders_unhide()
         elif path == "/orders/bulk":
             self._handle_orders_bulk()
         elif path == "/access/set":

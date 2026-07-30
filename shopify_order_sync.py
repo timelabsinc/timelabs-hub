@@ -241,7 +241,9 @@ def _ensure_sync_schema(conn):
     for name, declaration in (
             ("shopify_contact_fingerprint", "TEXT"),
             ("shopify_contact_override", "INTEGER DEFAULT 0"),
-            ("shopify_conflict_fingerprint", "TEXT")):
+            ("shopify_conflict_fingerprint", "TEXT"),
+            ("shopify_build_override", "INTEGER DEFAULT 0"),
+            ("local_hidden", "INTEGER DEFAULT 0")):
         if name not in columns:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {declaration}")
     conn.commit()
@@ -569,9 +571,10 @@ def _sync_locked(actor):
                     committed = order_stages.is_committed(
                         existing["status"], existing["supplier_visible"],
                         existing["shipment_id"], existing["bill_id"])
+                    build_override = bool(existing["shopify_build_override"] or 0)
                     parent_qty = max(1, int(existing["quantity"] or 1))
                     parent_product = existing["product"] or "—"
-                    if not committed:
+                    if not committed and not build_override:
                         parent_qty = max(1, current_qty)
                         parent_product = product
                     next_status = existing["status"]
