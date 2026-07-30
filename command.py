@@ -192,10 +192,14 @@ function setSessionInUrl(id, push){
   try{
     var u=new URL(location.href);
     u.searchParams.set('session', String(id));
+    var next=u.toString();
+    if(next===location.href){
+      return;
+    }
     if(push){
-      history.pushState({},'',u.toString());
+      history.pushState({},'',next);
     }else{
-      history.replaceState({},'',u.toString());
+      history.replaceState({},'',next);
     }
   }catch(e){}
 }
@@ -212,6 +216,7 @@ function syncSession(id, push){
   rememberSession();
   setSessionInUrl(sid,push);
 }
+let selectedSessionButton=null;
 function focusComposer(){if(!matchMedia('(pointer:coarse)').matches&&document.visibilityState==='visible')input.focus()}
 let sid=getSessionFromUrl();
 function rememberSession(){remember('labs_command_session',sid);remember('tl_session',sid)}
@@ -237,13 +242,19 @@ async function loadSessions(){try{let d=await api('/sessions');sessionsEl.innerH
  if(!d.sessions.length){let n=await api('/session/new',{method:'POST'});sid=n.id;d=await api('/sessions')}
  if(d.sessions.length&&!d.sessions.some(x=>x.id===sid))sid=d.sessions[0].id;
  syncSession(sid);
- d.sessions.forEach(s=>{let b=document.createElement('button');b.className='session'+(s.id===sid?' on':'');b.innerHTML='<b>'+esc(s.title)+'</b><span>'+s.n+' messages · '+esc((s.updated_at||'').slice(0,16).replace('T',' '))+'</span>';b.onclick=()=>switchSession(s.id);sessionsEl.appendChild(b)});
+ selectedSessionButton=null;
+ d.sessions.forEach(s=>{
+  let b=document.createElement('button');b.className='session'+(s.id===sid?' on':'');b.innerHTML='<b>'+esc(s.title)+'</b><span>'+s.n+' messages · '+esc((s.updated_at||'').slice(0,16).replace('T',' '))+'</span>';
+  b.onclick=()=>switchSession(s.id);sessionsEl.appendChild(b);
+  if(s.id===sid)selectedSessionButton=b;
+ });
+ if(selectedSessionButton)selectedSessionButton.scrollIntoView({block:'nearest'});
  let cur=d.sessions.find(x=>x.id===sid);document.getElementById('threadTitle').textContent=cur?cur.title:'New command'
- }catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
+}catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
 async function loadHistory(){let gen=++historyGen,target=sid;statusEl.textContent='Loading';try{let d=await api('/history?session='+target);if(gen!==historyGen||target!==sid)return;threadEl.innerHTML='';if(!d.messages.length){threadEl.appendChild(empty)}else d.messages.forEach(m=>bubble(m.role,m.text));lastAgentCount=d.messages.filter(m=>m.role==='agent').length
  }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';if((e.message||'').toLowerCase()==='no such conversation'){try{let created=await api('/session/new',{method:'POST'});sid=created.id;syncSession(sid);await loadSessions();await loadHistory();return}catch(e2){notice('Could not load this conversation: '+(e2.message||e.message),true)};return;}notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
 async function switchSession(id){syncSession(id,true);closeMenu();await loadHistory();await loadSessions();focusComposer()}
-async function newSession(){try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){alert(e.message)}}
+async function newSession(){try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){notice(e.message,true)}}
 async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastAgentCount;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text||(at.length+' photo'+(at.length===1?'':'s')));busy=true;sendBtn.disabled=true;statusEl.textContent='Working';let wait=thinking();
  try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name}))})});
   if(d.reply){wait.remove();if(runSid===sid){bubble('agent',d.reply);lastAgentCount=baseline+1}}
@@ -255,10 +266,10 @@ async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.
  finally{busy=false;sendBtn.disabled=false;statusEl.textContent='Ready';focusComposer()}
 }
 async function poll(runSid,wait,baseline){for(let n=0;n<500;n++){await new Promise(r=>setTimeout(r,6000));let d=await api('/history?session='+runSid),agents=d.messages.filter(m=>m.role==='agent');if(agents.length>baseline){wait.remove();if(runSid===sid){bubble('agent',agents[agents.length-1].text);lastAgentCount=agents.length}else await loadSessions();return}}wait.remove();if(runSid===sid)notice('The job is still running. Its result will remain in this conversation.',false)}
-async function upload(f){if(!f)return;if(attachments.length>=8){alert('Up to 8 photos per message.');return}
- if(f.size>32*1024*1024){alert((f.name||'This image')+' is larger than 32 MB.');return}
+async function upload(f){if(!f)return;if(attachments.length>=8){notice('Up to 8 photos per message.',true);return}
+ if(f.size>32*1024*1024){notice((f.name||'This image')+' is larger than 32 MB.',true);return}
  if(!/\.(jpe?g|png|webp)$/i.test(f.name||'')){let ext=(f.type||'').includes('png')?'.png':(f.type||'').includes('webp')?'.webp':'.jpg';f=new File([f],'pasted-'+Date.now()+ext,{type:f.type||'image/jpeg'})}
- let form=new FormData();form.append('image',f);try{let d=await api('/upload',{method:'POST',body:form}),a={path:d.path,name:f.name,url:''};attachments.push(a);renderAttachments();let rd=new FileReader();rd.onload=e=>{a.url=e.target.result;renderAttachments()};rd.readAsDataURL(f)}catch(e){alert(e.message)}}
+let form=new FormData();form.append('image',f);try{let d=await api('/upload',{method:'POST',body:form}),a={path:d.path,name:f.name,url:''};attachments.push(a);renderAttachments();let rd=new FileReader();rd.onload=e=>{a.url=e.target.result;renderAttachments()};rd.readAsDataURL(f)}catch(e){notice(e.message,true)}}
 function renderAttachments(){attachEl.innerHTML='';attachments.forEach((a,i)=>{let c=document.createElement('div');c.className='attachment';c.innerHTML=(a.url?'<img src="'+a.url+'" alt="">':'')+'<span>'+esc(a.name)+'</span><button type="button" aria-label="Remove">×</button>';c.querySelector('button').onclick=()=>{attachments.splice(i,1);renderAttachments()};attachEl.appendChild(c)})}
 async function loadEvents(){try{let d=await api('/events'),el=document.getElementById('events');el.innerHTML='';(d.events||[]).slice(0,8).forEach(x=>{let v=document.createElement('div');v.className='event';v.innerHTML='<b>'+esc((x.app||'Labs')+' · '+(x.kind||'activity').replace(/_/g,' '))+'</b><p>'+esc(x.detail||'')+'</p><time>'+esc((x.created_at||'').slice(0,16).replace('T',' '))+'</time>';el.appendChild(v)});if(!el.children.length)el.innerHTML='<div class="event"><p>No recent activity.</p></div>'}catch(e){}}
 function autosize(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,150)+'px'}
@@ -293,7 +304,15 @@ function openDrawer(el,trigger,focus){
 menuBtn.onclick=()=>openDrawer(rail,menuBtn,document.getElementById('newBtn'));
 contextBtn.onclick=()=>openDrawer(contextRail,contextBtn,document.getElementById('contextClose'));
 document.getElementById('contextClose').onclick=()=>closeMenu();shade.onclick=()=>closeMenu();
-window.addEventListener('popstate',()=>{let target=getSessionFromUrl();if(target===sid)return;sid=target;closeMenu(false);loadHistory();loadSessions();focusComposer()});
+window.addEventListener('popstate',()=>{
+ let target=getSessionFromUrl();
+ if(target===sid)return;
+ syncSession(target,false);
+ closeMenu(false);
+ loadHistory();
+ loadSessions();
+ focusComposer();
+});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&(rail.classList.contains('open')||contextRail.classList.contains('open')))closeMenu()});
 for(let mq of [leftMq,contextMq]){if(mq.addEventListener)mq.addEventListener('change',()=>closeMenu(false));else mq.addListener(()=>closeMenu(false))}
 syncDrawers();
