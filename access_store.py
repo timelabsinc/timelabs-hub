@@ -15,8 +15,12 @@ Stdlib only: the agent server runs on system python and imports this directly.
 """
 import json
 import os
+import posixpath
+import re
 import subprocess
+import threading
 import time
+import urllib.parse
 
 STORE = "/root/ops-dashboard/access.json"
 # .conf, not .map — nginx.conf only includes conf.d/*.conf
@@ -36,17 +40,17 @@ ROLES = {
     },
     "full": {
         "label": "Full",
-        "blurb": "Every day-to-day tool — dashboard, orders, Drop, Ledger, Shopify tools. No admin.",
+        "blurb": "Daily operations — dashboard, orders, Drop, Ledger, Command and Reddit. "
+                 "Live Shopify publishing stays admin-only.",
         "home": "/ops/",
-        "tools": ["face", "drop", "ledger", "chat", "blog", "content",
-                  "theme", "price", "product", "orders", "reddit"],
+        "tools": ["face", "drop", "ledger", "chat", "orders", "reddit"],
     },
     "content": {
         "label": "Content",
-        "blurb": "The Reddit tool and the writing tools. No orders, no customer "
-                 "list, no Ledger, no Shopify admin.",
+        "blurb": "Reddit research/drafts and Drop. Live Shopify publishing stays "
+                 "admin-only.",
         "home": "/ops/reddit.html",
-        "tools": ["reddit", "blog", "content", "drop"],
+        "tools": ["reddit", "drop"],
     },
     "orders": {
         "label": "Orders",
@@ -68,7 +72,12 @@ ROLES = {
         "tools": ["supplier"],
     },
 }
-DEFAULT_ROLE = "full"
+# Unknown or partially-created accounts get no tools. Existing legacy members
+# were explicitly backfilled before this default was changed; new invitations
+# always write a role before activating the OAuth allowlist.
+DEFAULT_ROLE = None
+ACCESS_LOCK = threading.RLock()
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
 def _load():
@@ -95,20 +104,32 @@ def get_role(email):
     if email in ADMINS:
         return "admin"
     role = _load().get("roles", {}).get(email)
-    return role if role in ROLES else DEFAULT_ROLE
+    # A stale or hand-edited record must never manufacture an admin. Admin
+    # identities are deliberately immutable and live only in ADMINS.
+    return role if role in ROLES and role != "admin" else None
 
 
 def set_role(email, role):
     email = (email or "").strip().lower()
+    if not EMAIL_RE.fullmatch(email):
+        raise ValueError("invalid email address")
     if role not in ROLES:
         raise ValueError("unknown role")
+    if role == "admin" and email not in ADMINS:
+        raise ValueError("admin access is fixed in code and cannot be granted here")
     if email in ADMINS and role != "admin":
         raise ValueError("admins keep the admin role — remove them from ADMINS in code first")
-    data = _load()
-    data.setdefault("roles", {})[email] = role
-    _save(data)
-    sync_nginx()
-    return role
+    with ACCESS_LOCK:
+        before = _load()
+        data = json.loads(json.dumps(before))
+        data.setdefault("roles", {})[email] = role
+        _save(data)
+        ok, note = sync_nginx()
+        if not ok:
+            _save(before)
+            sync_nginx()
+            raise RuntimeError(note)
+        return role
 
 
 def can_use(email, tool_key):
@@ -122,7 +143,82 @@ def can_use(email, tool_key):
 
 def home_for(email):
     role = get_role(email)
-    return ROLES.get(role, ROLES[DEFAULT_ROLE])["home"]
+    return ROLES[role]["home"] if role in ROLES else "/oauth2/sign_out"
+
+
+_OPS_PATH_TO_TOOL = {
+    "": "face",
+    "index.html": "face",
+    "command.html": "chat",
+    "order-form.html": "orders",
+    "supplier.html": "supplier",
+    "ledger.html": "ledger",
+    "reddit.html": "reddit",
+    "blog.html": "blog",
+    "blog-uploader.html": "blog",
+    "content-updater.html": "content",
+    "theme-editor.html": "theme",
+    "product-updater.html": "price",
+    "product-builder.html": "product",
+}
+
+
+def canonical_request_path(uri):
+    """Return the one canonical path nginx selected, or ``None`` if unsafe.
+
+    nginx chooses a location after decoding and normalizing the URI, while
+    ``$request_uri`` deliberately retains the raw bytes. The access subrequest
+    must therefore decode once and reject traversal itself; authorizing a raw
+    ``/drop/%2e%2e/ops/...`` prefix would otherwise let a Drop role fetch the
+    normalized privileged ``/ops`` file.
+    """
+    raw = str(uri or "").split("?", 1)[0]
+    if (not raw.startswith("/") or raw.startswith("//")
+            or "\x00" in raw or "\\" in raw
+            or re.search(r"%(?![0-9A-Fa-f]{2})", raw)):
+        return None
+    try:
+        decoded = urllib.parse.unquote(raw, errors="strict")
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if (not decoded.startswith("/") or decoded.startswith("//")
+            or "\x00" in decoded or "\\" in decoded
+            or any(ord(char) < 32 or ord(char) == 127 for char in decoded)):
+        return None
+    segments = decoded.split("/")
+    if any(segment in (".", "..") for segment in segments):
+        return None
+    canonical = posixpath.normpath(decoded)
+    return canonical if canonical.startswith("/") else None
+
+
+def can_open_path(email, uri):
+    """Authorize generated HTML before nginx serves it.
+
+    Unknown /ops pages fail closed to admins instead of relying on the page to
+    hide privileged controls after it has already reached the browser.
+    """
+    path = canonical_request_path(uri)
+    if not path:
+        return False
+    role = get_role(email)
+    if role == "admin":
+        return True
+    if not role:
+        return False
+    if path == "/drop" or path.startswith("/drop/"):
+        return can_use(email, "drop")
+    if path == "/intake" or path.startswith("/intake/"):
+        return role == "intake"
+    if path != "/ops" and not path.startswith("/ops/"):
+        return False
+    rel = path[4:].lstrip("/")
+    if rel == "tools.html":
+        return role in ("full", "content")
+    if rel.startswith("agent/"):
+        return can_use(email, "chat")
+    tool = _OPS_PATH_TO_TOOL.get(rel)
+    return bool(tool and can_use(email, tool))
 
 
 def allowlist_emails():
@@ -140,9 +236,14 @@ def everyone():
     roles = _load().get("roles", {})
     out = []
     for e in allowlist_emails():
-        r = "admin" if e in ADMINS else (roles.get(e) if roles.get(e) in ROLES else DEFAULT_ROLE)
-        out.append({"email": e, "role": r, "label": ROLES[r]["label"],
-                    "home": ROLES[r]["home"], "is_admin": e in ADMINS})
+        stored = roles.get(e)
+        r = ("admin" if e in ADMINS
+             else (stored if stored in ROLES and stored != "admin" else None))
+        spec = ROLES.get(r)
+        out.append({"email": e, "role": r,
+                    "label": spec["label"] if spec else "No access",
+                    "home": spec["home"] if spec else "/oauth2/sign_out",
+                    "is_admin": e in ADMINS})
     return out
 
 
@@ -150,10 +251,57 @@ def forget(email):
     """Drop a person's role record (call when they leave the allowlist) and
     refresh the gate so no stale restriction lingers."""
     email = (email or "").strip().lower()
-    data = _load()
-    if data.get("roles", {}).pop(email, None) is not None:
-        _save(data)
-    sync_nginx()
+    with ACCESS_LOCK:
+        data = _load()
+        if data.get("roles", {}).pop(email, None) is not None:
+            _save(data)
+        sync_nginx()
+
+
+def _write_allowlist(emails):
+    tmp = ALLOWLIST + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(emails) + "\n")
+    os.replace(tmp, ALLOWLIST)
+
+
+def invite(email, role):
+    """Add one person with their final role already in place.
+
+    Both files and the nginx gate are rolled back if validation or reload
+    fails, so there is never an allowlisted interval at DEFAULT_ROLE.
+    """
+    email = (email or "").strip().lower()
+    if not EMAIL_RE.fullmatch(email):
+        raise ValueError("invalid email address")
+    if role not in ROLES:
+        raise ValueError("unknown role")
+    if role == "admin" and email not in ADMINS:
+        raise ValueError("admin access is fixed in code and cannot be granted here")
+    if email in ADMINS and role != "admin":
+        raise ValueError("admins keep the admin role")
+    with ACCESS_LOCK:
+        before_roles = _load()
+        before_members = allowlist_emails()
+        data = json.loads(json.dumps(before_roles))
+        data.setdefault("roles", {})[email] = role
+        members = list(before_members)
+        if email not in members:
+            members.append(email)
+        try:
+            # Role first: even if oauth2-proxy notices the later allowlist
+            # replace immediately, the restrictive role already exists.
+            _save(data)
+            _write_allowlist(members)
+            ok, note = sync_nginx()
+            if not ok:
+                raise RuntimeError(note)
+        except Exception:
+            _save(before_roles)
+            _write_allowlist(before_members)
+            sync_nginx()
+            raise
+        return role, note, email in before_members
 
 
 # ------------------------------------------------------------------ nginx gate
@@ -167,7 +315,7 @@ def build_map():
              "map $labs_email $labs_restrict {",
              '    default "";']
     for p in everyone():
-        home = ROLES[p["role"]]["home"]
+        home = ROLES[p["role"]]["home"] if p["role"] in ROLES else "/oauth2/sign_out"
         if home != "/ops/":                      # confined to something narrower
             lines.append(f'    "{p["email"]}" "{home}";')
     lines.append("}")
@@ -184,25 +332,39 @@ def sync_nginx(reload=True):
                 return True, "unchanged"
     except OSError:
         pass
-    backup = None
-    if os.path.exists(NGINX_MAP):
-        backup = f"{NGINX_MAP}.bak.{int(time.time())}"
+    existed = os.path.exists(NGINX_MAP)
+    old = None
+    if existed:
         try:
-            with open(NGINX_MAP) as a, open(backup, "w") as b:
-                b.write(a.read())
+            with open(NGINX_MAP) as f:
+                old = f.read()
         except OSError:
-            backup = None
+            old = None
+
+    def restore():
+        if existed and old is not None:
+            with open(NGINX_MAP, "w") as f:
+                f.write(old)
+        elif not existed:
+            try:
+                os.remove(NGINX_MAP)
+            except FileNotFoundError:
+                pass
+
     with open(NGINX_MAP, "w") as f:
         f.write(new)
     test = subprocess.run(["nginx", "-t"], capture_output=True, text=True)
     if test.returncode != 0:
-        if backup and os.path.exists(backup):
-            os.replace(backup, NGINX_MAP)
-        else:
-            os.remove(NGINX_MAP)
+        restore()
         return False, "nginx config test failed — reverted: " + test.stderr[-200:]
     if reload:
-        subprocess.run(["systemctl", "reload", "nginx"], capture_output=True)
+        reloaded = subprocess.run(
+            ["systemctl", "reload", "nginx"], capture_output=True, text=True)
+        if reloaded.returncode != 0:
+            restore()
+            subprocess.run(["nginx", "-t"], capture_output=True, text=True)
+            subprocess.run(["systemctl", "reload", "nginx"], capture_output=True, text=True)
+            return False, "nginx reload failed — reverted: " + reloaded.stderr[-200:]
     return True, "reloaded"
 
 

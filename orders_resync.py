@@ -19,6 +19,7 @@ sys.path.insert(0, "/root/ops-dashboard")
 import customers as customers_mod
 import google_api
 import india_places
+import order_stages
 import order_taxonomy
 
 DB = "/root/ops-dashboard/data/hermes.db"
@@ -77,21 +78,45 @@ def _order_row(d):
             [d["drive_link"]] if d.get("drive_link") else [])
     except (ValueError, TypeError):
         links = [d["drive_link"]] if d.get("drive_link") else []
-    return [d["id"], (d.get("received_at") or "")[:16], d.get("source") or "",
-            d.get("customer_name") or "", d.get("customer_phone") or "",
-            d.get("customer_email") or "", d.get("address") or "", d.get("city") or "",
-            d.get("state") or "", d.get("pincode") or "", d.get("product") or "",
-            d.get("case_style") or "", d.get("dial_colour") or "", d.get("dial_style") or "",
-            d.get("case_colour") or "", d.get("movement") or "", d.get("watch_size") or "",
-            d.get("quantity") or 1, "" if d.get("price_inr") is None else d["price_inr"],
-            d.get("notes") or "", d.get("status") or "", "\n".join(links)]
+    qty = d.get("quantity") or 1
+    price = d.get("price_inr")
+    return google_api.row_for(google_api.SHEET_HEADERS, {
+        "Order #": d.get("order_no") or d["id"],
+        "Logged": (d.get("received_at") or "")[:16],
+        "Status": order_stages.label(d.get("status")),
+        "Source": d.get("source") or "",
+        "Customer": d.get("customer_name") or "",
+        "Phone": d.get("customer_phone") or "",
+        "Email": d.get("customer_email") or "",
+        "Address": d.get("address") or "",
+        "City": d.get("city") or "",
+        "State": d.get("state") or "",
+        "Pincode": d.get("pincode") or "",
+        "Product": d.get("product") or "",
+        "Case style": d.get("case_style") or "",
+        "Dial colour": d.get("dial_colour") or "",
+        "Dial style": d.get("dial_style") or "",
+        "Case colour": d.get("case_colour") or "",
+        "Movement": d.get("movement") or "",
+        "Size": d.get("watch_size") or "",
+        "Qty": qty,
+        "Price (INR)": "" if price is None else price,
+        "Line total (INR)": "" if price is None else price * qty,
+        "Notes": d.get("notes") or "",
+        "Photos": "\n".join(links),
+    })
 
 
-def _clear_data_rows(access, sid, tab):
+def _replace_tab(access, sid, tab, headers, rows):
     google_api._call(
         f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
-        + google_api.urllib.parse.quote(f"{tab}!A2:ZZ100000") + ":clear",
+        + google_api.urllib.parse.quote(f"{tab}!A1:ZZ100000") + ":clear",
         access, "POST", {})
+    google_api._call(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
+        + google_api.urllib.parse.quote(f"{tab}!A1") + "?valueInputOption=RAW",
+        access, "PUT", {
+            "values": [headers] + [google_api._clean(r) for r in rows]})
 
 
 def push_sheets():
@@ -99,10 +124,6 @@ def push_sheets():
     if not access:
         print("Google isn't connected — nothing pushed")
         return False
-    sid = google_api.ensure_order_sheet(access)
-    google_api.ensure_tab(access, sid, google_api.ORDERS_TAB, google_api.SHEET_HEADERS)
-    google_api.ensure_tab(access, sid, google_api.CUSTOMERS_TAB, customers_mod.HEADERS)
-
     conn = db()
     orders = [_order_row(dict(r)) for r in
               conn.execute("SELECT * FROM orders ORDER BY id").fetchall()]
@@ -111,14 +132,29 @@ def push_sheets():
              conn.execute("SELECT * FROM customers ORDER BY id").fetchall()]
     conn.close()
 
-    for tab, rows in ((google_api.ORDERS_TAB, orders), (google_api.CUSTOMERS_TAB, custs)):
-        _clear_data_rows(access, sid, tab)
-        if rows:
-            google_api._call(
-                f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
-                + google_api.urllib.parse.quote(f"{tab}!A2") + "?valueInputOption=USER_ENTERED",
-                access, "PUT", {"values": [google_api._clean(r) for r in rows]})
-        print(f"{tab}: {len(rows)} row(s)")
+    with google_api.sheet_mutation_lock():
+        try:
+            sid = google_api.ensure_order_sheet(access)
+            google_api.ensure_tab(
+                access, sid, google_api.ORDERS_TAB, google_api.SHEET_HEADERS,
+                rebuilding=True)
+            google_api.ensure_tab(
+                access, sid, google_api.CUSTOMERS_TAB, customers_mod.HEADERS,
+                rebuilding=True)
+            for tab, headers, rows in (
+                    (google_api.ORDERS_TAB, google_api.SHEET_HEADERS, orders),
+                    (google_api.CUSTOMERS_TAB, customers_mod.HEADERS, custs)):
+                _replace_tab(access, sid, tab, headers, rows)
+                print(f"{tab}: {len(rows)} row(s)")
+            # Headers now match the new layout, so these calls are reshape
+            # no-ops plus current filter/freeze/number formatting.
+            google_api.migrate_orders_tab(access)
+            google_api.migrate_customers_tab(access)
+            google_api.record_mirror_status(True)
+        except Exception as exc:
+            google_api.record_mirror_status(
+                False, str(exc), len(orders))
+            raise
     print(google_api.sheet_url())
     return True
 

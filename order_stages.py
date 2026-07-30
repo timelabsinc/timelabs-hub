@@ -11,8 +11,9 @@ The pipeline a build actually moves through:
 
     Pending  ->  Ordered to supplier  ->  Shipped from China  ->  Received  ->  Delivered
 
-Cancelled is a side state, not a step — it sits off the line, is reachable from
-any stage, and is excluded from the supplier queue entirely.
+Cancelled is a side state, not a step. It sits off the forward line; a
+cancelled row that had already been shared remains visible to staff in the
+supplier queue's Problems area so committed work is never silently hidden.
 """
 
 # (key, label) in pipeline order. The key is what's stored in orders.status and
@@ -68,6 +69,31 @@ def next_of(key):
         return None
     i = PIPELINE.index(key)
     return PIPELINE[i + 1] if i + 1 < len(PIPELINE) else None
+
+
+def is_committed(key, supplier_visible=False, shipment_id=None, bill_id=None):
+    """Whether a build has crossed a boundary that must not be undone casually."""
+    return (
+        bool(supplier_visible)
+        and key in PIPELINE
+        and PIPELINE.index(key) >= PIPELINE.index(LOCK_FROM)
+    ) or shipment_id is not None or bill_id is not None
+
+
+def supplier_can_advance(current, target):
+    """Suppliers move a build exactly one step forward and never cancel it."""
+    return next_of(current) == target
+
+
+def staff_transition_allowed(current, target, committed=False):
+    """Protect committed work from cancellation or a backwards stage move."""
+    if target not in STATUSES:
+        return False
+    if current == target or not committed:
+        return True
+    if target == "cancelled" or current not in PIPELINE or target not in PIPELINE:
+        return False
+    return PIPELINE.index(target) >= PIPELINE.index(current)
 
 
 def is_terminal(key):

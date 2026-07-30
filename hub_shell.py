@@ -358,6 +358,7 @@ HUB_STYLE = r"""
     border-radius:999px;padding:6px 12px;font-size:12.5px;}
   .src-name{font-weight:600;color:var(--ink);}
   .src-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);}
+  .src-dot.off{background:var(--muted);}
   .src-dot.fresh{background:var(--good);}
   .src-dot.stale{background:var(--bad);}
   .src-when{font-size:11.5px;color:var(--muted);}
@@ -830,7 +831,9 @@ def _appnav(active="face", drop_ready=False):
     out = []
     for key, attr, label, extra in items:
         cls = "appitem" + (" active" if key == active else "") + extra
-        out.append(f'<a class="{cls}" {attr}><span class="ic">{_ICONS[key]}</span><span>{label}</span></a>')
+        out.append(
+            f'<a class="{cls}" data-tool="{key}" {attr}>'
+            f'<span class="ic">{_ICONS[key]}</span><span>{label}</span></a>')
     return '<nav class="appnav" aria-label="Apps">' + "".join(out) + "</nav>"
 
 
@@ -865,9 +868,25 @@ def hub_footer(note="ops.timelabsco.in"):
 
 # Fills the header's who-chip and reveals admin-only bits. Include on every page.
 WHOAMI_JS = """
-  fetch('/ops/agent/api/whoami').then(function(r){return r.ok?r.json():null;}).then(function(i){
+  fetch('/ops/agent/api/access/me').then(function(r){return r.ok?r.json():null;}).then(function(i){
     if(i && i.email){ var w=document.getElementById('who'); if(w) w.textContent=i.email; }
     if(i && i.admin) document.body.classList.add('is-admin');
+    if(!i)return;
+    var allowed=i.tools==='*'?null:(i.tools||[]);
+    function can(k){
+      if(i.admin||allowed===null)return true;
+      if(k==='tools')return i.role==='full'||i.role==='content';
+      return allowed.indexOf(k)>=0;
+    }
+    document.querySelectorAll('.appitem[data-tool]').forEach(function(a){
+      if(!can(a.dataset.tool)){a.hidden=true;a.setAttribute('aria-hidden','true');a.tabIndex=-1;}
+    });
+    document.querySelectorAll('.tcard[data-tool]').forEach(function(c){
+      if(!can(c.dataset.tool)){c.hidden=true;c.setAttribute('aria-hidden','true');}
+    });
+    document.querySelectorAll('main section').forEach(function(s){
+      if(s.querySelector('.tcard')&&!s.querySelector('.tcard:not([hidden])'))s.hidden=true;
+    });
   }).catch(function(){});
 """
 
@@ -923,8 +942,10 @@ ASSIST_CSS = r"""
 .lx-input button{flex-shrink:0;width:38px;height:38px;border-radius:10px;border:none;background:var(--ink);
   color:var(--bg);cursor:pointer;display:flex;align-items:center;justify-content:center;}
 .lx-input button svg{width:17px;height:17px;fill:currentColor;}
-@media(max-width:560px){
-  .lx-fab{bottom:80px;right:14px;}
+@media(max-width:759px){
+  /* Command already has a permanent mobile-nav destination. Hiding the
+     duplicate floating trigger keeps it from covering form controls. */
+  .lx-fab{display:none;}
   .lx-panel{right:0;left:0;bottom:0;width:100%;max-width:100%;height:84vh;border-radius:16px 16px 0 0;}
 }
 """
@@ -933,6 +954,7 @@ ASSIST_JS = r"""
 (function(){
   if(window.__labsAssist)return; window.__labsAssist=true;
   function boot(){
+  if(document.querySelector('[data-no-assist]'))return;
   var API='/ops/agent/api', SID=null, busy=false;
   function el(h){var d=document.createElement('div');d.innerHTML=h;return d.firstElementChild;}
   function esc(s){var d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
@@ -961,13 +983,25 @@ ASSIST_JS = r"""
     if(path==='/ops/'||path==='/ops'||path.indexOf('/ops/index')===0)return {name:'Home',chips:["What's new today?",'How are sales this week?','What should I do next?']};
     return {name:'Labs OS',chips:["What's new today?",'What can you do?']};}
   var PC=ctx();
-  var fab=el('<button class="lx-fab" title="Ask Labs (Ctrl/Cmd K)" aria-label="Ask Labs"><svg viewBox="0 0 24 24"><path d="M9 3l1.3 3.5L14 7.8l-3.7 1.3L9 12.5 7.7 9.1 4 7.8l3.7-1.3z"/><path d="M17.5 13l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg></button>');
-  var panel=el('<div class="lx-panel" role="dialog" aria-label="Ask Labs"><div class="lx-head"><span class="lx-dot">L</span><b>Ask Labs</b><span class="lx-ctx"></span><a class="lx-full" href="/ops/command.html" title="Open Labs Command">&#10530;</a><button class="lx-x" aria-label="Close">&times;</button></div><div class="lx-thread" id="lxThread"></div><div class="lx-chips" id="lxChips"></div><form class="lx-input" id="lxForm"><textarea id="lxIn" rows="1" placeholder="Ask anything, or tell me what to do..."></textarea><button type="submit" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z"/></svg></button></form></div>');
+  var fab=el('<button class="lx-fab" title="Ask Labs (Ctrl/Cmd K)" aria-label="Ask Labs" aria-controls="labsAskPanel" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M9 3l1.3 3.5L14 7.8l-3.7 1.3L9 12.5 7.7 9.1 4 7.8l3.7-1.3z"/><path d="M17.5 13l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg></button>');
+  var panel=el('<div class="lx-panel" id="labsAskPanel" role="dialog" aria-modal="false" aria-label="Ask Labs" aria-hidden="true" inert><div class="lx-head"><span class="lx-dot">L</span><b>Ask Labs</b><span class="lx-ctx"></span><a class="lx-full" href="/ops/command.html" title="Open Labs Command">&#10530;</a><button class="lx-x" aria-label="Close">&times;</button></div><div class="lx-thread" id="lxThread"></div><div class="lx-chips" id="lxChips"></div><form class="lx-input" id="lxForm"><textarea id="lxIn" rows="1" placeholder="Ask anything, or tell me what to do..." aria-label="Message Hermes"></textarea><button type="submit" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z"/></svg></button></form></div>');
   document.body.appendChild(fab); document.body.appendChild(panel);
   panel.querySelector('.lx-ctx').textContent=PC.name!=='Labs OS'?('· '+PC.name):'';
-  var thread=panel.querySelector('#lxThread'),input=panel.querySelector('#lxIn'),chips=panel.querySelector('#lxChips'),greeted=false;
-  function open(){panel.classList.add('on');fab.classList.add('hide');if(!greeted)greet();setTimeout(function(){input.focus();},60);}
-  function close(){panel.classList.remove('on');fab.classList.remove('hide');}
+  var thread=panel.querySelector('#lxThread'),input=panel.querySelector('#lxIn'),chips=panel.querySelector('#lxChips'),greeted=false,lastFocus=null;
+  function open(){
+    lastFocus=document.activeElement;
+    panel.inert=false;panel.removeAttribute('inert');panel.setAttribute('aria-hidden','false');
+    panel.classList.add('on');fab.classList.add('hide');fab.inert=true;fab.setAttribute('inert','');
+    fab.setAttribute('aria-hidden','true');fab.setAttribute('aria-expanded','true');
+    if(!greeted)greet();setTimeout(function(){input.focus();},60);
+  }
+  function close(){
+    panel.classList.remove('on');panel.inert=true;panel.setAttribute('inert','');
+    panel.setAttribute('aria-hidden','true');fab.classList.remove('hide');fab.inert=false;fab.removeAttribute('inert');
+    fab.removeAttribute('aria-hidden');fab.setAttribute('aria-expanded','false');
+    var restore=lastFocus;lastFocus=null;
+    if(restore&&restore.focus)setTimeout(function(){restore.focus();},0);
+  }
   fab.onclick=open; panel.querySelector('.lx-x').onclick=close;
   document.addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&(e.key==='k'||e.key==='K')){e.preventDefault();panel.classList.contains('on')?close():open();}if(e.key==='Escape'&&panel.classList.contains('on'))close();});
   function greet(){greeted=true;addBot("Hi — I'm your Labs assistant. Ask about the business, or tell me what to do. I work across your tools.");renderChips();}
@@ -977,7 +1011,7 @@ ASSIST_JS = r"""
   function addWait(){var m=el('<div class="lx-msg b lx-wait"><span></span><span></span><span></span></div>');thread.appendChild(m);sc();return m;}
   function sc(){thread.scrollTop=thread.scrollHeight;}
   async function api(p,o){var r=await fetch(API+p,o);if(r.status===403){location.href='/oauth2/start?rd='+encodeURIComponent(location.pathname);throw new Error('auth');}return r.json().catch(function(){return {};});}
-  async function ensureSid(){if(SID)return SID;try{SID=localStorage.getItem('lx_sid')||null;}catch(e){}if(SID)return SID;var d=await api('/session/new',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});SID=d.id;try{localStorage.setItem('lx_sid',SID);}catch(e){}return SID;}
+  async function ensureSid(){if(SID)return SID;try{SID=localStorage.getItem('labs_command_session')||localStorage.getItem('tl_session')||null;}catch(e){}if(SID)return SID;var d=await api('/session/new',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});SID=d.id;try{localStorage.setItem('labs_command_session',SID);localStorage.setItem('tl_session',SID);}catch(e){}return SID;}
   async function send(){var t=input.value.trim();if(!t||busy)return;chips.innerHTML='';input.value='';input.style.height='auto';addUser(t);busy=true;var w=addWait();
     try{var sid=await ensureSid();var msg=(PC.name!=='Labs OS'?("(I'm on the "+PC.name+".) "):'')+t;
       var d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sid,message:msg})});
@@ -994,7 +1028,8 @@ ASSIST_JS = r"""
     w.remove();addBot("Still working on it — open [Labs Command](/ops/command.html) and it'll appear there when it lands.");
   }
   panel.querySelector('#lxForm').addEventListener('submit',function(e){e.preventDefault();send();});
-  input.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+  panel.querySelector('.lx-full').addEventListener('click',async function(e){e.preventDefault();var sid=await ensureSid();location.href='/ops/command.html?session='+encodeURIComponent(sid);});
+  input.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send();}});
   input.addEventListener('input',function(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,110)+'px';});
   }
   if(document.body)boot();else document.addEventListener('DOMContentLoaded',boot);
@@ -1171,7 +1206,7 @@ def page(*, generated_at, lookback_days, source_status_html, kpi_html, verdict_h
       <div class="head-controls">
         <div class="seg">{rb(7, "7d")}{rb(30, "30d")}{rb(90, "90d")}</div>
         <span class="refreshed num">refreshed {generated_at}</span>
-        <a class="btn primary" href="/ops/agent/">Ask the team</a>
+        <a class="btn primary" href="/ops/command.html">Open Command</a>
       </div>
     </div>
 

@@ -96,7 +96,9 @@ def build():
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark"><title>Ledger — Labs OS</title>
-<style>{HUB_STYLE}</style></head>
+<style>{HUB_STYLE}
+@media(max-width:350px){{.kpis{{grid-template-columns:1fr;}}}}
+</style></head>
 <body>
 <div class="wrap">
   {hub_header("ledger")}
@@ -140,7 +142,7 @@ def build():
       var lines = ok.map(function(r){{return '• ' + r.file + ' — ' + r.date + ' · ' + r.items + ' items · $' + r.total_usd;}}).join('\\n');
       if(confirm('Found ' + ok.length + ' new invoice(s):\\n\\n' + lines + '\\n\\nImport into Ledger? (Totals are best-effort — check against the invoice.)')){{
         b.textContent = 'Importing…';
-        var committed = await fetch('/ops/agent/api/ledger/import', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:'{{\"commit\":true}}'}});
+        var committed = await fetch('/ops/agent/api/ledger/import', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{commit:true,preview_token:d.preview_token}})}});
         var saved = await committed.json().catch(function(){{return {{}};}});
         if(!committed.ok) throw new Error(saved.error || 'Import failed');
         var failed = (saved.results||[]).filter(function(r){{return r.error;}});

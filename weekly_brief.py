@@ -131,8 +131,11 @@ def write_up(facts_text):
         "him to act, and if nothing does, say so in the first line rather than "
         "burying it. No greeting, no sign-off, no headings, no bullet symbols. "
         "Under 130 words. Never use an em dash or an en dash.")
-    r = subprocess.run(["hermes", "-z", prompt], capture_output=True,
-                       text=True, timeout=600)
+    # Orders and action-item text can originate outside the trusted admin UI.
+    # The brief is analysis-only, so isolate it from owner memory and terminal.
+    r = subprocess.run(
+        ["hermes", "--ignore-rules", "-t", "web", "-z", prompt],
+        capture_output=True, text=True, timeout=600)
     if r.returncode != 0 or not r.stdout.strip():
         return None
     sys.path.insert(0, BASE)

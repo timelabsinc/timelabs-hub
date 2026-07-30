@@ -11,6 +11,9 @@ a token minted before that predates the scope, so Sheets calls fail until the
 owner reconnects Drive once.
 """
 import json
+import contextlib
+import fcntl
+import functools
 import mimetypes
 import os
 import secrets
@@ -23,11 +26,14 @@ import urllib.request
 OAUTH_CLIENT = "/root/oauth-client.json"
 TOKEN_PATH = "/root/ops-dashboard/.gdrive-token.json"
 STATE_PATH = "/root/ops-dashboard/.orders-sheet.json"
+MIRROR_STATE_PATH = "/root/ops-dashboard/data/.sheet-mirror-state.json"
+GOOGLE_MUTATION_LOCK = "/root/ops-dashboard/data/.google-api-mutation.lock"
 
 ORDER_FOLDER_NAME = "Labs OS Order Photos"
 ORDER_SHEET_NAME = "Labs OS — Orders"
-# Column A is the orders.id — the join key the Shopify sync and any future
-# sheet→db read both rely on.
+# Column A is the stable, staff-facing orders.order_no used by every later
+# field update. Internal row ids can diverge after an intentionally removed
+# mistake/test row and must never be mirrored as the display order number.
 ORDERS_TAB = "Orders"
 CUSTOMERS_TAB = "Customers"
 # Status and Source sit right after Logged (not buried near the end) because
@@ -55,10 +61,45 @@ RECONNECT_HINT = ("Google isn't connected with permission to write Sheets. "
                   "Open Drop, tap the cloud, and reconnect Google.")
 
 _lock = threading.Lock()
+_mutation_thread_lock = threading.RLock()
+_mutation_local = threading.local()
 
 
 class GoogleError(Exception):
     pass
+
+
+@contextlib.contextmanager
+def sheet_mutation_lock():
+    """Serialize state + Sheet mutations across every Labs OS process."""
+    with _mutation_thread_lock:
+        depth = getattr(_mutation_local, "depth", 0)
+        if depth:
+            _mutation_local.depth = depth + 1
+            try:
+                yield
+            finally:
+                _mutation_local.depth -= 1
+            return
+        os.makedirs(os.path.dirname(GOOGLE_MUTATION_LOCK), mode=0o750,
+                    exist_ok=True)
+        handle = open(GOOGLE_MUTATION_LOCK, "a+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            _mutation_local.depth = 1
+            yield
+        finally:
+            _mutation_local.depth = 0
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
+
+
+def _sheet_locked(fn):
+    @functools.wraps(fn)
+    def locked(*args, **kwargs):
+        with sheet_mutation_lock():
+            return fn(*args, **kwargs)
+    return locked
 
 
 def _client():
@@ -75,65 +116,79 @@ def configured():
 
 
 def access_token():
-    """A valid access token, refreshed via the stored refresh token."""
-    try:
-        tok = json.load(open(TOKEN_PATH))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if tok.get("exp", 0) > time.time() + 60:
-        return tok.get("access_token")
-    cid, csec = _client()
-    if not cid or not tok.get("refresh_token"):
-        return None
-    body = urllib.parse.urlencode({
-        "client_id": cid, "client_secret": csec,
-        "refresh_token": tok["refresh_token"], "grant_type": "refresh_token",
-    }).encode()
-    req = urllib.request.Request("https://oauth2.googleapis.com/token", data=body)
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            fresh = json.loads(r.read())
-    except Exception as e:
-        print(f"[google] refresh failed: {e}", flush=True)
-        return None
-    tok["access_token"] = fresh["access_token"]
-    tok["exp"] = time.time() + fresh.get("expires_in", 3500)
-    with open(TOKEN_PATH, "w") as f:
-        json.dump(tok, f)
-    os.chmod(TOKEN_PATH, 0o600)
-    return tok["access_token"]
+    """A valid access token from the shared cross-process credential store."""
+    import google_token_store
+    return google_token_store.access_token("[google]")
 
 
 def connected():
     return access_token() is not None
 
 
-def _call(url, access, method="GET", payload=None):
+def _call(url, access, method="GET", payload=None, retry_server_errors=False):
     data = json.dumps(payload).encode() if payload is not None else None
     headers = {"Authorization": f"Bearer {access}"}
     if data:
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            raw = r.read()
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as e:
+    for attempt in range(4):
+        req = urllib.request.Request(
+            url, data=data, method=method, headers=headers)
         try:
-            msg = json.loads(e.read()).get("error", {}).get("message", "")
-        except Exception:
-            msg = ""
-        low = msg.lower()
-        if e.code in (401, 403) and ("insufficient" in low or "scope" in low
-                                     or "permission" in low):
-            raise GoogleError(RECONNECT_HINT)
-        if e.code == 403 and ("has not been used" in msg or "disabled" in msg):
-            raise GoogleError("The Google Sheets API isn't switched on for this "
-                              "project yet — enable it in the Google Cloud console, "
-                              "wait a couple of minutes, then try again.")
-        raise GoogleError(msg[:180] or f"Google API error {e.code}")
-    except Exception as e:
-        raise GoogleError(str(e))
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw = r.read()
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            try:
+                error = json.loads(e.read()).get("error", {})
+                msg = str(error.get("message") or "")
+                reasons = {
+                    str(item.get("reason") or "").lower()
+                    for item in error.get("errors") or []
+                    if isinstance(item, dict)
+                }
+            except Exception:
+                msg, reasons = "", set()
+            low = msg.lower()
+            quota_limited = (
+                e.code == 429
+                or (e.code == 403 and (
+                    "rate limit" in low
+                    or "quota" in low
+                    or bool(reasons & {
+                        "ratelimitexceeded", "userratelimitexceeded",
+                        "quotaexceeded",
+                    })
+                ))
+            )
+            # Quota rejections are not applied by Google, so every method is
+            # safe to retry. Server errors are retried only for naturally
+            # idempotent requests (or explicit-range batch writes whose retry
+            # overwrites the same cells); an ambiguous append must not create
+            # a duplicate row.
+            transient_server = (
+                500 <= e.code < 600
+                and (method in ("GET", "PUT", "DELETE")
+                     or retry_server_errors)
+            )
+            if attempt < 3 and (quota_limited or transient_server):
+                time.sleep(2 ** attempt)
+                continue
+            if e.code in (401, 403) and ("insufficient" in low or "scope" in low
+                                         or "permission" in low):
+                raise GoogleError(RECONNECT_HINT)
+            if e.code == 403 and ("has not been used" in msg or "disabled" in msg):
+                raise GoogleError("The Google Sheets API isn't switched on for this "
+                                  "project yet — enable it in the Google Cloud console, "
+                                  "wait a couple of minutes, then try again.")
+            raise GoogleError(msg[:180] or f"Google API error {e.code}")
+        except urllib.error.URLError as e:
+            if attempt < 3 and (
+                    method in ("GET", "PUT", "DELETE") or retry_server_errors):
+                time.sleep(2 ** attempt)
+                continue
+            raise GoogleError(str(e))
+        except Exception as e:
+            raise GoogleError(str(e))
 
 
 # ------------------------------------------------------------------ state file
@@ -150,6 +205,42 @@ def _save_state(st):
     os.chmod(STATE_PATH, 0o600)
 
 
+def record_mirror_status(ok, detail="", pending=0):
+    """Persist whether the DB-to-Sheets mirror needs an operator's attention.
+
+    The Shopify watermark consults the same outcome indirectly: it advances
+    only after a successful batch. This file lets healthcheck keep reporting a
+    quota/credential outage across process restarts instead of losing the only
+    warning in a timer journal.
+    """
+    old = {}
+    try:
+        with open(MIRROR_STATE_PATH) as source:
+            old = json.load(source)
+    except (OSError, json.JSONDecodeError):
+        pass
+    now = time.time()
+    state = {
+        "ok": bool(ok),
+        "updated": now,
+        "pending": max(0, int(pending or 0)),
+        "detail": str(detail or "")[:180],
+    }
+    if not ok:
+        state["failed_at"] = old.get("failed_at") or now
+    tmp = MIRROR_STATE_PATH + f".{os.getpid()}-{secrets.token_hex(4)}.tmp"
+    os.makedirs(os.path.dirname(MIRROR_STATE_PATH), mode=0o750, exist_ok=True)
+    with open(tmp, "x") as target:
+        json.dump(state, target)
+        target.flush()
+        os.fsync(target.fileno())
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, MIRROR_STATE_PATH)
+    if ok:
+        return old.get("ok") is False
+    return old.get("ok") is not False
+
+
 def sheet_url():
     sid = _state().get("sheet_id")
     return f"https://docs.google.com/spreadsheets/d/{sid}/edit" if sid else None
@@ -163,6 +254,7 @@ def _mkfolder(access, name):
     return out.get("id")
 
 
+@_sheet_locked
 def ensure_photo_folder(access):
     """Drive folder for order photos, created once and remembered."""
     with _lock:
@@ -230,6 +322,7 @@ def _clean(row):
     return [("" if c is None else str(c)) for c in row]
 
 
+@_sheet_locked
 def ensure_order_sheet(access):
     """The mirror spreadsheet, created once and remembered."""
     with _lock:
@@ -247,7 +340,8 @@ def ensure_order_sheet(access):
         return sid
 
 
-def ensure_tab(access, sid, title, headers):
+@_sheet_locked
+def ensure_tab(access, sid, title, headers, rebuilding=False):
     """Create the tab if missing and keep its header row current.
 
     Headers are only rewritten while the tab has no data rows — once orders are
@@ -273,11 +367,20 @@ def ensure_tab(access, sid, title, headers):
     current = existing[0] if existing else []
     if current != headers:
         has_data = bool(_values(access, sid, f"{title}!A2:A2"))
-        if not has_data or len(current) < len(headers):
+        if rebuilding:
+            # A full DB-authoritative rebuild will clear and replace A1 + all
+            # rows while holding the same cross-process lock.
+            pass
+        elif not has_data or (
+                current and current == headers[:len(current)]):
             _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
                   + urllib.parse.quote(f"{title}!A1") + "?valueInputOption=RAW",
                   access, "PUT", {"values": [headers]})
             _freeze_header(access, sid, props[title]["sheetId"])
+        else:
+            raise GoogleError(
+                f"{title} columns differ from Labs OS; run the controlled "
+                "DB-to-Sheets rebuild")
     return props[title]["sheetId"]
 
 
@@ -297,16 +400,43 @@ def _freeze_header(access, sid, tab_id):
         pass   # cosmetic only
 
 
+@_sheet_locked
 def append_order_row(access, row):
     sid = ensure_order_sheet(access)
     ensure_tab(access, sid, ORDERS_TAB, SHEET_HEADERS)
     _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
           + urllib.parse.quote(f"{ORDERS_TAB}!A:A") + ":append"
-          "?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS",
+          "?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
           access, "POST", {"values": [_clean(row)]})
     return sid
 
 
+@_sheet_locked
+def upsert_order_row(access, order_no, row):
+    """Update an order's complete mirror row or append it when absent."""
+    sid = ensure_order_sheet(access)
+    ensure_tab(access, sid, ORDERS_TAB, SHEET_HEADERS)
+    key = str(order_no)
+    col = _values(access, sid, f"{ORDERS_TAB}!A:A")
+    at = None
+    for i, existing in enumerate(col):
+        if existing and str(existing[0]).strip() == key:
+            at = i + 1
+            break
+    if at:
+        _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
+              + urllib.parse.quote(f"{ORDERS_TAB}!A{at}")
+              + "?valueInputOption=RAW",
+              access, "PUT", {"values": [_clean(row)]})
+    else:
+        _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
+              + urllib.parse.quote(f"{ORDERS_TAB}!A:A") + ":append"
+              "?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
+              access, "POST", {"values": [_clean(row)]})
+    return sid
+
+
+@_sheet_locked
 def upsert_customer_row(access, headers, row):
     """Update the customer's existing row (matched on the id in column A) or
     append a new one — so the Customers tab stays one row per person."""
@@ -322,16 +452,84 @@ def upsert_customer_row(access, headers, row):
     if at:
         _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
               + urllib.parse.quote(f"{CUSTOMERS_TAB}!A{at}")
-              + "?valueInputOption=USER_ENTERED",
+              + "?valueInputOption=RAW",
               access, "PUT", {"values": [_clean(row)]})
     else:
         _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
               + urllib.parse.quote(f"{CUSTOMERS_TAB}!A:A") + ":append"
-              "?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS",
+              "?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
               access, "POST", {"values": [_clean(row)]})
     return sid
 
 
+@_sheet_locked
+def batch_upsert_mirror(access, order_rows, customer_headers=None,
+                        customer_rows=None):
+    """Upsert many complete order/customer rows with bounded API calls.
+
+    ``order_rows`` is ``[(order_no, row), ...]``. Customer ids come from
+    column A of each customer row. Each key column is read once, then every
+    destination is an explicit row in one idempotent values.batchUpdate.
+    This avoids both per-order read quota exhaustion and ambiguous append
+    retries that could duplicate data.
+    """
+    order_rows = list(order_rows or [])
+    customer_rows = list(customer_rows or [])
+    if not order_rows and not customer_rows:
+        return {"orders": 0, "customers": 0}
+
+    sid = ensure_order_sheet(access)
+    if order_rows:
+        ensure_tab(access, sid, ORDERS_TAB, SHEET_HEADERS)
+    if customer_rows:
+        if not customer_headers:
+            raise GoogleError("Customer headers are required for mirror updates")
+        ensure_tab(access, sid, CUSTOMERS_TAB, customer_headers)
+
+    data = []
+
+    def add_tab_rows(tab, rows):
+        existing = _values(access, sid, f"{tab}!A:A")
+        positions = {}
+        for index, cells in enumerate(existing, 1):
+            if cells and str(cells[0]).strip():
+                positions.setdefault(str(cells[0]).strip(), index)
+        pending = {}
+        for key, row in rows:
+            key = str(key or "").strip()
+            if not key:
+                raise GoogleError(f"{tab} mirror row has no stable key")
+            pending[key] = row
+        next_row = max(2, len(existing) + 1)
+        for key, row in pending.items():
+            at = positions.get(key)
+            if at is None:
+                at = next_row
+                next_row += 1
+                positions[key] = at
+            data.append({
+                "range": f"{tab}!A{at}",
+                "majorDimension": "ROWS",
+                "values": [_clean(row)],
+            })
+        return len(pending)
+
+    order_count = add_tab_rows(ORDERS_TAB, order_rows) if order_rows else 0
+    customer_pairs = [
+        (row[0] if row else "", row) for row in customer_rows
+    ]
+    customer_count = (
+        add_tab_rows(CUSTOMERS_TAB, customer_pairs) if customer_pairs else 0
+    )
+    if data:
+        _call(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values:batchUpdate",
+            access, "POST", {"valueInputOption": "RAW", "data": data},
+            retry_server_errors=True)
+    return {"orders": order_count, "customers": customer_count}
+
+
+@_sheet_locked
 def update_order_field(access, order_no, header, value):
     """Patch one column of one order's row in the Orders tab, matched on the
     Order # in column A. Best-effort: an order that never reached the sheet
@@ -353,7 +551,7 @@ def update_order_field(access, order_no, header, value):
     a1col = chr(ord("A") + SHEET_HEADERS.index(header))   # <=26 cols, fine
     _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
           + urllib.parse.quote(f"{ORDERS_TAB}!{a1col}{at}")
-          + "?valueInputOption=USER_ENTERED",
+          + "?valueInputOption=RAW",
           access, "PUT", {"values": [[value]]})
     return True
 
@@ -448,11 +646,12 @@ def _reshape_tab(access, sid, title, new_headers, id_aliases=None):
     _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
           + urllib.parse.quote(f"{title}!A1:ZZ100000") + ":clear", access, "POST", {})
     _call(f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/"
-          + urllib.parse.quote(f"{title}!A1") + "?valueInputOption=USER_ENTERED",
+          + urllib.parse.quote(f"{title}!A1") + "?valueInputOption=RAW",
           access, "PUT", {"values": [new_headers] + remapped})
     return len(remapped)
 
 
+@_sheet_locked
 def migrate_orders_tab(access):
     """Reorder/reformat the Orders tab into the current SHEET_HEADERS. Safe
     to run any time, including on a tab that predates this shipping."""
@@ -464,6 +663,7 @@ def migrate_orders_tab(access):
     return {"rows": n}
 
 
+@_sheet_locked
 def migrate_customers_tab(access):
     """Reorder/reformat the Customers tab into customers.HEADERS."""
     import customers as customers_mod

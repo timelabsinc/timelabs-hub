@@ -7,6 +7,9 @@ Served by the existing auth-gated /ops location — no nginx change.
 """
 import html
 import os
+import shutil
+import sqlite3
+import subprocess
 import sys
 import time
 
@@ -64,25 +67,74 @@ TOOLS = [
 ]
 
 
+def _service_active(unit):
+    try:
+        return subprocess.run(
+            ["systemctl", "is-active", unit], capture_output=True, text=True,
+            timeout=5).stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def _db_ok(path):
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=3)
+        ok = conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        conn.close()
+        return ok
+    except sqlite3.Error:
+        return False
+
+
+def _availability(key, declared):
+    if declared == "admin":
+        return "admin"
+    if key in {"theme", "price", "product", "content", "post"}:
+        try:
+            import shopify_api
+            return "live" if shopify_api.configured() else "setup"
+        except Exception:
+            return "degraded"
+    if key == "chat":
+        return ("live" if shutil.which("hermes") and _service_active("ops-agent-chat")
+                else "degraded")
+    if key == "drop":
+        return "live" if _service_active("drop") else "degraded"
+    if key == "ledger":
+        return ("live" if _db_ok("/root/ops-dashboard/data/suppliers.db")
+                else "degraded")
+    if key == "orders":
+        return ("live" if _db_ok("/root/ops-dashboard/data/hermes.db")
+                else "degraded")
+    if key == "reddit":
+        return "live" if _service_active("ops-agent-chat") else "degraded"
+    return declared
+
+
 def build():
     groups = ""
     for section, tools in TOOLS:
         cards = ""
         for key, name, desc, href, status in tools:
+            status = _availability(key, status)
+            permission = "blog" if key == "post" else key
             badge = {
                 "live": '<span class="t-badge live">Ready</span>',
                 "soon": '<span class="t-badge soon">In progress</span>',
                 "admin": '<span class="t-badge admin">Admin</span>',
                 "locked": '<span class="t-badge locked">Needs access</span>',
+                "setup": '<span class="t-badge setup">Needs setup</span>',
+                "degraded": '<span class="t-badge degraded">Degraded</span>',
             }[status]
             icon = f'<svg viewBox="0 0 24 24" class="t-ic">{IC[key]}</svg>'
             inner = (f'<div class="t-top">{icon}{badge}</div>'
                      f'<div class="t-nm">{name}</div><div class="t-d">{desc}</div>')
             if href:
                 cls = "tcard admin-only" if status == "admin" else "tcard"
-                cards += f'<a class="{cls}" href="{href}">{inner}</a>'
+                cards += (
+                    f'<a class="{cls}" data-tool="{permission}" href="{href}">{inner}</a>')
             else:
-                cards += f'<div class="tcard soon">{inner}</div>'
+                cards += f'<div class="tcard soon" data-tool="{permission}">{inner}</div>'
         groups += f'<section><h2>{section}</h2><div class="tgrid">{cards}</div></section>'
 
     generated = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
@@ -107,6 +159,8 @@ def build():
   .t-badge.soon{{color:var(--accent);background:var(--accent-bg);}}
   .t-badge.admin{{color:var(--muted);background:var(--card-2);}}
   .t-badge.locked{{color:var(--accent);background:var(--accent-bg);}}
+  .t-badge.setup{{color:var(--accent);background:var(--accent-bg);}}
+  .t-badge.degraded{{color:var(--crit);background:var(--crit-bg);}}
   .tsearch{{width:100%;max-width:420px;font-size:14px;border:1px solid var(--border);border-radius:var(--r-s);
     background:var(--card);color:var(--ink);padding:10px 13px;margin-bottom:6px;}}
   .tsearch:focus{{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}}
@@ -135,17 +189,18 @@ def build():
   q.addEventListener('input', function(){{
     var t=q.value.trim().toLowerCase(), any=false;
     cards.forEach(function(c){{
+      if(c.hidden)return;
       var hit=!t||c.textContent.toLowerCase().indexOf(t)>=0;
       c.style.display=hit?'':'none'; if(hit) any=true;
     }});
     secs.forEach(function(s){{
-      var vis=s.querySelectorAll('.tcard:not([style*="none"])').length;
+      var vis=s.querySelectorAll('.tcard:not([hidden]):not([style*="none"])').length;
       s.style.display=vis?'':'none';
     }});
     if(empty) empty.hidden=any;
   }});
   q.addEventListener('keydown', function(e){{
-    if(e.key==='Enter'){{ var first=cards.filter(function(c){{return c.style.display!=='none'&&c.tagName==='A';}})[0]; if(first) location.href=first.getAttribute('href'); }}
+    if(e.key==='Enter'){{ var first=cards.filter(function(c){{return !c.hidden&&c.style.display!=='none'&&c.tagName==='A';}})[0]; if(first) location.href=first.getAttribute('href'); }}
   }});
 }})();
 {WHOAMI_JS}</script>

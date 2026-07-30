@@ -66,8 +66,9 @@ def build():
       <p class="page-sub">Who can sign in, and what each person may do. Inviting lets someone in; their role decides which tools they get — and a restricted person is bounced off the pages they don't own, not just hidden from the menu.</p>
     </div>
     <div class="invite">
-      <input id="inv-email" type="email" inputmode="email" autocomplete="off" placeholder="teammate@gmail.com">
-      <select id="inv-role"></select>
+      <input id="inv-email" type="email" inputmode="email" autocomplete="off"
+        placeholder="teammate@gmail.com" aria-label="Email address">
+      <select id="inv-role" aria-label="Role"></select>
       <button id="inv-add">Invite</button>
     </div>
     <div class="ac-card" id="list"><div class="empty2">Loading…</div></div>
@@ -99,9 +100,9 @@ async function load(){{
     $('inv-role').innerHTML=ROLES.map(function(r){{return '<option value="'+esc(r.key)+'">'+esc(r.label)+'</option>';}}).join('');
     if(!d.people.length){{ $('list').innerHTML='<div class="empty2">Nobody invited yet.</div>'; }}
     else $('list').innerHTML=d.people.map(function(p){{
-      var btns=(d.roles||[]).map(function(r){{
+      var btns=(d.roles||[]).filter(function(r){{return r.key!=='admin'||p.is_admin;}}).map(function(r){{
         var on=r.key===p.role?' on':'';
-        var dis=(p.is_admin&&r.key!=='admin')?' disabled title="Admins are set in code"':'';
+        var dis=p.is_admin?' disabled title="Admins are set in code"':'';
         return '<button class="'+on.trim()+'" data-e="'+esc(p.email)+'" data-r="'+esc(r.key)+'"'+dis+'>'+esc(r.label)+'</button>';
       }}).join('');
       var rm=p.is_admin?'<button class="ac-rm" disabled title="Admins can\\'t be removed here">Remove</button>'
@@ -127,8 +128,8 @@ async function invite(){{
   if(!email||email.indexOf('@')<0){{ toast('Enter an email address'); return; }}
   var btn=$('inv-add'); btn.disabled=true;
   try{{
-    await api('/allowlist/add',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{email:email}})}});
-    if(role) await api('/access/set',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{email:email,role:role}})}});
+    await api('/access/invite',{{method:'POST',headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{email:email,role:role}})}});
     toast(email+' invited as '+role);
     $('inv-email').value='';
     load();

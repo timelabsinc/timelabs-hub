@@ -8,6 +8,13 @@ User=root
 ExecStart=/root/drop-venv/bin/python /root/ops-dashboard/drop_server.py
 Restart=on-failure
 RestartSec=3
+# Normal Drop work stays well below 1 GiB. Throttle unexpected growth before
+# it pressures this 8 GiB host, and contain a malformed image/tool runaway at
+# 2 GiB. An OOM is a service failure, so Restart=on-failure brings Drop back.
+MemoryHigh=1G
+MemoryMax=2G
+MemorySwapMax=512M
+OOMPolicy=stop
 
 [Install]
 WantedBy=multi-user.target

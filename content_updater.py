@@ -144,7 +144,12 @@ $('tabs').querySelectorAll('button').forEach(function(b){{b.onclick=function(){{
 }};}});
 
 /* ---------------- products ---------------- */
-var P={{q:'',filter:'all',cursor:null,hasMore:false,sel:{{}},op:'append_block'}};
+var P={{q:'',filter:'all',cursor:null,hasMore:false,sel:{{}},op:'append_block',reviewed:null}};
+function invalidateReview(){{
+  P.reviewed=null;
+  if($('pvout'))$('pvout').innerHTML='';
+  if($('apply')){{$('apply').disabled=true;$('apply').textContent='Apply';}}
+}}
 function productsShell(){{
   $('tab-products').innerHTML=
     '<div class="cu-controls">'+
@@ -166,18 +171,20 @@ function productsShell(){{
       '<div class="preview" id="pvout"></div>'+
     '</div>';
   var t=null;
-  $('pq').addEventListener('input',function(){{clearTimeout(t);t=setTimeout(function(){{P.q=$('pq').value.trim();loadProducts(true);}},350);}});
+  $('pq').addEventListener('input',function(){{clearTimeout(t);t=setTimeout(function(){{
+    P.q=$('pq').value.trim();P.sel={{}};selCount();invalidateReview();loadProducts(true);
+  }},350);}});
   $('pfilter').querySelectorAll('button').forEach(function(b){{b.onclick=function(){{
     $('pfilter').querySelectorAll('button').forEach(function(x){{x.classList.remove('active');}});
-    b.classList.add('active');P.filter=b.dataset.f;loadProducts(true);
+    b.classList.add('active');P.filter=b.dataset.f;P.sel={{}};selCount();invalidateReview();loadProducts(true);
   }};}});
   $('pmore').onclick=function(){{loadProducts(false);}};
   $('selall').onclick=function(){{document.querySelectorAll('#plist .pitem').forEach(function(el){{
-    P.sel[el.dataset.id]=el.dataset.title;el.querySelector('input').checked=true;}});selCount();}};
-  $('selnone').onclick=function(){{P.sel={{}};document.querySelectorAll('#plist input').forEach(function(i){{i.checked=false;}});selCount();}};
+    P.sel[el.dataset.id]=el.dataset.title;el.querySelector('input').checked=true;}});selCount();invalidateReview();}};
+  $('selnone').onclick=function(){{P.sel={{}};document.querySelectorAll('#plist input').forEach(function(i){{i.checked=false;}});selCount();invalidateReview();}};
   $('opseg').querySelectorAll('button').forEach(function(b){{b.onclick=function(){{
     $('opseg').querySelectorAll('button').forEach(function(x){{x.classList.remove('active');}});
-    b.classList.add('active');P.op=b.dataset.o;drawOp();$('pvout').innerHTML='';$('apply').disabled=true;
+    b.classList.add('active');P.op=b.dataset.o;drawOp();invalidateReview();
   }};}});
   $('preview').onclick=function(){{runBulk(true);}};
   $('apply').onclick=function(){{runBulk(false);}};
@@ -198,7 +205,7 @@ async function loadProducts(reset){{
       el.innerHTML='<input type="checkbox"'+(P.sel[p.id]?' checked':'')+'>'+img+
         '<div style="min-width:0"><b>'+esc(p.title)+'</b><br><small>'+esc(p.status.toLowerCase())+(p.type?' · '+esc(p.type):'')+'</small></div>';
       var cb=el.querySelector('input');
-      function toggle(v){{if(v){{P.sel[p.id]=p.title;}}else{{delete P.sel[p.id];}}cb.checked=v;selCount();}}
+      function toggle(v){{if(v){{P.sel[p.id]=p.title;}}else{{delete P.sel[p.id];}}cb.checked=v;selCount();invalidateReview();}}
       el.onclick=function(e){{if(e.target!==cb)toggle(!cb.checked);}};
       cb.onclick=function(e){{e.stopPropagation();toggle(cb.checked);}};
       $('plist').appendChild(el);
@@ -221,11 +228,12 @@ function drawOp(){{
       '<div class="hint">Re-running the same-named block updates it everywhere instead of adding a duplicate.</div>';
     var pc=$('presets');
     PRESETS.forEach(function(pr){{var c=document.createElement('button');c.className='chip';c.textContent=pr.name;
-      c.onclick=function(){{$('o-name').value=pr.name;$('o-block').value=pr.html;}};pc.appendChild(c);}});
+      c.onclick=function(){{$('o-name').value=pr.name;$('o-block').value=pr.html;invalidateReview();}};pc.appendChild(c);}});
     $('o-pos').querySelectorAll('button').forEach(function(b){{b.onclick=function(){{
       $('o-pos').querySelectorAll('button').forEach(function(x){{x.classList.remove('active');}});
-      b.classList.add('active');P.op=b.dataset.p;}};}});
+      b.classList.add('active');P.op=b.dataset.p;invalidateReview();}};}});
   }}
+  $('opbody').addEventListener('input',invalidateReview);
 }}
 function opPayload(){{
   var body={{ids:Object.keys(P.sel),op:P.op}};
@@ -235,9 +243,13 @@ function opPayload(){{
   return body;
 }}
 async function runBulk(dry){{
-  var ids=Object.keys(P.sel);
+  var ids=dry?Object.keys(P.sel):((P.reviewed&&P.reviewed.body.ids)||[]);
   if(!ids.length){{toast('Select at least one product');return;}}
-  var body=opPayload();body.dry_run=dry;
+  if(!dry&&!P.reviewed){{toast('Preview the exact change before applying it');return;}}
+  var body=dry?opPayload():JSON.parse(JSON.stringify(P.reviewed.body));
+  var reviewedBody=dry?JSON.parse(JSON.stringify(body)):null;
+  body.dry_run=dry;
+  if(!dry)body.preview_token=P.reviewed.token;
   var btn=dry?$('preview'):$('apply');var lbl=btn.textContent;btn.disabled=true;btn.textContent=dry?'Previewing…':'Applying…';
   try{{
     if(!dry&&!confirm('Apply this change to '+ids.length+' product'+(ids.length>1?'s':'')+'? This edits live descriptions.'))
@@ -251,15 +263,21 @@ async function runBulk(dry){{
         '<div class="diff"><div><div class="lbl">Before</div><div class="box before">'+esc(s.before)+'</div></div>'+
         '<div><div class="lbl">After</div><div class="box">'+esc(s.after)+'</div></div></div>';}}
       $('pvout').innerHTML=h;
+      P.reviewed={{
+        body:reviewedBody,
+        token:d.preview_token,
+        changed:d.changed
+      }};
       $('apply').disabled=d.changed===0;
       $('apply').textContent='Apply to '+d.changed+' product'+(d.changed===1?'':'s');
     }}else{{
       var errs=d.results.filter(function(r){{return r.error;}});
       toast('Updated '+d.changed+' product'+(d.changed===1?'':'s')+(errs.length?' · '+errs.length+' failed':''));
-      $('pvout').innerHTML='';$('apply').disabled=true;$('apply').textContent='Apply';
+      invalidateReview();
     }}
-  }}catch(e){{toast(e.message);}}
-  btn.disabled=false;if(dry)btn.textContent=lbl;
+  }}catch(e){{toast(e.message);if(!dry)invalidateReview();}}
+  if(dry){{btn.disabled=false;btn.textContent=lbl;}}
+  else if(P.reviewed)btn.disabled=false;
 }}
 
 /* ---------------- pages ---------------- */

@@ -21,7 +21,7 @@ import urllib.error
 import urllib.parse
 
 ENV_PATH = "/root/ops-dashboard/.env"
-API_VERSION = "2024-10"
+API_VERSION = "2026-07"
 
 
 def _env():

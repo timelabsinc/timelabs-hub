@@ -11,8 +11,13 @@ Continuity is transcript-based: the last 8 exchanges are prepended to each
 prompt, so the thread is shared and persistent across devices and people.
 """
 import html as html_mod
+import glob
+import hashlib
+import hmac
 import http.server
+import http.cookies
 import json
+import math
 import os
 import re
 import secrets
@@ -22,7 +27,12 @@ import subprocess
 import threading
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
+from markdown_render import md_to_html
+from order_metrics import SALE_ORDER_PREDICATE, SALE_ORDER_PREDICATE_O
+from shopify_oauth import canonical_hmac_message
+from shopify_scopes import REQUESTED_SCOPE_STRING, normalized_scopes
 
 HOST, PORT = "127.0.0.1", 8901
 DB = "/root/ops-dashboard/data/hermes.db"
@@ -34,6 +44,10 @@ UPLOAD_DIR = "/root/ops-dashboard/data/uploads"
 # nginx can't reach it, so the only way to a photo is through a role-checked
 # endpoint here, never a guessable static URL.
 ORDER_PHOTOS = "/root/ops-dashboard/data/order-photos"
+# Reddit draft photos outlive the 24-hour upload staging area. They are served
+# only through the role-checked endpoint below and backed up with the databases.
+REDDIT_MEDIA = "/root/ops-dashboard/data/reddit-media"
+REDDIT_MEDIA_TRASH = "/root/ops-dashboard/data/.reddit-media-trash"
 # Labs Drop's storage root — a separate service (drop_server.py, :8903) owns
 # this, but it's local disk on the same box, so copying a picked photo into
 # UPLOAD_DIR is a plain file copy rather than a round trip through Drop's own
@@ -41,13 +55,20 @@ ORDER_PHOTOS = "/root/ops-dashboard/data/order-photos"
 # since the two processes don't share code.
 DROP_ROOT = "/srv/timelabs-drop"
 THEME_BACKUPS = "/root/ops-dashboard/theme-backups"
-FS_ROOT = "/root"   # System-files browser is confined to the Hermes home
+FS_ROOT = "/root/ops-dashboard"  # browser shows safe project source/docs only
+FS_DENY_DIRS = {
+    "data", "venv", "theme-backups", "backups", "node_modules", "__pycache__",
+}
 # Chat-photo cap. Modern phone photos routinely exceed the old 11 MB ceiling;
 # 32 MB stays comfortably under nginx's 50m on this vhost. Large videos go
 # through Drop (copyparty), not this endpoint. Formats stay jpg/png/webp — the
 # only ones tesseract OCR and browser <img> render without a HEIC decoder.
 MAX_UPLOAD_MB = 32
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+UPLOAD_TTL = 24 * 60 * 60
+UPLOAD_USER_LIMIT = 256 * 1024 * 1024
+UPLOAD_MIN_FREE = 20 * 1024 * 1024 * 1024
+UPLOAD_LOCK = threading.Lock()
 LOCK = threading.Lock()
 # Serializes theme apply/revert's read-modify-write specifically — LOCK above
 # guards the shared Hermes agent process and would be too broad to reuse here
@@ -55,6 +76,22 @@ LOCK = threading.Lock()
 # reason). Without this, two near-simultaneous applies both read the same
 # pre-change settings and the later PUT silently wins, dropping the other.
 THEME_LOCK = threading.Lock()
+# A bulk Shopify preview is a frozen, short-lived proposal. The apply request
+# must present its token and the exact same operation; product descriptions are
+# rechecked before the first write so the reviewed diff cannot drift.
+CONTENT_PREVIEW_LOCK = threading.Lock()
+CONTENT_PREVIEWS = {}
+CONTENT_PREVIEW_TTL = 15 * 60
+LEDGER_PREVIEW_LOCK = threading.Lock()
+LEDGER_PREVIEWS = {}
+LEDGER_PREVIEW_TTL = 15 * 60
+# Content-role AI pipelines are multi-pass and billable. One shared slot stops
+# double-clicks or a compromised account from spawning an unbounded process
+# fan-out on the production VPS.
+REDDIT_JOB_SLOT = threading.BoundedSemaphore(1)
+REDDIT_POST_WORKER_TIMEOUT = 4300
+REDDIT_REPLY_WORKER_TIMEOUT = 2900
+INVOICE_INBOX = "/srv/timelabs-drop/Supplier Invoices"
 # Fast requests answer synchronously within the soft wait; anything longer keeps
 # running in a background thread (up to the hard cap) and lands in the thread
 # via history polling — long tasks are no longer killed at the HTTP boundary.
@@ -77,18 +114,11 @@ SHOPIFY_OAUTH_CREDS = "/root/ops-dashboard/.shopify-oauth.json"
 # in Shopify admin, or the authorize screen errors on the missing scope. Widened
 # 2026-07-21 after the owner enabled the fuller set on the app; reconnect to mint
 # a token carrying these. If Shopify flags one as not-allowed, trim it here.
-SHOPIFY_SCOPES = (
-    "read_products,write_products,"
-    "read_content,write_content,"
-    "read_online_store_pages,write_online_store_pages,"
-    "read_online_store_navigation,write_online_store_navigation,"
-    "read_themes,write_themes,"
-    "read_orders,"
-    "read_inventory,write_inventory,"
-    "read_customers"
-)
+SHOPIFY_SCOPES = REQUESTED_SCOPE_STRING
 SHOPIFY_REDIRECT = "https://ops.timelabsco.in/ops/agent/api/shopify/callback"
-_shopify_states = set()
+SHOPIFY_STATE_TTL = 10 * 60
+_shopify_states = {}
+_shopify_states_lock = threading.Lock()
 
 
 def write_env(updates):
@@ -139,7 +169,279 @@ def hub_event(kind, detail, actor="?", app="key"):
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(ORDER_PHOTOS, exist_ok=True)
+os.makedirs(REDDIT_MEDIA, exist_ok=True)
 os.makedirs(THEME_BACKUPS, exist_ok=True)
+
+
+def _upload_meta_path(path):
+    return path + ".labs-upload.json"
+
+
+def _write_upload_meta(path, owner, size):
+    meta_path = _upload_meta_path(path)
+    tmp = meta_path + f".{os.getpid()}-{threading.get_ident()}.tmp"
+    with open(tmp, "x") as out:
+        json.dump({
+            "owner": (owner or "").strip().lower(),
+            "size": int(size),
+            "created": int(time.time()),
+            "expires": int(time.time()) + UPLOAD_TTL,
+        }, out)
+        out.flush()
+        os.fsync(out.fileno())
+    os.replace(tmp, meta_path)
+    os.chmod(meta_path, 0o600)
+
+
+def _cleanup_uploads_locked(now=None):
+    """Expire temporary user uploads and one-off generated artifacts."""
+    now = now or time.time()
+    try:
+        names = os.listdir(UPLOAD_DIR)
+    except OSError:
+        return
+    tracked = set()
+    for name in names:
+        if not name.endswith(".labs-upload.json"):
+            continue
+        meta_path = os.path.join(UPLOAD_DIR, name)
+        data_path = meta_path[:-len(".labs-upload.json")]
+        tracked.add(os.path.basename(data_path))
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            expired = float(meta.get("expires") or 0) <= now
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            expired = True
+        if expired:
+            for path in (data_path, meta_path):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+    # Old versions created untracked temporary images/PDFs. They are not
+    # claimable by the new owner-bound flow and can be reclaimed after a day.
+    for name in names:
+        if (name.endswith(".labs-upload.json") or name in tracked
+                or name.startswith(".")):
+            continue
+        path = os.path.join(UPLOAD_DIR, name)
+        try:
+            if os.path.isfile(path) and now - os.path.getmtime(path) > UPLOAD_TTL:
+                os.remove(path)
+        except OSError:
+            pass
+
+
+def _upload_usage_locked(owner):
+    total = 0
+    for name in os.listdir(UPLOAD_DIR):
+        if not name.endswith(".labs-upload.json"):
+            continue
+        try:
+            with open(os.path.join(UPLOAD_DIR, name)) as f:
+                meta = json.load(f)
+            if (meta.get("owner") or "").strip().lower() == owner:
+                total += max(0, int(meta.get("size") or 0))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+    return total
+
+
+def _store_user_upload(owner, ext, data=None, source=None):
+    """Admit and atomically store one owner-bound temporary image."""
+    owner = (owner or "").strip().lower()
+    if not owner:
+        raise ValueError("an authenticated account is required for uploads")
+    size = len(data) if data is not None else os.path.getsize(source)
+    if size <= 0 or size > MAX_UPLOAD_BYTES:
+        raise ValueError(f"image must be under {MAX_UPLOAD_MB} MB")
+    with UPLOAD_LOCK:
+        _cleanup_uploads_locked()
+        if _upload_usage_locked(owner) + size > UPLOAD_USER_LIMIT:
+            raise ValueError("temporary upload limit reached; finish or wait for old uploads")
+        if shutil.disk_usage(UPLOAD_DIR).free - size < UPLOAD_MIN_FREE:
+            raise ValueError("upload refused to protect the system disk reserve")
+        path = os.path.join(UPLOAD_DIR, secrets.token_hex(16) + ext)
+        try:
+            with open(path, "xb") as out:
+                if data is not None:
+                    out.write(data)
+                else:
+                    with open(source, "rb") as src:
+                        shutil.copyfileobj(src, out)
+                out.flush()
+                os.fsync(out.fileno())
+            _write_upload_meta(path, owner, size)
+            return path
+        except Exception:
+            for candidate in (path, _upload_meta_path(path)):
+                try:
+                    os.remove(candidate)
+                except OSError:
+                    pass
+            raise
+
+
+def _upload_owned(path, owner):
+    """Resolve an active upload owned by this authenticated account."""
+    real = os.path.realpath(str(path or ""))
+    root = os.path.realpath(UPLOAD_DIR) + os.sep
+    if not real.startswith(root) or not os.path.isfile(real):
+        return None
+    try:
+        with open(_upload_meta_path(real)) as f:
+            meta = json.load(f)
+        if (meta.get("owner") or "").strip().lower() != (owner or "").strip().lower():
+            return None
+        if float(meta.get("expires") or 0) <= time.time():
+            return None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return real
+
+
+def _forget_upload(path, remove_data=False):
+    with UPLOAD_LOCK:
+        if remove_data:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        try:
+            os.remove(_upload_meta_path(path))
+        except OSError:
+            pass
+
+
+def _persist_reddit_photos(post_id, photos):
+    """Copy staged owner uploads into one durable, private post directory."""
+    if not photos:
+        return []
+    post_dir = os.path.join(REDDIT_MEDIA, str(int(post_id)))
+    os.makedirs(post_dir, mode=0o700, exist_ok=False)
+    stored = []
+    try:
+        for index, source in enumerate(photos, 1):
+            ext = os.path.splitext(source)[1].lower()
+            if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+                raise ValueError("unsupported Reddit draft photo")
+            destination = os.path.join(post_dir, f"{index}{ext}")
+            with open(source, "rb") as src, open(destination, "xb") as dst:
+                shutil.copyfileobj(src, dst)
+                dst.flush()
+                os.fsync(dst.fileno())
+            stored.append(destination)
+        _fsync_directory(post_dir)
+        _fsync_directory(REDDIT_MEDIA)
+        _fsync_directory(os.path.dirname(REDDIT_MEDIA))
+        return stored
+    except Exception:
+        shutil.rmtree(post_dir, ignore_errors=True)
+        try:
+            _fsync_directory(REDDIT_MEDIA)
+        except OSError:
+            pass
+        raise
+
+
+def _fsync_directory(path):
+    """Persist directory entries, not only the bytes inside their files."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _quarantine_reddit_media(post_id):
+    """Atomically move one post directory out of the backup-visible tree."""
+    post_id = int(post_id)
+    post_dir = os.path.join(REDDIT_MEDIA, str(post_id))
+    if not os.path.lexists(post_dir):
+        return None
+    if os.path.islink(post_dir) or not os.path.isdir(post_dir):
+        raise OSError("Reddit media directory is not a regular directory")
+    os.makedirs(REDDIT_MEDIA_TRASH, mode=0o700, exist_ok=True)
+    if os.path.islink(REDDIT_MEDIA_TRASH) or not os.path.isdir(REDDIT_MEDIA_TRASH):
+        raise OSError("Reddit media quarantine is not a regular directory")
+    target = os.path.join(
+        REDDIT_MEDIA_TRASH, f"{post_id}-{secrets.token_hex(8)}")
+    os.replace(post_dir, target)
+    try:
+        _fsync_directory(REDDIT_MEDIA)
+        _fsync_directory(REDDIT_MEDIA_TRASH)
+        _fsync_directory(os.path.dirname(REDDIT_MEDIA_TRASH))
+    except OSError:
+        # The database still references the canonical path at this point.
+        # Put it back before reporting failure.
+        os.replace(target, post_dir)
+        _fsync_directory(REDDIT_MEDIA)
+        _fsync_directory(REDDIT_MEDIA_TRASH)
+        raise
+    return target
+
+
+def _restore_reddit_quarantine(post_id, quarantine):
+    """Restore a pre-commit media move after a rolled-back/crashed delete."""
+    if not quarantine or not os.path.isdir(quarantine):
+        return
+    destination = os.path.join(REDDIT_MEDIA, str(int(post_id)))
+    os.makedirs(REDDIT_MEDIA, mode=0o700, exist_ok=True)
+    if os.path.lexists(destination):
+        raise OSError("cannot restore Reddit media over an existing directory")
+    os.replace(quarantine, destination)
+    _fsync_directory(REDDIT_MEDIA_TRASH)
+    _fsync_directory(REDDIT_MEDIA)
+    _fsync_directory(os.path.dirname(REDDIT_MEDIA))
+
+
+def _purge_reddit_quarantine(quarantine):
+    """Best-effort final removal after the database no longer references it."""
+    try:
+        if quarantine and os.path.isdir(quarantine):
+            shutil.rmtree(quarantine)
+            _fsync_directory(REDDIT_MEDIA_TRASH)
+    except OSError as exc:
+        # Startup recovery removes a quarantine only when the post row is
+        # absent, so a transient filesystem error cannot break future backups.
+        print(f"[reddit-media] quarantine cleanup deferred: {exc}", flush=True)
+
+
+def _recover_reddit_media_quarantine():
+    """Resolve crash leftovers by consulting the authoritative post row."""
+    if not os.path.isdir(REDDIT_MEDIA_TRASH) or os.path.islink(REDDIT_MEDIA_TRASH):
+        return
+    conn = db()
+    try:
+        for name in os.listdir(REDDIT_MEDIA_TRASH):
+            match = re.fullmatch(r"([1-9]\d*)-([0-9a-f]{16})", name)
+            if not match:
+                continue
+            post_id = int(match.group(1))
+            quarantine = os.path.join(REDDIT_MEDIA_TRASH, name)
+            if os.path.islink(quarantine) or not os.path.isdir(quarantine):
+                continue
+            exists = conn.execute(
+                "SELECT 1 FROM reddit_posts WHERE id=?", (post_id,)).fetchone()
+            destination = os.path.join(REDDIT_MEDIA, str(post_id))
+            if exists and not os.path.lexists(destination):
+                try:
+                    _restore_reddit_quarantine(post_id, quarantine)
+                except OSError as exc:
+                    print(f"[reddit-media] restore {post_id} deferred: {exc}",
+                          flush=True)
+            elif not exists:
+                _purge_reddit_quarantine(quarantine)
+    finally:
+        conn.close()
+
+
+with UPLOAD_LOCK:
+    _cleanup_uploads_locked()
 
 
 def _ensure_orders_schema():
@@ -156,6 +458,13 @@ def _ensure_orders_schema():
             # other channel and shows up in the same lists, totals and sheet.
             "shopify_order_id": "TEXT", "shopify_name": "TEXT",
             "financial_status": "TEXT",
+            # Contact edits made in Labs must not be overwritten every five
+            # minutes by the same unchanged Shopify snapshot. The sync stores
+            # the last remote fingerprint and treats a local edit as an
+            # explicit override until Shopify is made to match it.
+            "shopify_contact_fingerprint": "TEXT",
+            "shopify_contact_override": "INTEGER DEFAULT 0",
+            "shopify_conflict_fingerprint": "TEXT",
             # Every channel lands in the unified order log first. A person
             # explicitly chooses which orders enter the supplier queue.
             "supplier_visible": "INTEGER DEFAULT 0",
@@ -178,10 +487,9 @@ def _ensure_orders_schema():
             # The number a person sees — "#61". Kept apart from the DB id
             # (which photos, the sheet join and Shopify links all key off, so
             # it can't be renumbered) precisely so the visible number CAN be a
-            # clean, gapless sequence. Existing rows are seeded to their own id
-            # so nothing they've already been called by changes; new orders
-            # continue gaplessly from the highest, so from here on it's
-            # #62, #63, #64… one after another.
+            # stable sequence. Existing rows are seeded to their own id so
+            # nothing they've already been called by changes; the durable
+            # sequence never reuses a number after a permitted hard delete.
             "order_no": "INTEGER"}
     try:
         conn = sqlite3.connect(DB, timeout=5)
@@ -197,6 +505,10 @@ def _ensure_orders_schema():
                         "ON orders(shopify_order_id)")
             # Seed the display number for anything that predates the column.
             conn.execute("UPDATE orders SET order_no=id WHERE order_no IS NULL")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_order_no "
+                         "ON orders(order_no)")
+            import order_numbers
+            order_numbers.ensure(conn)
 
             # Collapse the old 8-status pipeline onto the 5 stages — ONCE.
             # This can't be value-based-idempotent: old "shipped" (to the
@@ -224,6 +536,7 @@ def _ensure_orders_schema():
         conn.close()
     except Exception as e:
         print(f"[orders] schema check: {e}", flush=True)
+        raise
 
 
 def _ensure_order_items_schema():
@@ -272,6 +585,7 @@ def _ensure_order_items_schema():
         conn.close()
     except Exception as e:
         print(f"[order_items] schema check: {e}", flush=True)
+        raise
 
 
 def _ensure_order_events_schema():
@@ -295,6 +609,7 @@ def _ensure_order_events_schema():
         conn.close()
     except Exception as e:
         print(f"[order_events] schema check: {e}", flush=True)
+        raise
 
 
 def order_event(conn, order_id, kind, detail, actor):
@@ -350,6 +665,7 @@ def _ensure_shipments_schema():
         conn.close()
     except Exception as e:
         print(f"[shipments] schema check: {e}", flush=True)
+        raise
 
 
 def _ensure_reddit_schema():
@@ -387,7 +703,8 @@ def _ensure_reddit_schema():
         for col, decl in (("stage", "TEXT"), ("passes", "TEXT"),
                           ("question", "TEXT"), ("answer", "TEXT"),
                           ("error", "TEXT"), ("finished_at", "TEXT"),
-                          ("posted_at", "TEXT")):
+                          ("posted_at", "TEXT"), ("started_at", "TEXT"),
+                          ("queued_at", "TEXT")):
             if col not in dcols:
                 conn.execute(f"ALTER TABLE reddit_drafts ADD COLUMN {col} {decl}")
         # Posts for our own subreddit (r/IndiaWatchMods). A post is built by
@@ -427,6 +744,8 @@ def _ensure_reddit_schema():
         pcols = {r[1] for r in conn.execute("PRAGMA table_info(reddit_posts)")}
         for col, decl in (("question", "TEXT"), ("answer", "TEXT"),
                           ("rounds", "INTEGER DEFAULT 0"),
+                          ("started_at", "TEXT"),
+                          ("queued_at", "TEXT"),
                           # Several people posting to one sub needs a rota, or
                           # you get two posts on Tuesday and nothing until Friday.
                           ("slot_date", "TEXT"), ("assigned_to", "TEXT")):
@@ -436,6 +755,7 @@ def _ensure_reddit_schema():
         conn.close()
     except Exception as e:
         print(f"[reddit] schema check: {e}", flush=True)
+        raise
 
 
 def _ensure_stock_schema():
@@ -463,10 +783,11 @@ def _ensure_stock_schema():
         conn.close()
     except Exception as e:
         print(f"[stock] schema check: {e}", flush=True)
+        raise
 
 
 def _ensure_billing_schema():
-    """What the supplier charges us, per build, and the bills that collect it.
+    """What the supplier charges us, per watch, and the bills that collect it.
 
     Two things worth being explicit about, because they look similar and are
     not: orders.price_inr is what the CUSTOMER pays and must never reach the
@@ -481,8 +802,8 @@ def _ensure_billing_schema():
     (the owner's call), which also matches how suppliers.db invoices already
     separate subtotal from shipping_cost.
     """
+    conn = sqlite3.connect(DB, timeout=5)
     try:
-        conn = sqlite3.connect(DB, timeout=5)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
         if cols:
             if "supplier_cost" not in cols:
@@ -516,7 +837,16 @@ def _ensure_billing_schema():
             order_id INTEGER,
             description TEXT,
             ref_code TEXT,
+            quantity INTEGER NOT NULL DEFAULT 1,
             cost REAL NOT NULL DEFAULT 0)""")
+        icols = {r[1] for r in conn.execute(
+            "PRAGMA table_info(supplier_bill_items)")}
+        if icols and "quantity" not in icols:
+            # Agreed history had no quantity snapshot, so preserve it as one
+            # unit. New bills snapshot the order quantity below.
+            conn.execute(
+                "ALTER TABLE supplier_bill_items "
+                "ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_supplier_bill_items_bill "
                      "ON supplier_bill_items(bill_id)")
         # A payment can now settle a bill as well as a shipment (or neither,
@@ -531,11 +861,342 @@ def _ensure_billing_schema():
         if bcols and "tracking_code" not in bcols:
             conn.execute("ALTER TABLE supplier_bills ADD COLUMN tracking_code TEXT")
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
-    except Exception as e:
-        print(f"[billing] schema check: {e}", flush=True)
 
 
+def _ensure_webchat_ownership():
+    """Private-by-default conversations for non-admin team accounts."""
+    conn = sqlite3.connect(DB, timeout=5)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(webchat_sessions)")}
+        if not cols:
+            raise RuntimeError("webchat_sessions table is missing")
+        if "owner_email" not in cols:
+            conn.execute("ALTER TABLE webchat_sessions ADD COLUMN owner_email TEXT")
+        if "visibility" not in cols:
+            conn.execute(
+                "ALTER TABLE webchat_sessions ADD COLUMN visibility TEXT "
+                "NOT NULL DEFAULT 'private'")
+        conn.execute(
+            "UPDATE webchat_sessions SET owner_email=? "
+            "WHERE owner_email IS NULL OR owner_email=''",
+            (ADMIN_EMAILS[0],),
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_webchat_sessions_owner "
+            "ON webchat_sessions(owner_email, updated_at)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _ensure_atomic_cross_db_journals():
+    """Attached-db bill/Ledger writes need SQLite's rollback journal.
+
+    SQLite provides a super-journal for atomic commits across attached files
+    only when neither database uses WAL. Both files live on the same disk, so
+    DELETE mode gives bill acknowledgement/reversal one crash-safe commit.
+    """
+    for path in (DB, SUPPLIERS_DB):
+        conn = sqlite3.connect(path, timeout=10)
+        try:
+            mode = conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+            if str(mode).lower() != "delete":
+                raise RuntimeError(
+                    f"{os.path.basename(path)} would not leave WAL mode")
+        finally:
+            conn.close()
+
+
+def _fail_reddit_job(table, job_id, error):
+    """Best-effort terminal state for a job already claimed by the worker."""
+    conn = None
+    try:
+        conn = db()
+        conn.execute(
+            f"UPDATE {table} SET status='failed', stage='error', error=?, "
+            "finished_at=datetime('now') WHERE id=? AND status='running'",
+            (str(error)[:500], job_id))
+        conn.commit()
+    except Exception as exc:
+        print(f"[reddit_draft] could not fail {table} #{job_id}: {exc}",
+              flush=True)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _send_owner_alert(body):
+    """Private completion/health channel; never fall back to supplier chat."""
+    target = ""
+    try:
+        with open(ENV_FILE) as source:
+            for line in source:
+                if line.startswith("HEALTH_ALERT_TARGET="):
+                    target = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+    except OSError:
+        pass
+    if not target:
+        print(f"[alert] no HEALTH_ALERT_TARGET set; would have sent: {body}",
+              flush=True)
+        return
+    try:
+        result = subprocess.run(
+            ["hermes", "send", "--to", target, "--quiet", body],
+            capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            print(
+                "[alert] delivery failed: "
+                + (result.stderr or result.stdout or "hermes send failed")[-300:],
+                flush=True)
+    except Exception as exc:
+        print(f"[alert] {exc}", flush=True)
+
+
+def _reddit_post_worker(alert=None):
+    """Drain durable queued post and reply jobs, one at a time.
+
+    The queue is the database, not the request thread. A service restart turns
+    interrupted ``running`` rows back into ``queued`` below, and this worker
+    resumes both content types when the actual agent service starts.
+    """
+    claim_failures = 0
+    try:
+        while True:
+            conn = None
+            job_type = table = actor = None
+            job_id = None
+            try:
+                conn = db()
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT job_type, id, created_at, created_by FROM ("
+                    "SELECT 'post' AS job_type, id, created_at, created_by "
+                    "FROM reddit_posts WHERE status='queued' "
+                    "UNION ALL "
+                    "SELECT 'reply' AS job_type, id, created_at, created_by "
+                    "FROM reddit_drafts WHERE status='queued'"
+                    ") ORDER BY created_at ASC, id ASC LIMIT 1").fetchone()
+                if not row:
+                    conn.rollback()
+                    break
+                job_type = row["job_type"]
+                job_id = row["id"]
+                actor = row["created_by"] or "reddit-worker"
+                table = "reddit_posts" if job_type == "post" else "reddit_drafts"
+                changed = conn.execute(
+                    f"UPDATE {table} SET status='running', "
+                    "stage=COALESCE(NULLIF(stage,''),'starting'), error=NULL, "
+                    "started_at=datetime('now') "
+                    "WHERE id=? AND status='queued'", (job_id,))
+                if changed.rowcount != 1:
+                    conn.rollback()
+                    continue
+                conn.commit()
+                claim_failures = 0
+            except Exception as exc:
+                claim_failures += 1
+                if conn is not None and conn.in_transaction:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                if job_id is not None and table is not None:
+                    _fail_reddit_job(
+                        table, job_id,
+                        f"queue claim failed after selecting this job: {exc}")
+                print(f"[reddit_draft] queue claim failed: {exc}", flush=True)
+                if claim_failures >= 6:
+                    break
+                time.sleep(min(0.25 * (2 ** (claim_failures - 1)), 4.0))
+                continue
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception as exc:
+                        print(f"[reddit_draft] queue connection close: {exc}",
+                              flush=True)
+
+            failure = None
+            try:
+                script = (
+                    "/root/ops-dashboard/reddit_draft.py"
+                    if job_type == "post"
+                    else "/root/ops-dashboard/reddit_reply.py"
+                )
+                result = subprocess.run(
+                    ["python3", script, str(job_id)],
+                    capture_output=True, text=True,
+                    timeout=(
+                        REDDIT_POST_WORKER_TIMEOUT
+                        if job_type == "post"
+                        else REDDIT_REPLY_WORKER_TIMEOUT))
+                if result.returncode != 0:
+                    failure = (
+                        result.stderr
+                        or f"{job_type} draft worker failed"
+                    )[-500:]
+            except Exception as e:
+                failure = str(e)[:500]
+                print(f"[reddit_draft] {job_type} worker {job_id}: {e}",
+                      flush=True)
+
+            try:
+                conn = db()
+                if failure:
+                    conn.execute(
+                        f"UPDATE {table} SET status='failed', stage='error', error=?, "
+                        "finished_at=datetime('now') WHERE id=?",
+                        (failure, job_id))
+                    conn.commit()
+                if job_type == "post":
+                    final = conn.execute(
+                        "SELECT status, title, question, error "
+                        "FROM reddit_posts WHERE id=?", (job_id,)).fetchone()
+                else:
+                    final = conn.execute(
+                        "SELECT status, NULL AS title, question, error "
+                        "FROM reddit_drafts WHERE id=?", (job_id,)).fetchone()
+                if final and final["status"] == "running":
+                    failure = "draft process exited without a terminal state"
+                    conn.execute(
+                        f"UPDATE {table} SET status='failed', stage='error', error=?, "
+                        "finished_at=datetime('now') WHERE id=?",
+                        (failure, job_id))
+                    conn.commit()
+                    if job_type == "post":
+                        final = conn.execute(
+                            "SELECT status, title, question, error "
+                            "FROM reddit_posts WHERE id=?", (job_id,)).fetchone()
+                    else:
+                        final = conn.execute(
+                            "SELECT status, NULL AS title, question, error "
+                            "FROM reddit_drafts WHERE id=?", (job_id,)).fetchone()
+            except Exception as exc:
+                if conn is not None and conn.in_transaction:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                _fail_reddit_job(
+                    table, job_id,
+                    f"worker finalization failed: {exc}")
+                print(
+                    f"[reddit_draft] {job_type} #{job_id} finalization failed: {exc}",
+                    flush=True)
+                continue
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            status = final["status"] if final else "failed"
+            try:
+                hub_event(
+                    "reddit_post" if job_type == "post" else "reddit_reply",
+                    f"{job_type} draft #{job_id} {status}", actor, "agent")
+            except Exception as exc:
+                print(f"[reddit_draft] activity log skipped: {exc}", flush=True)
+            if alert:
+                try:
+                    if status == "ready":
+                        title = f"\n{final['title']}" if final["title"] else ""
+                        alert(f"*Reddit {job_type} draft ready*{title}\n\n"
+                              "Review it at ops.timelabsco.in/ops/reddit.html")
+                    elif status == "needs_input":
+                        alert(f"*Reddit {job_type} draft needs one answer*\n"
+                              f"{final['question']}\n\n"
+                              "Open ops.timelabsco.in/ops/reddit.html")
+                    elif status == "failed":
+                        alert(f"Reddit {job_type} draft #{job_id} failed to build. "
+                              "It can be retried.")
+                except Exception as exc:
+                    print(f"[reddit_draft] completion alert skipped: {exc}",
+                          flush=True)
+    finally:
+        REDDIT_JOB_SLOT.release()
+
+
+def _start_reddit_post_worker(alert=None, slot_held=False):
+    """Start the durable queue drainer; return False only if no worker started."""
+    if not slot_held and not REDDIT_JOB_SLOT.acquire(blocking=False):
+        return False
+    try:
+        threading.Thread(
+            target=_reddit_post_worker, args=(alert,), daemon=True,
+            name="reddit-post-worker").start()
+        return True
+    except Exception:
+        REDDIT_JOB_SLOT.release()
+        return False
+
+
+def _recover_reddit_post_jobs():
+    """Resume durable jobs interrupted by a prior service stop."""
+    _recover_reddit_media_quarantine()
+    conn = db()
+    quarantines = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        abandoned = [row[0] for row in conn.execute(
+            "SELECT id FROM reddit_posts WHERE status='staging'")]
+        for post_id in abandoned:
+            quarantine = _quarantine_reddit_media(post_id)
+            if quarantine:
+                quarantines.append((post_id, quarantine))
+        conn.execute("DELETE FROM reddit_posts WHERE status='staging'")
+        conn.execute(
+            "UPDATE reddit_posts SET status='queued', stage='recovering', "
+            "error='Resuming after a service restart', started_at=NULL "
+            ", queued_at=datetime('now') WHERE status='running'")
+        conn.execute(
+            "UPDATE reddit_drafts SET status='queued', stage='recovering', "
+            "error='Resuming after a service restart', started_at=NULL "
+            ", queued_at=datetime('now') WHERE status='running'")
+        queued = conn.execute(
+            "SELECT "
+            "(SELECT COUNT(*) FROM reddit_posts WHERE status='queued') + "
+            "(SELECT COUNT(*) FROM reddit_drafts WHERE status='queued')").fetchone()[0]
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        for post_id, quarantine in quarantines:
+            try:
+                _restore_reddit_quarantine(post_id, quarantine)
+            except OSError as exc:
+                print(f"[reddit-media] staging restore {post_id} deferred: {exc}",
+                      flush=True)
+        raise
+    finally:
+        conn.close()
+    for _post_id, quarantine in quarantines:
+        _purge_reddit_quarantine(quarantine)
+    if queued and not _start_reddit_post_worker(_send_owner_alert):
+        print("[reddit_draft] queued jobs are waiting for the shared content worker",
+              flush=True)
+
+
+_ensure_atomic_cross_db_journals()
 _ensure_orders_schema()
 _ensure_order_items_schema()
 _ensure_order_events_schema()
@@ -543,12 +1204,17 @@ _ensure_shipments_schema()
 _ensure_reddit_schema()
 _ensure_billing_schema()
 _ensure_stock_schema()
+_ensure_webchat_ownership()
 
 
 def _fs_resolve(p):
-    """Resolve a client path, confined to FS_ROOT (blocks symlink escape/..)."""
+    """Resolve a safe source/doc path; secrets, runtime data and links fail closed."""
     rp = os.path.realpath(p or FS_ROOT)
     if rp != FS_ROOT and not rp.startswith(FS_ROOT + os.sep):
+        return None
+    rel = os.path.relpath(rp, FS_ROOT)
+    parts = [] if rel == "." else rel.split(os.sep)
+    if any(part.startswith(".") or part in FS_DENY_DIRS for part in parts):
         return None
     return rp
 
@@ -812,6 +1478,20 @@ PREAMBLE = (
     "Recent conversation:\n"
 )
 
+NONADMIN_PREAMBLE = (
+    "You are the Timelabs Co assistant inside Labs Command, helping an authorized "
+    "team operator. Be helpful, direct, and honest about the access available in "
+    "this session. You may research the public web, ask clarifying questions, and "
+    "analyze images attached to this conversation. You do not have terminal or "
+    "filesystem access, Shopify/store write access, owner conversations, global "
+    "Hermes memory, credentials, private company databases, or other operators' "
+    "sessions. Never claim that you inspected or changed those systems. If the "
+    "operator requests a privileged or live-data action, prepare a concise plan "
+    "and say that an admin must review and run it. Replies render as Markdown, so "
+    "use short headings, bullets, and tables only when they improve clarity. "
+    "Recent conversation:\n"
+)
+
 # Jasper-style templates: a slash command expands into a structured brief.
 TEMPLATES = {
     "/caption": (
@@ -877,11 +1557,13 @@ def store(session_id, role, text):
     conn.close()
 
 
-def ensure_session(session_id):
+def ensure_session(session_id, email=None):
     conn = db()
-    row = conn.execute("SELECT id FROM webchat_sessions WHERE id=?", (session_id,)).fetchone()
+    row = conn.execute(
+        "SELECT id, owner_email FROM webchat_sessions WHERE id=?", (session_id,)).fetchone()
     conn.close()
-    return bool(row)
+    email = (email or "").strip().lower()
+    return bool(row and (email in ADMIN_EMAILS or row["owner_email"] == email))
 
 
 def recent(session_id, limit):
@@ -894,16 +1576,17 @@ def recent(session_id, limit):
     return list(reversed(rows))
 
 
-def build_prompt(session_id, message, images=None):
+def build_prompt(session_id, message, images=None, admin=True):
     """images: list of (path, name, ocr_text) — supports multi-photo messages."""
-    lines = [PREAMBLE]
+    lines = [PREAMBLE if admin else NONADMIN_PREAMBLE]
+    user_label = "Owner" if admin else "Team member"
     for row in recent(session_id, CONTEXT_TURNS):
-        speaker = "Owner" if row["role"] == "user" else "You"
+        speaker = user_label if row["role"] == "user" else "You"
         lines.append(f"{speaker}: {row['text']}")
     for i, (path, name, ocr_text) in enumerate(images or [], 1):
         n = f" {i} of {len(images)}" if len(images) > 1 else ""
         lines.append(
-            f"\nThe owner attached a photo{n} ({name or 'image'}), saved at "
+            f"\nThe {user_label.lower()} attached a photo{n} ({name or 'image'}), saved at "
             f"{path} — analyze it with your vision tool as part of answering."
         )
         if ocr_text:
@@ -911,65 +1594,8 @@ def build_prompt(session_id, message, images=None):
                 "\nOCR text extracted from this photo (verbatim, may contain recognition "
                 f"errors — trust your vision reading over this where they differ):\n{ocr_text}"
             )
-    lines.append(f"\nOwner's new message: {message}\n\nYour reply:")
+    lines.append(f"\n{user_label}'s new message: {message}\n\nYour reply:")
     return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------- PDF export
-def md_to_html(md):
-    """Small, safe markdown -> HTML for PDF export (escape first, then transform)."""
-    out, lines, i = [], html_mod.escape(md).split("\n"), 0
-    def inline(s):
-        s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
-        s = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
-        s = re.sub(r"(^|[^*])\*([^*\n]+)\*", r"\1<em>\2</em>", s)
-        s = re.sub(r"\[([^\]]+)\]\((https?:[^)\s]+)\)", r'<a href="\2">\1</a>', s)
-        return s
-    while i < len(lines):
-        l = lines[i]
-        if l.startswith("```"):
-            buf = []
-            i += 1
-            while i < len(lines) and not lines[i].startswith("```"):
-                buf.append(lines[i]); i += 1
-            i += 1
-            out.append("<pre><code>" + "\n".join(buf) + "</code></pre>")
-        elif re.match(r"^#{1,3}\s", l):
-            n = len(re.match(r"^#+", l).group())
-            out.append(f"<h{n}>" + inline(re.sub(r"^#+\s*", "", l)) + f"</h{n}>")
-            i += 1
-        elif re.match(r"^(-{3,}|\*{3,})\s*$", l):
-            out.append("<hr>"); i += 1
-        elif re.match(r"^\s*&gt;\s?", l):
-            buf = []
-            while i < len(lines) and re.match(r"^\s*&gt;\s?", lines[i]):
-                buf.append(re.sub(r"^\s*&gt;\s?", "", lines[i])); i += 1
-            out.append("<blockquote>" + inline(" ".join(buf)) + "</blockquote>")
-        elif re.match(r"^\s*([-*]|\d+\.)\s+", l):
-            tag = "ol" if re.match(r"^\s*\d+\.", l) else "ul"
-            items = []
-            while i < len(lines) and re.match(r"^\s*([-*]|\d+\.)\s+", lines[i]):
-                items.append("<li>" + inline(re.sub(r"^\s*([-*]|\d+\.)\s+", "", lines[i])) + "</li>")
-                i += 1
-            out.append(f"<{tag}>" + "".join(items) + f"</{tag}>")
-        elif "|" in l and i + 1 < len(lines) and re.match(r"^\s*\|?[\s:|-]+\|[\s:|-]*$", lines[i + 1]):
-            def row(r):
-                return [inline(c.strip()) for c in r.strip().strip("|").split("|")]
-            head = row(l); i += 2
-            body = []
-            while i < len(lines) and "|" in lines[i] and lines[i].strip():
-                body.append(row(lines[i])); i += 1
-            out.append("<table><thead><tr>" + "".join(f"<th>{h}</th>" for h in head) + "</tr></thead><tbody>"
-                       + "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in body)
-                       + "</tbody></table>")
-        elif not l.strip():
-            i += 1
-        else:
-            buf = [l]; i += 1
-            while i < len(lines) and lines[i].strip() and not re.match(r"^(#{1,3}\s|```|\s*([-*]|\d+\.)\s)", lines[i]) and "|" not in lines[i]:
-                buf.append(lines[i]); i += 1
-            out.append("<p>" + inline("<br>".join(buf)) + "</p>")
-    return "".join(out)
 
 
 PDF_CSS = """
@@ -1006,6 +1632,12 @@ def make_pdf(markdown, title):
 
 
 SAFE_WEB_TOOLSET = "web,memory,skills,session_search,context_engine,clarify,vision,image_gen,tts,todo"
+# Full-role operators get useful research and image-reading, but no shared
+# Hermes state. `memory`, `session_search`, `skills`, and even generic context
+# plugins are global to this VPS rather than scoped to webchat ownership.
+# Exposing them would let one operator retrieve or persist data in the
+# owner's CLI/WhatsApp sessions despite the SQL session boundary below.
+NONADMIN_TOOLSET = "web,clarify,vision"
 
 # Admins additionally get `terminal`, which is what lets the agent actually DO
 # things via the `labs` CLI instead of only describing them. Granted by role,
@@ -1016,15 +1648,19 @@ ADMIN_TOOLSET = SAFE_WEB_TOOLSET + ",terminal"
 
 
 def toolset_for(email):
-    return ADMIN_TOOLSET if (email or "").strip().lower() in ADMIN_EMAILS else SAFE_WEB_TOOLSET
+    return ADMIN_TOOLSET if (email or "").strip().lower() in ADMIN_EMAILS else NONADMIN_TOOLSET
 
 
-def run_hermes(prompt, model=None, provider=None, toolset=None):
+def run_hermes(prompt, model=None, provider=None, toolset=None, ignore_rules=False):
     cmd = ["hermes"]
     if model:
         cmd += ["-m", model]
     if provider:
         cmd += ["--provider", provider]
+    if ignore_rules:
+        # One-shot mode otherwise injects the owner's shared memory, rules,
+        # and preloaded skills even when their callable tools are absent.
+        cmd.append("--ignore-rules")
     cmd += ["-t", toolset or SAFE_WEB_TOOLSET]
     cmd += ["-z", prompt]
     result = subprocess.run(
@@ -1153,8 +1789,67 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _oauth_email(self, uri):
+        """Validate the browser session with oauth2-proxy.
+
+        This deliberately happens in the same loopback request as the Labs
+        role check. nginx auth_request subrequests cannot themselves run
+        another auth_request, so trying to compose the two in nginx silently
+        skipped OAuth and left the role gate with an empty identity.
+        """
+        cookie = self.headers.get("Cookie") or ""
+        if not cookie:
+            return None
+        req = urllib.request.Request(
+            "http://127.0.0.1:4180/oauth2/auth",
+            headers={
+                "Cookie": cookie,
+                "Host": self.headers.get("Host") or "ops.timelabsco.in",
+                "X-Real-IP": self.headers.get("X-Real-IP") or "127.0.0.1",
+                "X-Scheme": self.headers.get("X-Scheme") or "https",
+                "X-Auth-Request-Redirect": uri or "/ops/",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as response:
+                email = response.headers.get("X-Auth-Request-Email") or ""
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+            return None
+        return email.strip().lower() or None
+
     def do_GET(self):
         path, _, query = self.path.partition("?")
+        if path == "/access/gate":
+            uri = self.headers.get("X-Original-URI") or ""
+            email = self._oauth_email(uri)
+            if not email:
+                self.send_response(401)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            import access_store
+            if not access_store.can_open_path(email, uri):
+                self.send_response(403)
+                self.send_header("X-Labs-Home", access_store.home_for(email))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(204)
+            self.send_header("X-Labs-Email", email)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        if path == "/access/home":
+            email = (self.headers.get("X-User-Email") or "").strip().lower()
+            import access_store
+            self.send_response(302)
+            self.send_header("Location", access_store.home_for(email))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/allowlist":
             self._handle_allowlist_get()
             return
@@ -1215,6 +1910,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/reddit/posts":
             self._handle_reddit_posts()
+            return
+        if path == "/reddit/post/photo":
+            self._handle_reddit_post_photo(query)
             return
         if path == "/reddit/threads":
             self._handle_reddit_threads(query)
@@ -1288,12 +1986,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not self._has_tool("chat"):
                 self._json(403, {"error": "not available for this account"})
                 return
+            email = (self.headers.get("X-User-Email") or "").strip().lower()
             conn = db()
-            rows = conn.execute(
+            sql = (
                 "SELECT s.id, s.title, s.updated_at, "
                 "(SELECT COUNT(*) FROM webchat_messages m WHERE m.session_id = s.id) AS n "
-                "FROM webchat_sessions s ORDER BY s.updated_at DESC"
-            ).fetchall()
+                "FROM webchat_sessions s"
+            )
+            args = ()
+            if email not in ADMIN_EMAILS:
+                sql += " WHERE s.owner_email=?"
+                args = (email,)
+            rows = conn.execute(sql + " ORDER BY s.updated_at DESC", args).fetchall()
             conn.close()
             self._json(200, {"sessions": [dict(r) for r in rows]})
             return
@@ -1306,6 +2010,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 session_id = int(params.get("session", 1))
             except ValueError:
                 session_id = 1
+            email = (self.headers.get("X-User-Email") or "").strip().lower()
+            if not ensure_session(session_id, email):
+                self._json(404, {"error": "no such conversation"})
+                return
             conn = db()
             rows = conn.execute(
                 "SELECT role, text, created_at FROM webchat_messages "
@@ -1377,10 +2085,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         members = self._read_allowlist()
         if action == "add":
-            if email in members:
-                self._json(200, {"ok": True, "note": "already a member", "members": members})
+            # The legacy Key dialog grants Full access. Do this through the
+            # same atomic path as People & Access so an allowlisted person
+            # never exists briefly without an explicit role.
+            try:
+                import access_store
+                _, note, existed = access_store.invite(email, "full")
+            except (ValueError, RuntimeError, OSError) as e:
+                self._json(500, {"error": f"could not invite member: {e}"})
                 return
-            members.append(email)
+            members = self._read_allowlist()
+            print(f"[key] {admin} added {email}", flush=True)
+            hub_event("member_add", email, admin)
+            self._json(200, {
+                "ok": True, "note": "already a member" if existed else note,
+                "members": members,
+            })
+            return
         else:  # remove
             if email == admin:
                 self._json(400, {"error": "you can't remove yourself — ask the other admin"})
@@ -1415,9 +2136,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (OSError, json.JSONDecodeError):
             return None
 
-    def _redirect(self, location):
+    def _redirect(self, location, shopify_cookie=None):
         self.send_response(302)
         self.send_header("Location", location)
+        if shopify_cookie is not None:
+            if shopify_cookie:
+                self.send_header(
+                    "Set-Cookie",
+                    "__Host-labs_shopify_state=" + shopify_cookie
+                    + f"; Path=/; Max-Age={SHOPIFY_STATE_TTL}; "
+                      "Secure; HttpOnly; SameSite=Lax",
+                )
+            else:
+                self.send_header(
+                    "Set-Cookie",
+                    "__Host-labs_shopify_state=; Path=/; Max-Age=0; "
+                    "Secure; HttpOnly; SameSite=Lax",
+                )
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -1430,26 +2165,87 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not creds:
             self._json(500, {"error": "no Shopify app credentials stored"})
             return
+        shop = self._normal_shop(creds.get("shop"))
+        if (not shop or not creds.get("client_id") or not creds.get("client_secret")
+                or not re.fullmatch(r"[a-z0-9][a-z0-9-]*\.myshopify\.com", shop)):
+            self._json(500, {"error": "stored Shopify OAuth credentials are invalid"})
+            return
         state = secrets.token_urlsafe(16)
-        _shopify_states.add(state)
+        with _shopify_states_lock:
+            now = time.time()
+            for old, record in list(_shopify_states.items()):
+                if record["expires"] < now:
+                    _shopify_states.pop(old, None)
+            _shopify_states[state] = {
+                "actor": email,
+                "expires": now + SHOPIFY_STATE_TTL,
+                "shop": shop,
+            }
+        state_sig = hmac.new(
+            str(creds["client_secret"]).encode(), state.encode(), hashlib.sha256
+        ).hexdigest()
         from urllib.parse import urlencode
-        url = f"https://{creds['shop']}/admin/oauth/authorize?" + urlencode({
+        url = f"https://{shop}/admin/oauth/authorize?" + urlencode({
             "client_id": creds["client_id"], "scope": SHOPIFY_SCOPES,
             "redirect_uri": SHOPIFY_REDIRECT, "state": state,
         })
-        self._redirect(url)
+        self._redirect(url, f"{state}.{state_sig}")
+
+    @staticmethod
+    def _normal_shop(value):
+        shop = str(value or "").strip().lower().rstrip(".")
+        if "://" in shop:
+            shop = (urllib.parse.urlparse(shop).hostname or "").lower().rstrip(".")
+        return shop
 
     def _handle_shopify_callback(self, query):
-        from urllib.parse import parse_qsl
-        params = dict(parse_qsl(query))
         creds = self._shopify_creds()
+        pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
+        params = dict(pairs)
         code, state = params.get("code"), params.get("state")
-        shop = params.get("shop") or (creds or {}).get("shop", "")
-        if not creds or not code or state not in _shopify_states:
-            self._redirect("/ops/tools.html?shopify=failed")
+        email = (self.headers.get("X-User-Email") or "").strip().lower()
+        with _shopify_states_lock:
+            state_record = _shopify_states.pop(state, None)
+        shop = self._normal_shop(params.get("shop"))
+        configured_shop = self._normal_shop((creds or {}).get("shop"))
+        cookies = http.cookies.SimpleCookie()
+        try:
+            cookies.load(self.headers.get("Cookie") or "")
+            state_cookie = cookies.get("__Host-labs_shopify_state")
+            state_cookie = state_cookie.value if state_cookie else ""
+        except http.cookies.CookieError:
+            state_cookie = ""
+        cookie_state, dot, cookie_sig = state_cookie.partition(".")
+        expected_cookie_sig = hmac.new(
+            str((creds or {}).get("client_secret") or "").encode(),
+            cookie_state.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        valid_state_cookie = (
+            bool(dot) and cookie_state == state
+            and hmac.compare_digest(cookie_sig.lower(), expected_cookie_sig)
+        )
+        duplicate_keys = len(params) != len(pairs)
+        supplied_hmac = params.pop("hmac", "")
+        # Shopify's legacy serializer also excludes `signature`. Values must
+        # be percent-encoded after parsing; joining decoded strings rejects
+        # valid callbacks containing spaces, +, /, =, or encoded host data.
+        params.pop("signature", None)
+        message = canonical_hmac_message(params)
+        expected_hmac = hmac.new(
+            str((creds or {}).get("client_secret") or "").encode(),
+            message.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        valid_hmac = bool(supplied_hmac) and hmac.compare_digest(
+            supplied_hmac.lower(), expected_hmac)
+        if (not creds or not code or not state_record or duplicate_keys
+                or state_record["expires"] < time.time()
+                or email not in ADMIN_EMAILS or state_record["actor"] != email
+                or not shop or shop != configured_shop or state_record["shop"] != shop
+                or not valid_hmac or not valid_state_cookie):
+            self._redirect("/ops/tools.html?shopify=failed", "")
             return
-        _shopify_states.discard(state)
-        import urllib.request
         from urllib.parse import urlencode
         body = urlencode({"client_id": creds["client_id"],
                           "client_secret": creds["client_secret"], "code": code}).encode()
@@ -1458,18 +2254,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=20) as r:
                 tok = json.loads(r.read())
             access = tok.get("access_token")
+            granted = {s.strip() for s in str(tok.get("scope") or "").split(",") if s.strip()}
+            required = {s.strip() for s in SHOPIFY_SCOPES.split(",") if s.strip()}
         except Exception as e:
             print(f"[shopify] token exchange failed: {e}", flush=True)
-            self._redirect("/ops/tools.html?shopify=failed")
+            self._redirect("/ops/tools.html?shopify=failed", "")
             return
-        if not access:
-            self._redirect("/ops/tools.html?shopify=failed")
+        if not access or not required.issubset(normalized_scopes(granted)):
+            self._redirect("/ops/tools.html?shopify=failed", "")
             return
         write_env({"SHOPIFY_SHOP": shop, "SHOPIFY_ADMIN_TOKEN": access})
-        email = (self.headers.get("X-User-Email") or "?").strip().lower()
         print(f"[shopify] connected by {email}", flush=True)
         hub_event("shopify_connected", "Shopify store connected", email, app="shopify")
-        self._redirect("/ops/tools.html?shopify=connected")
+        self._redirect("/ops/tools.html?shopify=connected", "")
 
     # --- Quick product updater (Shopify) -----------------------------------
     def _handle_shopify_products(self, query):
@@ -1614,17 +2411,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "bad request"}); return
         import access_store
         email, role = str(p.get("email", "")).strip().lower(), str(p.get("role", "")).strip()
-        if not email or role not in access_store.ROLES:
-            self._json(400, {"error": "need an email and a valid role"}); return
+        if not email or role not in access_store.ROLES or (
+                role == "admin" and email not in ADMIN_EMAILS):
+            self._json(400, {
+                "error": "need an email and a valid non-admin role"}); return
         try:
             access_store.set_role(email, role)
         except ValueError as e:
             self._json(400, {"error": str(e)}); return
-        ok, note = access_store.sync_nginx()
+        except (RuntimeError, OSError) as e:
+            self._json(500, {"error": f"access gate was not changed: {e}"}); return
         actor = (self.headers.get("X-User-Email") or "?").strip().lower()
         hub_event("access_change", f"{email} -> {role}", actor, app="key")
         self._json(200, {"ok": True, "email": email, "role": role,
-                         "gate": note, "gate_ok": ok})
+                         "gate": "reloaded", "gate_ok": True})
+
+    def _handle_access_invite(self):
+        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+            self._json(403, {"error": "admins only"}); return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"}); return
+        import access_store
+        email = str(p.get("email", "")).strip().lower()
+        role = str(p.get("role", "")).strip()
+        if not EMAIL_RE.match(email) or role not in access_store.ROLES or role == "admin":
+            self._json(400, {"error": "need a valid email and non-admin role"}); return
+        try:
+            _, note, existed = access_store.invite(email, role)
+        except ValueError as e:
+            self._json(400, {"error": str(e)}); return
+        except (RuntimeError, OSError) as e:
+            self._json(500, {"error": f"invite was rolled back: {e}"}); return
+        actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+        hub_event("member_update" if existed else "member_add",
+                  f"{email} -> {role}", actor, app="key")
+        self._json(200, {
+            "ok": True, "email": email, "role": role, "gate": note,
+            "gate_ok": True, "existing": existed,
+        })
 
     # --- System files browser (admin, read-only, confined to FS_ROOT) --------
     def _handle_fs_list(self, query):
@@ -1642,6 +2469,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 for e in it:
                     hidden = e.name.startswith(".")
                     if hidden and not show_hidden:
+                        continue
+                    if _fs_resolve(e.path) is None:
                         continue
                     try:
                         st = e.stat(follow_symlinks=False)
@@ -1940,7 +2769,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, {"ok": True})
 
     def _handle_shopify_bulk_content(self):
-        if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
+        actor = (self.headers.get("X-User-Email") or "").strip().lower()
+        if actor not in ADMIN_EMAILS:
             self._json(403, {"error": "admins only"}); return
         length = int(self.headers.get("Content-Length", 0))
         try:
@@ -1950,7 +2780,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         import shopify_api
         if not shopify_api.configured():
             self._json(400, {"error": "Shopify isn't connected — open Tools and connect it."}); return
-        ids = [i for i in (p.get("ids") or []) if i][:100]
+        ids = list(dict.fromkeys(i for i in (p.get("ids") or []) if i))[:100]
         op = p.get("op")
         if op not in ("append_block", "prepend_block", "replace"):
             self._json(400, {"error": "unknown operation"}); return
@@ -1958,33 +2788,110 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "give the text to find"}); return
         if op in ("append_block", "prepend_block") and not str(p.get("block", "")).strip():
             self._json(400, {"error": "the block is empty"}); return
+        if not ids:
+            self._json(400, {"error": "select at least one product"}); return
+        proposal = {
+            "ids": ids, "op": op, "block": p.get("block", ""),
+            "name": p.get("name", ""), "find": p.get("find", ""),
+            "replace": p.get("replace", ""),
+        }
+        canonical = json.dumps(proposal, sort_keys=True, separators=(",", ":"))
         dry = bool(p.get("dry_run"))
         results, sample = [], None
-        for pid in ids:
-            try:
+
+        if dry:
+            frozen = {}
+            for pid in ids:
+                try:
+                    d = shopify_api.get_detail(pid)
+                    before = d["description"]
+                    after = apply_content_op(
+                        before, op, block=proposal["block"], name=proposal["name"],
+                        find=proposal["find"], replace=proposal["replace"])
+                    changed = after != before
+                    frozen[pid] = {
+                        "title": d["title"], "before": before, "after": after,
+                        "changed": changed,
+                    }
+                    results.append({
+                        "id": pid, "title": d["title"], "changed": changed,
+                        "delta": len(after) - len(before),
+                    })
+                    if changed and sample is None:
+                        sample = {
+                            "title": d["title"], "before": before[:1400],
+                            "after": after[:1400],
+                        }
+                except shopify_api.ShopifyError as e:
+                    results.append({
+                        "id": pid, "title": pid.split("/")[-1], "error": str(e)})
+            n_changed = sum(1 for r in results if r.get("changed"))
+            token = secrets.token_urlsafe(24)
+            now = time.time()
+            with CONTENT_PREVIEW_LOCK:
+                for old_token, record in list(CONTENT_PREVIEWS.items()):
+                    if record["expires"] <= now:
+                        CONTENT_PREVIEWS.pop(old_token, None)
+                CONTENT_PREVIEWS[token] = {
+                    "actor": actor, "expires": now + CONTENT_PREVIEW_TTL,
+                    "canonical": canonical, "frozen": frozen,
+                }
+            self._json(200, {
+                "results": results, "changed": n_changed, "total": len(results),
+                "dry_run": True, "sample": sample, "preview_token": token,
+            })
+            return
+
+        token = str(p.get("preview_token") or "")
+        with CONTENT_PREVIEW_LOCK:
+            record = CONTENT_PREVIEWS.pop(token, None)
+        if (not record or record["expires"] <= time.time()
+                or record["actor"] != actor or record["canonical"] != canonical):
+            self._json(409, {
+                "error": "That preview is missing, expired, or no longer matches. "
+                         "Preview the exact change again before applying it."})
+            return
+
+        # Validate every source description before the first write. If even one
+        # changed since preview, nothing from this proposal is applied.
+        current = {}
+        try:
+            for pid in ids:
                 d = shopify_api.get_detail(pid)
-                before = d["description"]
-                after = apply_content_op(before, op, block=p.get("block", ""),
-                                         name=p.get("name", ""), find=p.get("find", ""),
-                                         replace=p.get("replace", ""))
-                changed = after != before
-                if changed and not dry:
-                    shopify_api.update_fields(pid, {"descriptionHtml": after})
-                results.append({"id": pid, "title": d["title"], "changed": changed,
-                                "delta": len(after) - len(before)})
-                if changed and sample is None:
-                    sample = {"title": d["title"], "before": before[:1400], "after": after[:1400]}
+                current[pid] = d
+                expected = record["frozen"].get(pid)
+                if not expected or d["description"] != expected["before"]:
+                    self._json(409, {
+                        "error": "At least one product changed after the preview. "
+                                 "Nothing was applied; preview again."})
+                    return
+        except shopify_api.ShopifyError as e:
+            self._json(502, {
+                "error": f"Could not recheck every product, so nothing was applied: {e}"})
+            return
+
+        for pid in ids:
+            expected = record["frozen"][pid]
+            changed = expected["changed"]
+            try:
+                if changed:
+                    shopify_api.update_fields(
+                        pid, {"descriptionHtml": expected["after"]})
+                results.append({
+                    "id": pid, "title": expected["title"], "changed": changed,
+                    "delta": len(expected["after"]) - len(expected["before"]),
+                })
             except shopify_api.ShopifyError as e:
-                results.append({"id": pid, "title": pid.split("/")[-1], "error": str(e)})
-        n_changed = sum(1 for r in results if r.get("changed"))
-        if not dry and n_changed:
-            actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+                results.append({
+                    "id": pid, "title": expected["title"], "error": str(e)})
+        n_changed = sum(1 for r in results if r.get("changed") and not r.get("error"))
+        if n_changed:
             label = {"append_block": "appended a block to", "prepend_block": "prepended a block to",
                      "replace": "find/replaced in"}[op]
             hub_event("bulk_content", f"{label} {n_changed} product"
                       + ("s" if n_changed != 1 else ""), actor, app="shopify")
         self._json(200, {"results": results, "changed": n_changed,
-                         "total": len(results), "dry_run": dry, "sample": sample})
+                         "total": len(results), "dry_run": False, "sample": None})
 
     def _handle_shopify_ai_draft(self):
         if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
@@ -2123,17 +3030,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         # "For stock" can be said explicitly, or inferred from the convention
         # already in the data, where the customer was typed as Self.
-        is_stock = 1 if (p.get("is_stock")
-                         or customer.strip().lower() in ("self", "stock")) else 0
+        raw_stock = p.get("is_stock")
+        if (raw_stock is not None
+                and (not isinstance(raw_stock, (bool, int))
+                     or raw_stock not in (0, 1, False, True))):
+            self._json(400, {"error": "stock must be on or off"})
+            return
         phone = str(p.get("customer_phone", "")).strip()[:40]
         email = str(p.get("customer_email", "")).strip()[:200]
+        # A buyer-less build is inventory by definition. Treating an omitted
+        # checkbox as a sale creates phantom zero-value orders in every KPI.
+        is_stock = 1 if (
+            bool(raw_stock)
+            or customer.strip().lower() in ("self", "stock")
+            or not (customer or phone or email)
+        ) else 0
         address = str(p.get("address", "")).strip()[:600]
         pincode = str(p.get("pincode", "")).strip()[:20]
         notes = str(p.get("notes", "")).strip()[:1000]
         import order_stages
         status = str(p.get("status", "")).strip()[:40] or order_stages.DEFAULT_STAGE
         if status not in order_stages.STATUSES:
-            status = order_stages.DEFAULT_STAGE
+            self._json(400, {"error": "unrecognised order status"})
+            return
+        if status != order_stages.DEFAULT_STAGE:
+            self._json(400, {"error": "new orders start Pending; move it after saving"})
+            return
         source = str(p.get("source", "")).strip()[:40]
 
         # City/state and product attributes come from the browser (where staff
@@ -2151,22 +3073,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not any(attrs.values()):
             attrs.update(order_taxonomy.extract(product + " " + notes))
         try:
-            qty = max(1, int(p.get("quantity") or 1))
+            qty = int(p.get("quantity") or 1)
         except (TypeError, ValueError):
-            qty = 1
-        try:
-            price = float(p.get("price_inr")) if str(p.get("price_inr", "")).strip() else None
-        except (TypeError, ValueError):
-            price = None
+            self._json(400, {"error": "quantity must be a whole number"})
+            return
+        if qty < 1 or qty > 1000:
+            self._json(400, {"error": "quantity must be between 1 and 1000"})
+            return
+        price = None
+        if str(p.get("price_inr", "")).strip():
+            try:
+                price = float(p.get("price_inr"))
+            except (TypeError, ValueError):
+                self._json(400, {"error": "price must be a number"})
+                return
+            if not math.isfinite(price) or price < 0 or price > 100000000:
+                self._json(400, {"error": "price is outside the allowed range"})
+                return
 
         # Photos are whatever /upload just wrote — confine each to UPLOAD_DIR so a
         # crafted path can't push an arbitrary server file to Drive.
         raw_photos = p.get("photo_paths") or ([p["photo_path"]] if p.get("photo_path") else [])
         photos = []
-        upload_root = os.path.realpath(UPLOAD_DIR) + os.sep
         for cand in raw_photos[:10]:
-            rp = os.path.realpath(str(cand).strip())
-            if not rp.startswith(upload_root) or not os.path.isfile(rp):
+            rp = _upload_owned(cand, actor)
+            if not rp:
                 self._json(400, {"error": "a photo upload expired — attach it again"})
                 return
             photos.append(rp)
@@ -2185,65 +3116,82 @@ class Handler(http.server.BaseHTTPRequestHandler):
         drive_link = links[0] if links else None
 
         conn = db()
-        # Next display number: gapless, one past the highest so far (which after
-        # the backfill is at least the highest id). Assigned inside the same
-        # connection right before the insert.
-        order_no = (conn.execute(
-            "SELECT COALESCE(MAX(order_no), 0) + 1 AS n FROM orders").fetchone()["n"])
-        cur = conn.execute(
-            "INSERT INTO orders (customer_name, customer_phone, customer_email, address, "
-            "pincode, city, state, source, product, price_inr, quantity, notes, status, "
-            "has_image, drive_link, photo_links, case_style, dial_colour, dial_style, "
-            "case_colour, movement, watch_size, is_stock, order_no, supplier_visible) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)",
-            (customer, phone, email, address, pincode, city, state, source, product,
-             price, qty, notes, status, 1 if photos else 0, drive_link,
-             json.dumps(links) if links else None,
-             attrs.get("case_style"), attrs.get("dial_colour"), attrs.get("dial_style"),
-             attrs.get("case_colour"), attrs.get("movement"), attrs.get("watch_size"),
-             is_stock, order_no))
-        oid = cur.lastrowid
+        stored, created_photo_paths = [], []
+        dest_dir = ""
+        try:
+            # Serialize the display-number allocation with the insert. Merely
+            # doing MAX()+1 on two ThreadingHTTPServer connections can hand two
+            # simultaneous orders the same number.
+            conn.execute("BEGIN IMMEDIATE")
+            import order_numbers
+            order_no = order_numbers.next_number(conn)
+            cur = conn.execute(
+                "INSERT INTO orders (customer_name, customer_phone, customer_email, address, "
+                "pincode, city, state, source, product, price_inr, quantity, notes, status, "
+                "has_image, drive_link, photo_links, case_style, dial_colour, dial_style, "
+                "case_colour, movement, watch_size, is_stock, order_no, supplier_visible) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)",
+                (customer, phone, email, address, pincode, city, state, source, product,
+                 price, qty, notes, status, 1 if photos else 0, drive_link,
+                 json.dumps(links) if links else None,
+                 attrs.get("case_style"), attrs.get("dial_colour"), attrs.get("dial_style"),
+                 attrs.get("case_colour"), attrs.get("movement"), attrs.get("watch_size"),
+                 is_stock, order_no))
+            oid = cur.lastrowid
 
-        # Move the photos somewhere permanent BEFORE reporting success. They
-        # used to exist only as Drive URLs, so with Google disconnected an
-        # attached photo was written to a temp dir, referenced by nothing, and
-        # effectively lost. Drive is now a mirror of these, not the record.
-        stored = []
-        if photos:
-            dest_dir = os.path.join(ORDER_PHOTOS, str(oid))
-            try:
+            # Copy each upload first, but keep its source until the database is
+            # committed. A failed order remains retryable and cannot leave a
+            # private photo directory with no matching record.
+            if photos:
+                dest_dir = os.path.join(ORDER_PHOTOS, str(oid))
                 os.makedirs(dest_dir, exist_ok=True)
                 for i, fp in enumerate(photos):
                     fn = f"{i + 1}{os.path.splitext(fp)[1].lower()}"
-                    try:
-                        os.replace(fp, os.path.join(dest_dir, fn))
-                    except OSError:      # different filesystem — copy instead
-                        with open(fp, "rb") as src, open(os.path.join(dest_dir, fn), "wb") as dst:
-                            dst.write(src.read())
-                        try:
-                            os.remove(fp)
-                        except OSError:
-                            pass
+                    dest_path = os.path.join(dest_dir, fn)
+                    with open(fp, "rb") as src, open(dest_path, "xb") as dst:
+                        created_photo_paths.append(dest_path)
+                        shutil.copyfileobj(src, dst)
                     stored.append(fn)
-            except Exception as e:
-                warnings.append(f"A photo couldn't be filed: {e}")
-            if stored:
                 conn.execute("UPDATE orders SET local_photos=? WHERE id=?",
-                            (json.dumps(stored), oid))
+                             (json.dumps(stored), oid))
+
+            conn.execute(
+                "INSERT INTO order_items (order_id, product, quantity, price_inr, line_total) "
+                "VALUES (?,?,?,?,?)",
+                (oid, product, qty, price, (price or 0) * qty))
+            order_event(conn, oid, "created",
+                        f"logged via {source or 'order form'} with status {status}", actor)
+            row = conn.execute(
+                "SELECT received_at FROM orders WHERE id=?", (oid,)).fetchone()
+            conn.commit()
+        except Exception as e:
+            if conn.in_transaction:
+                conn.rollback()
+            conn.close()
+            for path in created_photo_paths:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            if dest_dir:
+                try:
+                    os.rmdir(dest_dir)
+                except OSError:
+                    pass
+            print(f"[orders-create] atomic save failed: {e}", flush=True)
+            self._json(500, {
+                "error": "The order was not saved. Its uploads are still available; "
+                         "try Save again."})
+            return
+
+        for fp in photos:
+            # The committed order owns its permanent copy.
+            _forget_upload(fp, remove_data=True)
         if not access:
             warnings.append(
                 "Google isn't connected, so this order didn't reach the sheet"
                 + (" (the photos are saved here)" if stored else "")
                 + ". Open Drop and reconnect Google.")
-
-        conn.execute(
-            "INSERT INTO order_items (order_id, product, quantity, price_inr, line_total) "
-            "VALUES (?,?,?,?,?)",
-            (oid, product, qty, price, (price or 0) * qty))
-        order_event(conn, oid, "created",
-                   f"logged via {source or 'order form'} with status {status}", actor)
-        row = conn.execute("SELECT received_at FROM orders WHERE id=?", (oid,)).fetchone()
-        conn.commit()
         logged = row["received_at"] if row else ""
 
         # Customer roll-up recomputes from orders, so it stays correct even if
@@ -2345,8 +3293,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # which orders count.
     _LIVE_ITEMS_JOIN = (
         "FROM order_items oi JOIN orders o ON o.id = oi.order_id "
-        "WHERE o.status != 'cancelled' "
-        "AND (o.financial_status IS NULL OR o.financial_status NOT IN ('refunded','voided'))")
+        f"WHERE {SALE_ORDER_PREDICATE_O}")
 
     def _handle_orders_meta(self):
         """Sources, the what's-selling roll-up, and per-product analytics —
@@ -2368,18 +3315,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 sold[field] = [dict(r) for r in conn.execute(
                     f"SELECT {field} AS name, COUNT(*) AS orders, "
                     "SUM(COALESCE(quantity,1)) AS units FROM orders "
-                    f"WHERE {field} IS NOT NULL AND {field} != '' AND status != 'cancelled' "
+                    f"WHERE {field} IS NOT NULL AND {field} != '' "
+                    f"AND {SALE_ORDER_PREDICATE} "
                     f"GROUP BY {field} ORDER BY units DESC LIMIT 8")]
             # Stock builds are counted separately, not folded into "orders".
             # A watch we made for ourselves is not a sale, and letting it sit
             # in the same number quietly inflates how the week looks.
             totals = conn.execute(
-                "SELECT SUM(CASE WHEN COALESCE(is_stock,0)=0 THEN 1 ELSE 0 END) n, "
+                "SELECT COUNT(*) n, "
                 "COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) revenue, "
-                "SUM(CASE WHEN source='website' THEN 1 ELSE 0 END) website, "
-                "SUM(COALESCE(is_stock,0)) stock FROM orders "
-                "WHERE status != 'cancelled' AND (financial_status IS NULL "
-                "OR financial_status NOT IN ('refunded','voided'))").fetchone()
+                "SUM(CASE WHEN source='website' THEN 1 ELSE 0 END) website "
+                f"FROM orders WHERE {SALE_ORDER_PREDICATE}").fetchone()
+            stock = conn.execute(
+                "SELECT COUNT(*) n FROM orders WHERE COALESCE(is_stock,0)=1 "
+                "AND status!='cancelled' AND (financial_status IS NULL OR "
+                "LOWER(financial_status) NOT IN ('refunded','voided'))").fetchone()["n"]
             ncust = conn.execute("SELECT COUNT(*) n FROM customers").fetchone()["n"]
             top_products = [dict(r) for r in conn.execute(
                 "SELECT COALESCE(NULLIF(oi.canonical_product,''), oi.product) AS name, "
@@ -2399,7 +3349,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          "vocab": order_taxonomy.vocab(), "top_products": top_products,
                          "channels": {"logged": totals["n"] - website, "website": website},
                          "totals": {"orders": totals["n"] or 0,
-                                    "stock": totals["stock"] or 0,
+                                    "stock": stock or 0,
                                     "revenue": totals["revenue"] or 0,
                                     "customers": ncust}})
 
@@ -2440,12 +3390,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "watch_size": 60, "source": 40, "notes": 1000,
                     "quantity": None, "price_inr": None, "is_stock": None}
         conn = db()
+        # Lock before reading payment/build state. A supplier action that
+        # commits between validation and this write must never let a stale edit
+        # change a newly committed build.
+        conn.execute("BEGIN IMMEDIATE")
         before = conn.execute(
             "SELECT order_no, status, financial_status, supplier_visible, shipment_id, "
             "bill_id, customer_name, customer_phone, customer_email, address, city, "
             "state, pincode, product, quantity, price_inr, source, is_stock, notes, "
             "case_style, dial_colour, dial_style, case_colour, movement, watch_size, "
-            "tracking_code "
+            "tracking_code, shopify_order_id "
             "FROM orders WHERE id=?", (oid,)).fetchone()
         if not before:
             conn.close()
@@ -2454,20 +3408,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from order_form import STATUSES
         import order_stages
         cur_status = before["status"] or order_stages.DEFAULT_STAGE
-        locked = (before["financial_status"] or "").strip().lower() == "paid"
-        if locked:
-            blocked = [k for k in lockable if k in p]
-            if blocked:
-                conn.close()
-                self._json(409, {
-                    "error": "This order is marked Paid, so its customer, build and "
-                             "price details are locked. You can still change its "
-                             "fulfilment stage and tracking.",
-                    "locked_fields": blocked})
-                return
+        paid_locked = (before["financial_status"] or "").strip().lower() == "paid"
+        build_locked = order_stages.is_committed(
+            cur_status, before["supplier_visible"], before["shipment_id"], before["bill_id"])
+        build_fields = {
+            "product", "case_style", "dial_colour", "dial_style", "case_colour",
+            "movement", "watch_size", "quantity", "is_stock",
+        }
+        blocked_fields = set(lockable) if paid_locked else (
+            build_fields if build_locked else set())
+        blocked = [k for k in blocked_fields if k in p]
+        if blocked:
+            conn.close()
+            self._json(409, {
+                "error": (
+                    "This order is marked Paid, so its receipt details are locked."
+                    if paid_locked else
+                    "This build is already ordered, shipped, or billed, so its build "
+                    "specification and quantity are locked. Customer/contact details "
+                    "and tracking can still be corrected."
+                ),
+                "locked_fields": blocked})
+            return
         if "status" in p and p["status"] not in STATUSES:
             conn.close()
             self._json(400, {"error": f"'{p['status']}' isn't a real status"})
+            return
+        if ("status" in p and not order_stages.staff_transition_allowed(
+                cur_status, p["status"], bool(before["supplier_visible"]) or build_locked)):
+            conn.close()
+            self._json(409, {
+                "error": "A committed supplier build cannot be cancelled or moved "
+                         "backwards. Correct the supplier, shipment, or bill linkage first."})
             return
         supplier_change = None
         if "supplier_visible" in p:
@@ -2491,9 +3463,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              "so it can't be removed from the supplier queue."})
                 return
         item_fields = {"product", "quantity", "price_inr"}
+        contact_fields = {
+            "customer_name", "customer_phone", "customer_email", "address",
+            "city", "state", "pincode",
+        }
         updatable = dict(always)
-        if not locked:
-            updatable.update(lockable)
+        updatable.update({k: v for k, v in lockable.items() if k not in blocked_fields})
         sets, vals, normalized = [], [], {}
         for k, maxlen in updatable.items():
             if k not in p:
@@ -2520,7 +3495,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         conn.close()
                         self._json(400, {"error": "price must be a number"})
                         return
-                    if value < 0 or value > 100000000:
+                    if (not math.isfinite(value)
+                            or value < 0 or value > 100000000):
                         conn.close()
                         self._json(400, {"error": "price is outside the allowed range"})
                         return
@@ -2566,6 +3542,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 sets.append("supplier_visible=?")
                 vals.append(supplier_change)
+        if before["shopify_order_id"] and contact_fields.intersection(normalized):
+            sets.append("shopify_contact_override=1")
         if not sets:
             conn.close()
             self._json(200, {"ok": True, "id": oid, "unchanged": True, "warnings": []})
@@ -2618,7 +3596,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # and price changes cannot leave lifetime spend or VIP tags stale.
         if set(normalized).intersection({
                 "customer_name", "customer_phone", "customer_email", "address",
-                "city", "state", "pincode", "source", "price_inr", "quantity"}):
+                "city", "state", "pincode", "source", "price_inr", "quantity",
+                "status", "is_stock"}):
             import customers as customers_mod
             old_key = customers_mod.key_for(
                 before["customer_phone"], before["customer_email"], before["customer_name"])
@@ -2701,17 +3680,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         source = str(p.get("source", "")).strip()[:40]
         import order_taxonomy
-        upload_root = os.path.realpath(UPLOAD_DIR) + os.sep
-
         conn = db()
         created, failed = [], []
         for i, it in enumerate(items[:60]):
+            photo_dest = ""
+            photo_dir = ""
+            photo_dest_created = False
             try:
                 product = str((it or {}).get("product", "")).strip()[:200]
                 photo = str((it or {}).get("photo_path", "")).strip()
                 ref = str((it or {}).get("ref_code", "")).strip()[:60]
-                rp = os.path.realpath(photo) if photo else ""
-                if photo and (not rp.startswith(upload_root) or not os.path.isfile(rp)):
+                rp = _upload_owned(photo, actor) if photo else ""
+                if photo and not rp:
                     failed.append({"i": i, "error": "photo upload expired"})
                     continue
                 # A backfilled build is a photo plus its old order number; the
@@ -2730,17 +3710,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                else (f"Order {ref}" if ref else "Build"))
                 notes = str((it or {}).get("notes", "")).strip()[:1000]
                 try:
-                    qty = max(1, int((it or {}).get("quantity") or 1))
+                    qty = int((it or {}).get("quantity") or 1)
                 except (TypeError, ValueError):
-                    qty = 1
-                try:
-                    price = (float(it["price_inr"])
-                             if str((it or {}).get("price_inr", "")).strip() else None)
-                except (TypeError, ValueError):
-                    price = None
+                    raise ValueError("quantity must be a whole number")
+                if qty < 1 or qty > 1000:
+                    raise ValueError("quantity must be between 1 and 1000")
+                price = None
+                if str((it or {}).get("price_inr", "")).strip():
+                    try:
+                        price = float(it["price_inr"])
+                    except (TypeError, ValueError):
+                        raise ValueError("price must be a number")
+                    if (not math.isfinite(price)
+                            or price < 0 or price > 100000000):
+                        raise ValueError("price is outside the allowed range")
                 attrs = order_taxonomy.extract(product + " " + notes)
-                order_no = conn.execute(
-                    "SELECT COALESCE(MAX(order_no), 0) + 1 AS n FROM orders").fetchone()["n"]
+                # Keep each row atomic.  The handler deliberately permits a
+                # partially successful batch, but a failed row must never
+                # leave uncommitted inserts that a later row then commits.
+                # BEGIN IMMEDIATE also serializes order_no allocation across
+                # simultaneous intake requests.
+                conn.execute("BEGIN IMMEDIATE")
+                import order_numbers
+                order_no = order_numbers.next_number(conn)
                 cur = conn.execute(
                     "INSERT INTO orders (customer_name, source, product, price_inr, "
                     "quantity, notes, status, has_image, ref_code, case_style, dial_colour, "
@@ -2751,19 +3743,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                      attrs.get("dial_style"), attrs.get("case_colour"),
                      attrs.get("movement"), attrs.get("watch_size"), order_no))
                 oid = cur.lastrowid
+                # Bulk/photo intake is explicitly unsold build inventory.
+                conn.execute("UPDATE orders SET is_stock=1 WHERE id=?", (oid,))
                 if rp:
-                    dest = os.path.join(ORDER_PHOTOS, str(oid))
-                    os.makedirs(dest, exist_ok=True)
+                    photo_dir = os.path.join(ORDER_PHOTOS, str(oid))
+                    os.makedirs(photo_dir, exist_ok=True)
                     fn = "1" + os.path.splitext(rp)[1].lower()
-                    try:
-                        os.replace(rp, os.path.join(dest, fn))
-                    except OSError:
-                        with open(rp, "rb") as s, open(os.path.join(dest, fn), "wb") as d:
-                            d.write(s.read())
-                        try:
-                            os.remove(rp)
-                        except OSError:
-                            pass
+                    photo_dest = os.path.join(photo_dir, fn)
+                    # Copy first and remove the upload only after the database
+                    # commit.  If anything below fails, rollback can leave the
+                    # source upload available for a clean retry.
+                    with open(rp, "rb") as src, open(photo_dest, "xb") as dst:
+                        photo_dest_created = True
+                        shutil.copyfileobj(src, dst)
                     conn.execute("UPDATE orders SET local_photos=? WHERE id=?",
                                 (json.dumps([fn]), oid))
                 conn.execute(
@@ -2773,8 +3765,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 order_event(conn, oid, "created",
                            f"backfilled in a bulk batch{f' (order {ref})' if ref else ''}", actor)
                 conn.commit()
+                if rp:
+                    _forget_upload(rp, remove_data=True)
                 created.append({"id": oid, "product": product, "ref_code": ref})
             except Exception as e:
+                if conn.in_transaction:
+                    conn.rollback()
+                if photo_dest_created:
+                    try:
+                        os.remove(photo_dest)
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        pass
+                if photo_dir:
+                    try:
+                        os.rmdir(photo_dir)
+                    except OSError:
+                        pass
                 failed.append({"i": i, "error": str(e)[:120]})
         conn.close()
         if created:
@@ -2807,8 +3815,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "missing order id"})
             return
         conn = db()
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT customer_name, customer_phone, customer_email, product, financial_status "
+            "SELECT order_no, customer_name, customer_phone, customer_email, product, "
+            "financial_status, status, supplier_visible, shipment_id, bill_id, tracking_code, source, "
+            "shopify_order_id, chat_id, sender_number, raw_message "
             "FROM orders WHERE id=?", (oid,)).fetchone()
         if not row:
             conn.close()
@@ -2818,6 +3829,44 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._json(409, {
                 "error": "This order is marked Paid and cannot be deleted."})
+            return
+        import order_stages
+        if (row["status"] or order_stages.DEFAULT_STAGE) != order_stages.DEFAULT_STAGE:
+            conn.close()
+            self._json(409, {
+                "error": "Only an untouched Pending order can be deleted. Cancel or "
+                         "correct the workflow instead."})
+            return
+        if (row["supplier_visible"] or row["shipment_id"] is not None
+                or row["bill_id"] is not None or row["tracking_code"]):
+            conn.close()
+            self._json(409, {
+                "error": "This order has already been shared, shipped, billed, or tracked "
+                         "and cannot be hard-deleted."})
+            return
+        if (row["shopify_order_id"] or row["chat_id"] or row["sender_number"]
+                or row["raw_message"]):
+            conn.close()
+            self._json(409, {
+                "error": "Imported, storefront, and messaging orders are permanent records. "
+                         "Cancel the order instead of deleting it."})
+            return
+        if (row["source"] or "").strip().lower() not in ("test", "mistake", "draft"):
+            conn.close()
+            self._json(409, {
+                "error": "Only a record explicitly marked Test, Mistake, or Draft can be "
+                         "hard-deleted. Cancel this order to preserve its audit history."})
+            return
+        extra_events = conn.execute(
+            "SELECT COUNT(*) FROM order_events WHERE order_id=? AND kind!='created'",
+            (oid,)).fetchone()[0]
+        bill_links = conn.execute(
+            "SELECT COUNT(*) FROM supplier_bill_items WHERE order_id=?", (oid,)).fetchone()[0]
+        if extra_events or bill_links:
+            conn.close()
+            self._json(409, {
+                "error": "This record has workflow history or billing links and cannot "
+                         "be hard-deleted."})
             return
         conn.execute("DELETE FROM order_items WHERE order_id=?", (oid,))
         conn.execute("DELETE FROM order_events WHERE order_id=?", (oid,))
@@ -2834,6 +3883,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             print(f"[orders-delete] customer repair skipped: {e}", flush=True)
         conn.close()
 
+        # The Sheet is a mirror, not authority, but leave an explicit tombstone
+        # instead of a live-looking row. The durable local sequence guarantees
+        # this number is never allocated again even if the mirror is offline.
+        try:
+            import google_api
+            access = google_api.access_token()
+            if access and row["order_no"] is not None:
+                google_api.update_order_field(
+                    access, row["order_no"], "Status", "Deleted — test/mistake")
+        except Exception as e:
+            print(f"[orders-delete] sheet tombstone skipped: {e}", flush=True)
+
         photo_dir = os.path.join(ORDER_PHOTOS, str(oid))
         if os.path.isdir(photo_dir):
             try:
@@ -2842,7 +3903,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 os.rmdir(photo_dir)
             except OSError as e:
                 print(f"[orders-delete] photo cleanup: {e}", flush=True)
-        hub_event("order_deleted", f'#{oid} {row["product"] or ""} ({row["customer_name"] or "?"})',
+        hub_event("order_deleted",
+                 f'#{row["order_no"] or oid} {row["product"] or ""} '
+                 f'({row["customer_name"] or "?"})',
                  actor, app="orders")
         self._json(200, {"ok": True, "id": oid, "customer_orders_left": remaining})
 
@@ -3007,51 +4070,109 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not isinstance(remove, list):
             remove = []
         remove = {int(i) for i in remove if str(i).isdigit()}
-        upload_root = os.path.realpath(UPLOAD_DIR) + os.sep
+        actor = self._order_user()
         validated = []
         for candidate in incoming:
-            path = os.path.realpath(str(candidate))
-            if not path.startswith(upload_root) or not os.path.isfile(path):
+            path = _upload_owned(candidate, actor)
+            if not path:
                 self._json(400, {"error": "a photo upload expired — attach it again"})
                 return
             validated.append(path)
 
         conn = db()
-        q = "SELECT local_photos, order_no FROM orders WHERE id=?"
-        if supplier_only:
-            q += " AND supplier_visible=1"
-        row = conn.execute(q, (oid,)).fetchone()
-        if not row:
-            conn.close()
-            self._json(404, {"error": "no such order"})
-            return
-        try:
-            current = [os.path.basename(n) for n in
-                       json.loads(row["local_photos"] or "[]") if isinstance(n, str)]
-        except (json.JSONDecodeError, TypeError):
-            current = []
         order_dir = os.path.join(ORDER_PHOTOS, str(oid))
-        os.makedirs(order_dir, mode=0o750, exist_ok=True)
-        kept = []
-        for idx, name in enumerate(current):
-            if idx in remove:
+        created, removed_names = [], []
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            q = "SELECT local_photos, order_no FROM orders WHERE id=?"
+            if supplier_only:
+                q += " AND supplier_visible=1"
+            row = conn.execute(q, (oid,)).fetchone()
+            if not row:
+                conn.rollback()
+                conn.close()
+                self._json(404, {"error": "no such order"})
+                return
+            try:
+                current = [
+                    os.path.basename(n)
+                    for n in json.loads(row["local_photos"] or "[]")
+                    if isinstance(n, str)
+                ]
+            except (json.JSONDecodeError, TypeError):
+                current = []
+            os.makedirs(order_dir, mode=0o750, exist_ok=True)
+            kept = []
+            for idx, name in enumerate(current):
+                if idx in remove:
+                    removed_names.append(name)
+                else:
+                    kept.append(name)
+            for path in validated:
+                ext = os.path.splitext(path)[1].lower()
+                name = secrets.token_hex(16) + ext
+                final = os.path.join(order_dir, name)
+                stage = os.path.join(
+                    order_dir, ".stage-" + secrets.token_hex(16) + ext)
                 try:
-                    os.remove(os.path.join(order_dir, name))
-                except FileNotFoundError:
-                    pass
-            else:
+                    with open(path, "rb") as src, open(stage, "xb") as dst:
+                        shutil.copyfileobj(src, dst)
+                        dst.flush()
+                        os.fsync(dst.fileno())
+                    os.replace(stage, final)
+                finally:
+                    try:
+                        os.remove(stage)
+                    except FileNotFoundError:
+                        pass
+                created.append(final)
                 kept.append(name)
-        for path in validated:
-            ext = os.path.splitext(path)[1].lower()
-            name = secrets.token_hex(8) + ext
-            os.replace(path, os.path.join(order_dir, name))
-            kept.append(name)
-        conn.execute("UPDATE orders SET local_photos=?, has_image=? WHERE id=?",
-                     (json.dumps(kept), 1 if kept else 0, oid))
-        order_event(conn, oid, "photos",
-                    f"reference photos updated ({len(kept)} total)", self._order_user())
-        conn.commit()
+            # SQLite must never commit a filename whose directory entry is
+            # still only in the kernel's cache. The parent fsync also makes a
+            # newly-created per-order directory durable.
+            _fsync_directory(order_dir)
+            _fsync_directory(ORDER_PHOTOS)
+            conn.execute(
+                "UPDATE orders SET local_photos=?, has_image=? WHERE id=?",
+                (json.dumps(kept), 1 if kept else 0, oid))
+            order_event(
+                conn, oid, "photos",
+                f"reference photos updated ({len(kept)} total)", actor)
+            conn.commit()
+        except Exception as e:
+            if conn.in_transaction:
+                conn.rollback()
+            conn.close()
+            for path in created:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            try:
+                _fsync_directory(order_dir)
+            except OSError:
+                pass
+            print(f"[order-photos] atomic update failed for {oid}: {e}", flush=True)
+            self._json(500, {
+                "error": "Photos were not changed. Your new uploads remain available."})
+            return
         conn.close()
+        for name in removed_names:
+            try:
+                os.remove(os.path.join(order_dir, name))
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                print(f"[order-photos] old photo cleanup for {oid}: {e}", flush=True)
+        if removed_names:
+            try:
+                _fsync_directory(order_dir)
+            except OSError as e:
+                print(
+                    f"[order-photos] cleanup sync for {oid} deferred: {e}",
+                    flush=True)
+        for path in validated:
+            _forget_upload(path, remove_data=True)
         self._json(200, {"ok": True, "id": oid, "photos": len(kept)})
 
     # --- Supplier build queue: what to build, never who for -----------------
@@ -3093,15 +4214,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # which stays absent from this SELECT entirely.
                 "SELECT id, order_no, received_at, product, quantity, status, "
                 "case_style, dial_colour, dial_style, case_colour, movement, "
-                "watch_size, notes, local_photos, tracking_code, ref_code, "
+                "watch_size, local_photos, tracking_code, ref_code, "
                 "supplier_cost, supplier_cost_ccy, bill_id FROM orders "
-                "WHERE supplier_visible=1 AND status != 'cancelled' "
+                "WHERE supplier_visible=1 "
                 "ORDER BY id DESC").fetchall()
             events = {}
+            safe_event_kinds = (
+                "created", "status", "supplier", "photos", "cost", "billed",
+                "bill_acknowledged", "bill_deleted", "tracking", "payment",
+                "shipment", "note",
+            )
+            marks = ",".join("?" for _ in safe_event_kinds)
             for e in conn.execute(
                     "SELECT order_id, created_at, actor, kind, detail FROM order_events "
                     "WHERE order_id IN (SELECT id FROM orders WHERE supplier_visible=1) "
-                    "ORDER BY id ASC"):
+                    f"AND kind IN ({marks}) ORDER BY id ASC", safe_event_kinds):
                 events.setdefault(e["order_id"], []).append({
                     "at": e["created_at"], "kind": e["kind"], "detail": e["detail"],
                     # Who acted matters (did we pay, or did they mark it?) but
@@ -3143,6 +4270,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(403, {"error": "not available for this account"})
             return
         from order_form import STATUSES
+        import order_stages
         actor = self._order_user()
         length = int(self.headers.get("Content-Length", 0))
         try:
@@ -3160,16 +4288,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "unrecognised status"})
             return
         conn = db()
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT status FROM orders WHERE id=? AND supplier_visible=1", (oid,)).fetchone()
         if not row:
+            conn.rollback()
             conn.close()
             self._json(404, {"error": "no such order"})
             return
-        was = row["status"] or "new"
+        was = row["status"] or order_stages.DEFAULT_STAGE
         if was == status:
+            conn.rollback()
             conn.close()
             self._json(200, {"ok": True, "id": oid, "status": status, "unchanged": True})
+            return
+        if not order_stages.supplier_can_advance(was, status):
+            conn.rollback()
+            conn.close()
+            expected = order_stages.next_of(was)
+            self._json(409, {
+                "error": (
+                    f"This build can only move forward to {order_stages.label(expected)}."
+                    if expected else "This build is already at its final stage."
+                )})
             return
         conn.execute("UPDATE orders SET status=? WHERE id=?", (status, oid))
         order_event(conn, oid, "status", f"{was} -> {status}", actor)
@@ -3194,14 +4335,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # rupee figure here means the same thing as the same figure shown
     # anywhere else in the OS.
     _USD_INR = 100.0
+    _MONEY_LIMIT = 1_000_000_000.0
+    _MONEY_CURRENCIES = frozenset(("INR", "USD"))
+
+    def _money_currency(self, value, default="INR"):
+        """Return a supported accounting currency or None.
+
+        Keeping this narrow is deliberate: silently treating a typo as INR
+        corrupts both the bill and the Ledger conversion later.
+        """
+        currency = str(value or default).strip().upper()
+        return currency if currency in self._MONEY_CURRENCIES else None
+
+    def _money_amount(self, value, *, positive=False, optional=False):
+        """Parse a finite, bounded monetary input.
+
+        JSON accepts NaN/Infinity in Python's decoder, and float("nan") also
+        evades ordinary `< 0` checks. Reject those before they can reach
+        SQLite or poison every aggregate that touches the row.
+        """
+        if optional and (value is None or str(value).strip() == ""):
+            return None
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            return None
+        floor = 0.0 if not positive else 0.0000001
+        if not math.isfinite(amount) or amount < floor or amount > self._MONEY_LIMIT:
+            return None
+        return amount
 
     def _to_inr(self, amount, currency):
         if not amount:
             return 0.0
         return float(amount) * (self._USD_INR if (currency or "USD").upper() == "USD" else 1.0)
 
-    # ------------------------------------------------- per-build supplier cost
-    # What a build costs if nobody says otherwise. The supplier can always
+    def _convert_money(self, amount, source_currency, target_currency):
+        inr = self._to_inr(amount, source_currency)
+        return inr / self._USD_INR if target_currency == "USD" else inr
+
+    # ------------------------------------------------- per-watch supplier cost
+    # What one watch costs if nobody says otherwise. The supplier can always
     # type a real number; this is the floor so a batch can be raised without
     # pricing every line by hand.
     #
@@ -3229,12 +4403,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         acknowledged. After that the number is settled history — the check
         lives here rather than in the UI so it holds for a direct API call."""
         row = conn.execute(
-            "SELECT o.bill_id, b.status FROM orders o "
+            "SELECT o.bill_id, o.status AS order_status, o.supplier_visible, "
+            "b.status AS bill_status FROM orders o "
             "LEFT JOIN supplier_bills b ON b.id = o.bill_id "
             "WHERE o.id=?", (order_id,)).fetchone()
         if not row:
             return False, "no such build"
-        if row["status"] == "acknowledged":
+        if not row["supplier_visible"]:
+            return False, "this build is not in the supplier queue"
+        if str(row["order_status"] or "").strip().lower() in (
+                "cancelled", "canceled", "refunded", "voided"):
+            return False, "cancelled builds cannot be repriced or billed"
+        if row["bill_status"] == "acknowledged":
             return False, "this build is on a bill you've already acknowledged"
         return True, ""
 
@@ -3244,18 +4424,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         different code paths that can drift apart."""
         conn = db()
         done, skipped = [], []
-        for oid in ids:
-            ok, why = self._cost_editable(conn, oid)
-            if not ok:
-                skipped.append({"id": oid, "reason": why})
-                continue
-            conn.execute("UPDATE orders SET supplier_cost=?, supplier_cost_ccy=? "
-                         "WHERE id=? AND supplier_visible=1", (cost, currency, oid))
-            order_event(conn, oid, "cost",
-                        f"supplier cost set to {currency} {cost:,.2f}", actor)
-            done.append(oid)
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            for oid in ids:
+                ok, why = self._cost_editable(conn, oid)
+                if not ok:
+                    skipped.append({"id": oid, "reason": why})
+                    continue
+                cur = conn.execute(
+                    "UPDATE orders SET supplier_cost=?, supplier_cost_ccy=? "
+                    "WHERE id=? AND supplier_visible=1 "
+                    "AND LOWER(TRIM(COALESCE(status,''))) NOT IN "
+                    "('cancelled','canceled','refunded','voided')",
+                    (cost, currency, oid))
+                if cur.rowcount != 1:
+                    skipped.append(
+                        {"id": oid, "reason": "build changed; refresh and try again"})
+                    continue
+                order_event(conn, oid, "cost",
+                            f"supplier cost set to {currency} {cost:,.2f}", actor)
+                done.append(oid)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
         return done, skipped
 
     def _handle_supplier_cost(self):
@@ -3275,14 +4469,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         try:
             oid = int(p.get("order_id") or 0)
-            cost = float(p.get("cost"))
         except (TypeError, ValueError):
+            oid = 0
+        cost = self._money_amount(p.get("cost"))
+        currency = self._money_currency(p.get("currency") or "INR")
+        if oid <= 0 or cost is None:
             self._json(400, {"error": "a build and a cost are needed"})
             return
-        if oid <= 0 or cost < 0:
-            self._json(400, {"error": "a build and a cost are needed"})
+        if not currency:
+            self._json(400, {"error": "currency must be INR or USD"})
             return
-        currency = (str(p.get("currency") or "INR").strip().upper())[:8] or "INR"
         done, skipped = self._set_costs([oid], cost, currency, actor)
         if not done:
             self._json(400, {"error": skipped[0]["reason"] if skipped else "couldn't save"})
@@ -3302,16 +4498,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._json(400, {"error": "bad request"})
             return
-        ids = [int(i) for i in (p.get("ids") or []) if str(i).strip().isdigit()][:200]
-        try:
-            cost = float(p.get("cost"))
-        except (TypeError, ValueError):
-            self._json(400, {"error": "a cost is needed"})
-            return
-        if not ids or cost < 0:
+        ids = list(dict.fromkeys(
+            int(i) for i in (p.get("ids") or []) if str(i).strip().isdigit()
+        ))[:200]
+        cost = self._money_amount(p.get("cost"))
+        currency = self._money_currency(p.get("currency") or "INR")
+        if not ids or cost is None:
             self._json(400, {"error": "pick at least one build and a cost"})
             return
-        currency = (str(p.get("currency") or "INR").strip().upper())[:8] or "INR"
+        if not currency:
+            self._json(400, {"error": "currency must be INR or USD"})
+            return
         done, skipped = self._set_costs(ids, cost, currency, actor)
         hub_event("supplier_cost", f"cost set on {len(done)} build(s)", actor, "supplier")
         self._json(200, {"ok": True, "updated": len(done), "skipped": skipped})
@@ -3338,20 +4535,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         conn = db()
         bills = [dict(b) for b in conn.execute(
-            "SELECT * FROM supplier_bills ORDER BY id DESC LIMIT 100")]
+            "SELECT id, bill_no, created_at, status, currency, subtotal, "
+            "shipping_cost, total, notes, acknowledged_at, acknowledged_by, "
+            "tracking_code FROM supplier_bills ORDER BY id DESC LIMIT 100")]
         items = {}
-        for it in conn.execute("SELECT * FROM supplier_bill_items ORDER BY id ASC"):
+        for it in conn.execute(
+                "SELECT bi.id, bi.bill_id, bi.order_id, bi.description, bi.ref_code, "
+                "bi.quantity, bi.cost, COALESCE(o.order_no, bi.order_id) AS order_no "
+                "FROM supplier_bill_items bi LEFT JOIN orders o ON o.id=bi.order_id "
+                "ORDER BY bi.id ASC"):
             items.setdefault(it["bill_id"], []).append(dict(it))
         conn.close()
         for b in bills:
+            # The UI only needs a human label, never a staff email address.
+            b["acknowledged_by"] = (b.get("acknowledged_by") or "").split("@", 1)[0]
             b["items"] = items.get(b["id"], [])
             b["total_inr"] = round(self._to_inr(b["total"], b["currency"]), 2)
         self._json(200, {"bills": bills, "can_acknowledge": self._has_tool("orders")})
 
     def _handle_supplier_bill_create(self):
         """Turn a selection of costed builds into a bill. Freight is one line
-        on the bill rather than smeared across the builds, so per-build cost
-        stays the true build cost."""
+        on the bill rather than smeared across the builds, so per-watch cost
+        stays the true unit cost."""
         if not self._supplier_ok():
             self._json(403, {"error": "not available for this account"})
             return
@@ -3366,21 +4571,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not ids:
             self._json(400, {"error": "pick at least one build"})
             return
-        try:
-            shipping = float(p.get("shipping_cost") or 0)
-        except (TypeError, ValueError):
-            shipping = 0.0
-        currency = (str(p.get("currency") or "INR").strip().upper())[:8] or "INR"
+        shipping = self._money_amount(p.get("shipping_cost") or 0)
+        currency = self._money_currency(p.get("currency") or "INR")
+        if shipping is None:
+            self._json(400, {"error": "shipping needs to be a non-negative amount"})
+            return
+        if not currency:
+            self._json(400, {"error": "currency must be INR or USD"})
+            return
         notes = str(p.get("notes") or "").strip()[:400]
 
         conn = db()
+        conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute(
-            "SELECT id, product, movement, ref_code, supplier_cost, supplier_cost_ccy, "
-            "bill_id FROM orders WHERE id IN ({}) AND supplier_visible=1".format(
+            "SELECT id, product, movement, ref_code, quantity, status, "
+            "supplier_cost, supplier_cost_ccy, bill_id "
+            "FROM orders WHERE id IN ({}) AND supplier_visible=1".format(
                 ",".join("?" * len(ids))), ids).fetchall()
-        if not rows:
+        if len(rows) != len(ids):
             conn.close()
-            self._json(400, {"error": "none of those builds are in the queue"})
+            self._json(409, {
+                "error": "one or more selected builds left the supplier queue; refresh and try again"})
+            return
+        cancelled = [r["id"] for r in rows
+                     if str(r["status"] or "").strip().lower() in
+                     ("cancelled", "canceled", "refunded", "voided")]
+        if cancelled:
+            conn.close()
+            self._json(409, {
+                "error": "cancelled builds cannot be billed: "
+                         + ", ".join(f"#{i}" for i in cancelled)})
             return
         already = [r["id"] for r in rows if r["bill_id"]]
         if already:
@@ -3389,7 +4609,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                       + ", ".join(f"#{i}" for i in already)})
             return
 
-        bill_no = self._next_bill_no(conn)
         # A build with no price set falls to its movement's default rather
         # than blocking the batch. The rate is written onto the line as a
         # real number, so a batch reads the same whether it was priced by
@@ -3397,29 +4616,67 @@ class Handler(http.server.BaseHTTPRequestHandler):
         priced, defaulted = [], 0
         for r in rows:
             cost = r["supplier_cost"]
+            cost_currency = self._money_currency(r["supplier_cost_ccy"] or "INR")
             if cost is None:
                 cost, label = self._default_cost(r["product"], r["movement"])
+                cost_currency = "INR"
                 defaulted += 1
-                conn.execute("UPDATE orders SET supplier_cost=?, supplier_cost_ccy=? "
-                             "WHERE id=?", (cost, currency, r["id"]))
-                order_event(conn, r["id"], "cost",
-                            f"default {label} rate applied: {cost:,.0f}", actor)
-            priced.append((r, float(cost)))
+            parsed_cost = self._money_amount(cost)
+            if parsed_cost is None or not cost_currency:
+                conn.close()
+                self._json(409, {"error": f"build #{r['id']} has an invalid saved cost"})
+                return
+            if cost_currency != currency:
+                conn.close()
+                self._json(409, {
+                    "error": (
+                        f"build #{r['id']} is priced in {cost_currency}; "
+                        f"set every selected build to {currency} before creating this bill"
+                    )})
+                return
+            quantity = max(1, int(r["quantity"] or 1))
+            priced.append((
+                r, quantity, parsed_cost,
+                label if r["supplier_cost"] is None else None,
+            ))
 
-        subtotal = sum(c for _, c in priced)
+        raw_shipment_id = p.get("shipment_id")
+        shipment_id = None
+        if raw_shipment_id not in (None, "", 0):
+            try:
+                shipment_id = int(raw_shipment_id)
+            except (TypeError, ValueError):
+                conn.close()
+                self._json(400, {"error": "bad shipment"})
+                return
+            if not conn.execute("SELECT 1 FROM shipments WHERE id=?",
+                                (shipment_id,)).fetchone():
+                conn.close()
+                self._json(404, {"error": "no such shipment"})
+                return
+
+        bill_no = self._next_bill_no(conn)
+        for r, _, cost, default_label in priced:
+            if default_label:
+                conn.execute("UPDATE orders SET supplier_cost=?, supplier_cost_ccy='INR' "
+                             "WHERE id=?", (cost, r["id"]))
+                order_event(conn, r["id"], "cost",
+                            f"default {default_label} rate applied: INR {cost:,.0f}", actor)
+
+        subtotal = sum(quantity * cost for _, quantity, cost, _ in priced)
         total = subtotal + shipping
         cur = conn.execute(
             "INSERT INTO supplier_bills (bill_no, created_by, status, currency, "
             "subtotal, shipping_cost, total, shipment_id, notes) "
             "VALUES (?,?,'draft',?,?,?,?,?,?)",
             (bill_no, actor, currency, subtotal, shipping, total,
-             p.get("shipment_id") or None, notes))
+             shipment_id, notes))
         bill_id = cur.lastrowid
-        for r, cost in priced:
+        for r, quantity, cost, _ in priced:
             conn.execute(
                 "INSERT INTO supplier_bill_items (bill_id, order_id, description, "
-                "ref_code, cost) VALUES (?,?,?,?,?)",
-                (bill_id, r["id"], r["product"], r["ref_code"], cost))
+                "ref_code, quantity, cost) VALUES (?,?,?,?,?,?)",
+                (bill_id, r["id"], r["product"], r["ref_code"], quantity, cost))
             conn.execute("UPDATE orders SET bill_id=? WHERE id=?", (bill_id, r["id"]))
             order_event(conn, r["id"], "billed", f"added to batch {bill_no}", actor)
         conn.commit()
@@ -3441,53 +4698,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             p = json.loads(self.rfile.read(min(length, 65536)).decode())
             bid = int(p.get("id"))
-            shipping = float(p.get("shipping_cost") or 0)
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
             self._json(400, {"error": "bad request"})
             return
-        if shipping < 0:
-            self._json(400, {"error": "shipping cannot be negative"})
+        shipping = self._money_amount(p.get("shipping_cost") or 0)
+        if shipping is None:
+            self._json(400, {"error": "shipping needs to be a non-negative amount"})
             return
         notes = str(p.get("notes") or "").strip()[:400]
         costs = p.get("costs") or {}
         if not isinstance(costs, dict):
             costs = {}
         conn = db()
-        bill = conn.execute("SELECT status FROM supplier_bills WHERE id=?", (bid,)).fetchone()
-        paid = conn.execute(
-            "SELECT COALESCE(SUM(amount),0) FROM supplier_payments WHERE bill_id=?",
-            (bid,)).fetchone()[0]
+        conn.execute("BEGIN IMMEDIATE")
+        bill = conn.execute("SELECT status, currency FROM supplier_bills WHERE id=?",
+                            (bid,)).fetchone()
         if not bill:
+            conn.rollback()
             conn.close()
             self._json(404, {"error": "no such batch"})
             return
+        paid = conn.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM supplier_payments WHERE bill_id=?",
+            (bid,)).fetchone()[0]
         if bill["status"] != "draft" or float(paid or 0) > 0:
+            conn.rollback()
             conn.close()
             self._json(409, {"error": "accepted or paid batches cannot be edited"})
             return
         items = conn.execute(
-            "SELECT id, order_id, cost FROM supplier_bill_items WHERE bill_id=?",
+            "SELECT id, order_id, quantity, cost FROM supplier_bill_items WHERE bill_id=?",
             (bid,)).fetchall()
         subtotal = 0.0
+        prepared = []
         for item in items:
             raw = costs.get(str(item["id"]), item["cost"])
-            try:
-                cost = float(raw)
-            except (TypeError, ValueError):
+            cost = self._money_amount(raw)
+            if cost is None:
+                conn.rollback()
                 conn.close()
                 self._json(400, {"error": "every line needs a valid cost"})
                 return
-            if cost < 0:
-                conn.close()
-                self._json(400, {"error": "costs cannot be negative"})
-                return
-            subtotal += cost
+            subtotal += cost * max(1, int(item["quantity"] or 1))
+            prepared.append((item, cost))
+        for item, cost in prepared:
             conn.execute("UPDATE supplier_bill_items SET cost=? WHERE id=?",
                          (cost, item["id"]))
-            conn.execute("UPDATE orders SET supplier_cost=? WHERE id=?",
-                         (cost, item["order_id"]))
+            conn.execute("UPDATE orders SET supplier_cost=?, supplier_cost_ccy=? WHERE id=?",
+                         (cost, bill["currency"], item["order_id"]))
             order_event(conn, item["order_id"], "cost",
-                        f"bill line updated to {cost:,.2f}", self._order_user())
+                        f"bill line updated to {bill['currency']} {cost:,.2f}",
+                        self._order_user())
         total = subtotal + shipping
         conn.execute("UPDATE supplier_bills SET subtotal=?, shipping_cost=?, total=?, notes=? "
                      "WHERE id=?", (subtotal, shipping, total, notes, bid))
@@ -3534,8 +4795,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         conn = db()
         bill = conn.execute("SELECT * FROM supplier_bills WHERE id=?", (bid,)).fetchone()
-        n = conn.execute("SELECT COUNT(*) FROM supplier_bill_items WHERE bill_id=?",
-                         (bid,)).fetchone()[0]
+        n = conn.execute(
+            "SELECT COALESCE(SUM(quantity),0) FROM supplier_bill_items WHERE bill_id=?",
+            (bid,)).fetchone()[0]
         conn.close()
         if not bill:
             self._json(404, {"error": "no such batch"})
@@ -3570,7 +4832,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                       else f"{bill['bill_no']} WhatsApp send failed", actor, "supplier")
 
         threading.Thread(target=_deliver, daemon=True).start()
-        self._json(200, {"ok": True, "queued": True, "target": target})
+        self._json(200, {"ok": True, "queued": True})
 
     def _handle_supplier_bill_tracking(self):
         """One courier reference for a whole batch. Editable after
@@ -3593,8 +4855,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             bid = 0
         code = str(p.get("tracking_code") or "").strip()[:80]
         conn = db()
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT bill_no FROM supplier_bills WHERE id=?", (bid,)).fetchone()
         if not row:
+            conn.rollback()
             conn.close()
             self._json(404, {"error": "no such batch"})
             return
@@ -3609,17 +4873,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
         self._json(200, {"ok": True})
 
-    def _ledger_supplier_id(self, lconn):
+    def _ledger_supplier_id(self, lconn, schema="main"):
         """Hannan builds the watches; the 31 invoices already in the Ledger
         are parts from a different company in China. Keeping him as his own
         supplier row is what stops build spend and parts spend from being
         averaged into one meaningless per-supplier number."""
-        row = lconn.execute("SELECT id FROM suppliers WHERE name=?",
+        prefix = "ledger." if schema == "ledger" else ""
+        row = lconn.execute(f"SELECT id FROM {prefix}suppliers WHERE name=?",
                             ("TimeLabsCo x Sunesra",)).fetchone()
         if row:
             return row[0]
         cur = lconn.execute(
-            "INSERT INTO suppliers (name, country, platform, default_currency, notes) "
+            f"INSERT INTO {prefix}suppliers "
+            "(name, country, platform, default_currency, notes) "
             "VALUES (?,?,?,?,?)",
             ("TimeLabsCo x Sunesra", "India", "whatsapp", "USD",
              "Build partner (Hannan) — assembles the watches. Invoices here are "
@@ -3646,49 +4912,52 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             bid = 0
         conn = db()
-        bill = conn.execute("SELECT * FROM supplier_bills WHERE id=?", (bid,)).fetchone()
-        if not bill:
-            conn.close()
-            self._json(404, {"error": "no such bill"})
-            return
-        if bill["status"] == "acknowledged":
-            conn.close()
-            self._json(400, {"error": "already acknowledged"})
-            return
-        items = conn.execute("SELECT * FROM supplier_bill_items WHERE bill_id=?",
-                             (bid,)).fetchall()
-
-        rate = self._USD_INR if (bill["currency"] or "USD").upper() == "USD" else 1.0
         invoice_id = None
         try:
-            lconn = sqlite3.connect(SUPPLIERS_DB, timeout=5)
-            lconn.row_factory = sqlite3.Row
-            sup_id = self._ledger_supplier_id(lconn)
-            cur = lconn.execute(
-                "INSERT INTO invoices (supplier_id, invoice_no, order_date, currency, "
-                "subtotal, shipping_cost, discount, total, exchange_rate, total_inr, "
+            conn.execute("ATTACH DATABASE ? AS ledger", (SUPPLIERS_DB,))
+            conn.execute("BEGIN IMMEDIATE")
+            bill = conn.execute(
+                "SELECT * FROM supplier_bills WHERE id=?", (bid,)).fetchone()
+            if not bill:
+                conn.rollback()
+                conn.close()
+                self._json(404, {"error": "no such bill"})
+                return
+            if bill["status"] == "acknowledged":
+                conn.rollback()
+                conn.close()
+                self._json(400, {"error": "already acknowledged"})
+                return
+            items = conn.execute(
+                "SELECT * FROM supplier_bill_items WHERE bill_id=?",
+                (bid,)).fetchall()
+            rate = (
+                self._USD_INR
+                if (bill["currency"] or "USD").upper() == "USD"
+                else 1.0
+            )
+            sup_id = self._ledger_supplier_id(conn, "ledger")
+            cur = conn.execute(
+                "INSERT INTO ledger.invoices "
+                "(supplier_id, invoice_no, order_date, currency, subtotal, "
+                "shipping_cost, discount, total, exchange_rate, total_inr, "
                 "payment_status, parsed_by, notes) "
                 "VALUES (?,?,?,?,?,?,0,?,?,?,?,?,?)",
-                (sup_id, bill["bill_no"], time.strftime("%Y-%m-%d"), bill["currency"],
-                 bill["subtotal"], bill["shipping_cost"], bill["total"], rate,
-                 bill["total"] * rate, "unpaid", "supplier-queue",
-                 f"Acknowledged by {actor}"))
+                (sup_id, bill["bill_no"], time.strftime("%Y-%m-%d"),
+                 bill["currency"], bill["subtotal"], bill["shipping_cost"],
+                 bill["total"], rate, bill["total"] * rate, "unpaid",
+                 "supplier-queue", f"Acknowledged by {actor}"))
             invoice_id = cur.lastrowid
             for it in items:
-                lconn.execute(
-                    "INSERT INTO invoice_items (invoice_id, description_raw, "
-                    "description_en, part_category, quantity, unit_price, line_total, "
-                    "unit_price_inr) VALUES (?,?,?,?,1,?,?,?)",
+                quantity = max(1, int(it["quantity"] or 1))
+                conn.execute(
+                    "INSERT INTO ledger.invoice_items "
+                    "(invoice_id, description_raw, description_en, part_category, "
+                    "quantity, unit_price, line_total, unit_price_inr) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
                     (invoice_id, it["description"], it["description"], "build",
-                     it["cost"], it["cost"], (it["cost"] or 0) * rate))
-            lconn.commit()
-            lconn.close()
-        except Exception as e:
-            conn.close()
-            self._json(500, {"error": f"couldn't write to the Ledger: {e}"})
-            return
-
-        try:
+                     quantity, it["cost"], (it["cost"] or 0) * quantity,
+                     (it["cost"] or 0) * rate))
             conn.execute("UPDATE supplier_bills SET status='acknowledged', "
                          "acknowledged_at=datetime('now'), acknowledged_by=?, "
                          "ledger_invoice_id=? WHERE id=?", (actor, invoice_id, bid))
@@ -3698,29 +4967,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                 f"bill {bill['bill_no']} acknowledged — cost locked", actor)
             conn.commit()
         except Exception as e:
+            if conn.in_transaction:
+                conn.rollback()
             conn.close()
-            # The Ledger invoice above is already committed in a separate
-            # database — two connections, no shared transaction, so this
-            # can't roll back atomically. Undo it by hand rather than leave
-            # an invoice with no bill pointing at it (permanently inflates
-            # Ledger totals, invisible from this side). If even that fails,
-            # this is now the one place that knows about the orphan, so it
-            # says so loudly instead of a bare 500.
-            try:
-                lconn = sqlite3.connect(SUPPLIERS_DB, timeout=5)
-                lconn.execute("DELETE FROM invoice_items WHERE invoice_id=?", (invoice_id,))
-                lconn.execute("DELETE FROM invoices WHERE id=?", (invoice_id,))
-                lconn.commit()
-                lconn.close()
-                self._json(500, {"error": f"couldn't mark the bill acknowledged: {e}"})
-            except Exception as e2:
-                print(f"[supplier-bill] ORPHANED ledger invoice {invoice_id} for bill "
-                      f"{bid} ({bill['bill_no']}) — hermes.db update failed ({e}) and "
-                      f"the compensating Ledger delete also failed ({e2}); needs manual "
-                      f"cleanup in suppliers.db", flush=True)
-                self._json(500, {"error": f"couldn't mark the bill acknowledged, and "
-                                           f"couldn't undo the Ledger invoice either "
-                                           f"(id {invoice_id}) — needs manual cleanup"})
+            print(f"[supplier-bill] atomic acknowledge failed for bill {bid}: {e}",
+                  flush=True)
+            self._json(500, {
+                "error": "The bill and Ledger were not changed. Try acknowledge again."})
             return
         conn.close()
         hub_event("supplier_bill", f"{bill['bill_no']} acknowledged — "
@@ -3748,32 +5001,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             bid = 0
         conn = db()
-        bill = conn.execute("SELECT * FROM supplier_bills WHERE id=?", (bid,)).fetchone()
-        if not bill:
-            conn.close()
-            self._json(404, {"error": "no such bill"})
-            return
-        if bill["ledger_invoice_id"]:
-            try:
-                lconn = sqlite3.connect(SUPPLIERS_DB, timeout=5)
-                lconn.execute("DELETE FROM invoice_items WHERE invoice_id=?",
-                              (bill["ledger_invoice_id"],))
-                lconn.execute("DELETE FROM invoices WHERE id=?",
-                              (bill["ledger_invoice_id"],))
-                lconn.commit()
-                lconn.close()
-            except Exception as e:
-                conn.close()
-                self._json(500, {"error": f"couldn't reverse the Ledger entry: {e}"})
-                return
-        items = conn.execute("SELECT order_id FROM supplier_bill_items WHERE bill_id=?",
-                             (bid,)).fetchall()
-        for it in items:
-            if it["order_id"]:
-                conn.execute("UPDATE orders SET bill_id=NULL WHERE id=?", (it["order_id"],))
-                order_event(conn, it["order_id"], "bill_deleted",
-                            f"bill {bill['bill_no']} deleted — cost editable again", actor)
         try:
+            conn.execute("ATTACH DATABASE ? AS ledger", (SUPPLIERS_DB,))
+            conn.execute("BEGIN IMMEDIATE")
+            bill = conn.execute(
+                "SELECT * FROM supplier_bills WHERE id=?", (bid,)).fetchone()
+            if not bill:
+                conn.rollback()
+                conn.close()
+                self._json(404, {"error": "no such bill"})
+                return
+            if bill["ledger_invoice_id"]:
+                conn.execute(
+                    "DELETE FROM ledger.invoice_items WHERE invoice_id=?",
+                    (bill["ledger_invoice_id"],))
+                conn.execute(
+                    "DELETE FROM ledger.invoices WHERE id=?",
+                    (bill["ledger_invoice_id"],))
+            items = conn.execute(
+                "SELECT order_id FROM supplier_bill_items WHERE bill_id=?",
+                (bid,)).fetchall()
+            for it in items:
+                if it["order_id"]:
+                    conn.execute(
+                        "UPDATE orders SET bill_id=NULL WHERE id=?",
+                        (it["order_id"],))
+                    order_event(
+                        conn, it["order_id"], "bill_deleted",
+                        f"bill {bill['bill_no']} deleted — cost editable again",
+                        actor)
             # Payments pointed at this bill go back to being general credit
             # rather than vanishing with it — the money was still sent.
             conn.execute("UPDATE supplier_payments SET bill_id=NULL WHERE bill_id=?", (bid,))
@@ -3781,18 +5037,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.execute("DELETE FROM supplier_bills WHERE id=?", (bid,))
             conn.commit()
         except Exception as e:
+            if conn.in_transaction:
+                conn.rollback()
             conn.close()
-            # The Ledger invoice is already gone from the other database at
-            # this point, committed separately — no shared transaction to
-            # roll back to. Nothing to compensate with (the deleted invoice's
-            # data isn't held onto), so this can only say plainly what's now
-            # out of sync rather than silently leaving bid's ledger_invoice_id
-            # pointing at nothing.
-            print(f"[supplier-bill] bill {bid} ({bill['bill_no']}): Ledger invoice "
-                  f"{bill['ledger_invoice_id']} was deleted but the hermes.db side failed "
-                  f"({e}) — the bill row is now inconsistent, needs manual cleanup", flush=True)
-            self._json(500, {"error": f"the Ledger entry was reversed, but removing the "
-                                       f"bill itself failed: {e} — needs manual cleanup"})
+            print(f"[supplier-bill] atomic delete failed for bill {bid}: {e}",
+                  flush=True)
+            self._json(500, {
+                "error": "The bill and Ledger were not changed. Try delete again."})
             return
         conn.close()
         hub_event("supplier_bill", f"{bill['bill_no']} deleted and reversed", actor, "supplier")
@@ -3815,25 +5066,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "WHERE status='acknowledged' ORDER BY id DESC").fetchall()
             pays = conn.execute(
                 "SELECT bill_id, amount, currency FROM supplier_payments").fetchall()
-            draft = conn.execute(
-                "SELECT COALESCE(SUM(total),0) t, COUNT(*) n FROM supplier_bills "
-                "WHERE status='draft'").fetchone()
+            draft_rows = conn.execute(
+                "SELECT total, currency FROM supplier_bills "
+                "WHERE status='draft'").fetchall()
             # What's been costed but not yet put on any bill at all — the
             # gap between work priced and money actually claimed. Summed
             # through _to_inr rather than in SQL, because a plain SUM() would
             # silently add dollars to rupees.
             unbilled_rows = conn.execute(
-                "SELECT supplier_cost, supplier_cost_ccy FROM orders "
+                "SELECT supplier_cost, supplier_cost_ccy, quantity FROM orders "
                 "WHERE supplier_visible=1 AND bill_id IS NULL "
-                "AND supplier_cost IS NOT NULL").fetchall()
+                "AND supplier_cost IS NOT NULL "
+                "AND LOWER(TRIM(COALESCE(status,''))) NOT IN "
+                "('cancelled','canceled','refunded','voided')").fetchall()
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
             return
         conn.close()
 
-        unbilled_inr = sum(self._to_inr(r["supplier_cost"], r["supplier_cost_ccy"])
-                           for r in unbilled_rows)
+        unbilled_inr = sum(
+            self._to_inr(
+                r["supplier_cost"] * max(1, int(r["quantity"] or 1)),
+                r["supplier_cost_ccy"])
+            for r in unbilled_rows)
+        draft_total_inr = sum(
+            self._to_inr(r["total"], r["currency"]) for r in draft_rows)
         paid_by_bill, unallocated_inr = {}, 0.0
         for p in pays:
             inr = self._to_inr(p["amount"], p["currency"])
@@ -3859,8 +5117,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "total_cost_inr": round(total_cost_inr, 2),
             "total_paid_inr": round(total_paid_inr, 2),
             "unallocated_paid_inr": round(unallocated_inr, 2),
-            "draft_total": round(draft["t"] or 0, 2),
-            "draft_count": draft["n"] or 0,
+            "draft_total": round(draft_total_inr, 2),
+            "draft_count": len(draft_rows),
             "unbilled_cost_inr": round(unbilled_inr, 2),
             "bills": out_bills})
 
@@ -3879,48 +5137,63 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._json(400, {"error": "bad request"})
             return
-        try:
-            amount = float(p.get("amount"))
-        except (TypeError, ValueError):
+        amount = self._money_amount(p.get("amount"), positive=True)
+        if amount is None:
             self._json(400, {"error": "a payment amount is needed"})
             return
-        if amount <= 0:
-            self._json(400, {"error": "amount should be positive"})
+        currency = self._money_currency(p.get("currency") or "INR")
+        if not currency:
+            self._json(400, {"error": "currency must be INR or USD"})
             return
-        currency = (str(p.get("currency", "INR")).strip()[:8] or "INR").upper()
         note = str(p.get("note", "")).strip()[:300]
         # Payments settle a bill now that bills are what create the debt.
         # Leaving it unset is still valid — money sent on account, before
         # anyone has agreed which bill it belongs to.
         raw_bid = p.get("bill_id")
-        conn = db()
         bill_id, code = None, None
         if raw_bid not in (None, "", 0):
             try:
                 bill_id = int(raw_bid)
             except (TypeError, ValueError):
-                conn.close()
                 self._json(400, {"error": "bad bill"})
                 return
-            row = conn.execute("SELECT bill_no FROM supplier_bills WHERE id=?",
-                              (bill_id,)).fetchone()
-            if not row:
-                conn.close()
-                self._json(404, {"error": "no such bill"})
-                return
-            code = row["bill_no"]
-        cur = conn.execute(
-            "INSERT INTO supplier_payments (bill_id, amount, currency, note, actor) "
-            "VALUES (?,?,?,?,?)", (bill_id, amount, currency, note, actor))
-        pid = cur.lastrowid
-        if bill_id:
-            for oid in [r["order_id"] for r in conn.execute(
-                    "SELECT order_id FROM supplier_bill_items WHERE bill_id=?", (bill_id,))
-                    if r["order_id"]]:
-                order_event(conn, oid, "payment",
-                           f"{currency} {amount:.2f} recorded against {code}", actor)
-        conn.commit()
-        conn.close()
+        conn = db()
+        try:
+            # Bill deletion also takes an immediate writer lock. Hold the same
+            # lock from bill validation through the payment and audit events,
+            # otherwise a concurrent delete can leave this money pointing at
+            # a bill that no longer exists (foreign keys are legacy-off here).
+            conn.execute("BEGIN IMMEDIATE")
+            if bill_id is not None:
+                row = conn.execute(
+                    "SELECT bill_no FROM supplier_bills WHERE id=?",
+                    (bill_id,)).fetchone()
+                if not row:
+                    conn.rollback()
+                    self._json(404, {"error": "no such bill"})
+                    return
+                code = row["bill_no"]
+            cur = conn.execute(
+                "INSERT INTO supplier_payments (bill_id, amount, currency, note, actor) "
+                "VALUES (?,?,?,?,?)", (bill_id, amount, currency, note, actor))
+            pid = cur.lastrowid
+            if bill_id:
+                for oid in [r["order_id"] for r in conn.execute(
+                        "SELECT order_id FROM supplier_bill_items WHERE bill_id=?",
+                        (bill_id,)) if r["order_id"]]:
+                    order_event(
+                        conn, oid, "payment",
+                        f"{currency} {amount:.2f} recorded against {code}", actor)
+            conn.commit()
+        except Exception as e:
+            if conn.in_transaction:
+                conn.rollback()
+            print(f"[supplier-payment] record failed: {e}", flush=True)
+            self._json(500, {
+                "error": "The payment was not recorded. Try again."})
+            return
+        finally:
+            conn.close()
         hub_event("supplier_payment", f"{currency} {amount:.2f}" +
                  (f" -> bill {code}" if bill_id else " (on account)"),
                  actor, app="orders")
@@ -3948,9 +5221,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         code = str(p.get("tracking_code", "")).strip()[:80]
         conn = db()
-        row = conn.execute("SELECT tracking_code FROM orders WHERE id=? AND supplier_visible=1",
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT tracking_code, order_no FROM orders "
+            "WHERE id=? AND supplier_visible=1",
                           (oid,)).fetchone()
         if not row:
+            conn.rollback()
             conn.close()
             self._json(404, {"error": "no such order"})
             return
@@ -3961,7 +5238,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                        (f"tracking {code}" if code else "tracking cleared"), actor)
         conn.commit()
         conn.close()
-        hub_event("order_tracking", f"#{oid}: {code or 'cleared'}", actor, app="orders")
+        hub_event("order_tracking", f"#{row['order_no'] or oid}: {code or 'cleared'}",
+                  actor, app="orders")
         self._json(200, {"ok": True, "id": oid, "tracking_code": code})
 
     def _status_card(self, conn, oid):
@@ -3969,7 +5247,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         as copied text, a WhatsApp message or a PDF, so the three can't drift
         into saying different things about the same order."""
         o = conn.execute(
-            "SELECT id, received_at, product, quantity, status, tracking_code, ref_code, "
+            "SELECT id, order_no, received_at, product, quantity, status, tracking_code, "
+            "ref_code, "
             "case_style, dial_colour, dial_style, case_colour, movement, watch_size "
             "FROM orders WHERE id=? AND supplier_visible=1", (oid,)).fetchone()
         if not o:
@@ -3977,12 +5256,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
         spec = " · ".join(str(o[k]) for k in
                           ("case_style", "dial_colour", "dial_style", "case_colour",
                            "movement", "watch_size") if o[k])
+        safe_event_kinds = (
+            "created", "status", "supplier", "photos", "cost", "billed",
+            "bill_acknowledged", "bill_deleted", "tracking", "payment",
+            "shipment", "note",
+        )
+        marks = ",".join("?" for _ in safe_event_kinds)
         events = conn.execute(
             "SELECT created_at, kind, detail FROM order_events "
-            "WHERE order_id=? ORDER BY id ASC", (oid,)).fetchall()
+            f"WHERE order_id=? AND kind IN ({marks}) ORDER BY id ASC",
+            (oid, *safe_event_kinds)).fetchall()
         # Lead with the original order number when there is one — that's the
         # number the supplier already knows the build by.
-        head_num = f"Order {o['ref_code']}" if o["ref_code"] else f"Order #{o['id']}"
+        labs_num = o["order_no"] or o["id"]
+        head_num = (
+            f"Order {o['ref_code']} · Labs #{labs_num}"
+            if o["ref_code"] else f"Order #{labs_num}"
+        )
         lines = [f"{head_num} — {o['product'] or ''}"]
         if o["quantity"] and o["quantity"] > 1:
             lines.append(f"Quantity: {o['quantity']}")
@@ -4094,19 +5384,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             return None
         items = conn.execute(
-            "SELECT * FROM supplier_bill_items WHERE bill_id=? ORDER BY id ASC",
+            "SELECT bi.*, COALESCE(o.order_no, bi.order_id) AS order_no "
+            "FROM supplier_bill_items bi LEFT JOIN orders o ON o.id=bi.order_id "
+            "WHERE bi.bill_id=? ORDER BY bi.id ASC", (bid,)).fetchall()
+        payments = conn.execute(
+            "SELECT amount, currency FROM supplier_payments WHERE bill_id=?",
             (bid,)).fetchall()
-        paid = conn.execute(
-            "SELECT COALESCE(SUM(amount),0) FROM supplier_payments WHERE bill_id=?",
-            (bid,)).fetchone()[0] or 0.0
         conn.close()
 
         raw_ccy = (bill["currency"] or "INR").upper()
+        paid = sum(self._convert_money(p["amount"], p["currency"], raw_ccy)
+                   for p in payments)
         # A rupee sign reads as money; "INR 12,500.00" reads as a database row.
         ccy = "\u20b9" if raw_ccy == "INR" else html_mod.escape(raw_ccy) + " "
         rows = ""
         for it in items:
-            label = it["ref_code"] or (f"#{it['order_id']}" if it["order_id"] else "")
+            quantity = max(1, int(it["quantity"] or 1))
+            line_total = (it["cost"] or 0) * quantity
+            label = it["ref_code"] or (f"#{it['order_no']}" if it["order_no"] else "")
             # The photo is the spec on these builds — a line that just says
             # "White RM mod" doesn't tell anyone which watch was billed, and
             # this PDF gets forwarded to people who never saw the queue.
@@ -4117,8 +5412,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             rows += ('<tr>' + cell + '<td><b>' + html_mod.escape(str(label)) + '</b>'
                      + (f'<br><span class="sub">{html_mod.escape(it["description"] or "")}</span>'
                         if it["description"] else "")
+                     + (f'<br><span class="sub">{quantity} watches</span>'
+                        if quantity != 1 else "")
                      + '</td>'
-                     + f'<td class="n">{ccy}{it["cost"]:,.2f}</td></tr>')
+                     + f'<td class="n">{ccy}{it["cost"]:,.2f}'
+                     + (f'<br><b>{ccy}{line_total:,.2f}</b>' if quantity != 1 else "")
+                     + '</td></tr>')
         if bill["shipping_cost"]:
             rows += ('<tr><td class="shot"></td><td>Shipping</td>'
                      f'<td class="n">{ccy}{bill["shipping_cost"]:,.2f}</td></tr>')
@@ -4210,14 +5509,75 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
         for r in rows:
             try:
-                r["photos"] = json.loads(r.get("photos") or "[]")
+                photos = json.loads(r.get("photos") or "[]")
             except (json.JSONDecodeError, TypeError):
-                r["photos"] = []
+                photos = []
+            # Never expose local filesystem paths to the browser. Each URL is
+            # served through the same content-role check as the drafts list.
+            r["photos"] = [
+                f"/ops/agent/api/reddit/post/photo?id={r['id']}&n={index}"
+                for index, _ in enumerate(photos)
+            ]
             try:
                 r["passes"] = json.loads(r.get("passes") or "{}")
             except (json.JSONDecodeError, TypeError):
                 r["passes"] = {}
         self._json(200, {"posts": rows, "subreddit": "IndiaWatchMods"})
+
+    def _handle_reddit_post_photo(self, query):
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        params = dict(urllib.parse.parse_qsl(query, keep_blank_values=True))
+        try:
+            post_id = int(params.get("id") or 0)
+            index = int(params.get("n") or 0)
+        except (TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        conn = db()
+        row = conn.execute(
+            "SELECT photos FROM reddit_posts WHERE id=?", (post_id,)).fetchone()
+        conn.close()
+        if not row:
+            self._json(404, {"error": "no such draft"})
+            return
+        try:
+            photos = json.loads(row["photos"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            photos = []
+        if not (0 <= index < len(photos)):
+            self._json(404, {"error": "no such photo"})
+            return
+        path = os.path.realpath(str(photos[index]))
+        post_root = os.path.realpath(
+            os.path.join(REDDIT_MEDIA, str(post_id))) + os.sep
+        if (not path.startswith(post_root) or not os.path.isfile(path)
+                or os.path.splitext(path)[1].lower()
+                not in (".jpg", ".jpeg", ".png", ".webp")):
+            self._json(404, {"error": "photo missing"})
+            return
+        try:
+            with open(path, "rb") as source:
+                data = source.read()
+        except OSError:
+            self._json(404, {"error": "photo unreadable"})
+            return
+        ext = os.path.splitext(path)[1].lower()
+        content_type = {
+            ".png": "image/png", ".webp": "image/webp",
+        }.get(ext, "image/jpeg")
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=3600")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if params.get("download") == "1":
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="reddit-draft-{post_id}-{index + 1}{ext}"')
+        self.end_headers()
+        self.wfile.write(data)
 
     def _handle_reddit_drop_photo(self):
         """Copy a photo the owner picked from Labs Drop into the same upload
@@ -4242,11 +5602,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ext not in (".jpg", ".jpeg", ".png", ".webp"):
             self._json(400, {"error": "only jpg, png, or webp images"})
             return
-        dst = os.path.join(UPLOAD_DIR, secrets.token_hex(8) + ext)
         try:
-            shutil.copyfile(src, dst)
-        except OSError as e:
-            self._json(500, {"error": str(e)})
+            dst = _store_user_upload(
+                self._order_user(), ext, source=src)
+        except ValueError as e:
+            self._json(409, {"error": str(e)})
+            return
+        except OSError:
+            self._json(507, {"error": "the server could not stage that photo"})
             return
         self._json(200, {"path": dst})
 
@@ -4268,61 +5631,129 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         brief = str(p.get("brief") or "").strip()[:2000]
         kind = str(p.get("kind") or "showcase").strip()[:40]
-        photos = [str(x)[:200] for x in (p.get("photos") or [])][:12]
+        raw_photos = p.get("photos") or []
+        photos = []
+        for candidate in raw_photos[:12]:
+            owned = _upload_owned(candidate, actor)
+            if not owned:
+                self._json(400, {
+                    "error": "A draft photo expired or belongs to another account. "
+                             "Attach it again."})
+                return
+            photos.append(owned)
         if not brief and not photos:
             self._json(400, {"error": "add a photo or say something about the build"})
             return
-        conn = db()
-        cur = conn.execute(
-            "INSERT INTO reddit_posts (created_by, kind, brief, photos, status) "
-            "VALUES (?,?,?,?, 'queued')",
-            (actor, kind, brief, json.dumps(photos)))
-        pid = cur.lastrowid
-        conn.commit()
-        conn.close()
+        if not REDDIT_JOB_SLOT.acquire(blocking=False):
+            self._json(409, {"error": "another Reddit draft is still being prepared"})
+            return
+        try:
+            conn = db()
+        except Exception as exc:
+            REDDIT_JOB_SLOT.release()
+            print(f"[reddit_draft] could not open queue database: {exc}", flush=True)
+            self._json(500, {"error": "The draft was not queued. Try again."})
+            return
+        durable_photos = []
+        pid = None
+        queued = False
+        queue_error = None
+        try:
+            cur = conn.execute(
+                "INSERT INTO reddit_posts (created_by, kind, brief, photos, status) "
+                "VALUES (?,?,?,?, 'staging')",
+                (actor, kind, brief, "[]"))
+            pid = cur.lastrowid
+            conn.commit()
+            conn.close()
+            conn = None
 
-        def _work():
+            # Do not hold SQLite's only writer slot while copying up to twelve
+            # large phone photos. The shared content-worker slot prevents this
+            # staging row from being picked up before it is complete.
+            durable_photos = _persist_reddit_photos(pid, photos)
+            conn = db()
+            conn.execute("BEGIN IMMEDIATE")
+            staged = conn.execute(
+                "UPDATE reddit_posts SET photos=?, status='queued', "
+                "queued_at=datetime('now') "
+                "WHERE id=? AND status='staging'",
+                (json.dumps(durable_photos), pid))
+            if staged.rowcount != 1:
+                raise RuntimeError("draft staging row disappeared")
+            conn.commit()
+            queued = True
+        except Exception as e:
+            if conn and conn.in_transaction:
+                conn.rollback()
+            queue_error = e
+        finally:
+            close_ok = False
             try:
-                subprocess.run(["python3", "/root/ops-dashboard/reddit_draft.py",
-                                str(pid)], capture_output=True, text=True, timeout=2400)
-            except Exception as e:
-                print(f"[reddit_draft] runner: {e}", flush=True)
-            c = db()
-            row = c.execute("SELECT status, title FROM reddit_posts WHERE id=?",
-                            (pid,)).fetchone()
-            c.close()
-            ok = row and row["status"] == "ready"
-            hub_event("reddit_post",
-                      f"draft #{pid} " + ("ready" if ok else "failed"), actor, "agent")
-            self._alert(f"*Reddit draft ready*\n{row['title']}\n\nReview it at "
-                        f"ops.timelabsco.in/ops/reddit.html" if ok else
-                        f"Reddit draft #{pid} failed to build.")
-
-        threading.Thread(target=_work, daemon=True).start()
+                if conn:
+                    conn.close()
+                close_ok = True
+            finally:
+                if not queued or not close_ok:
+                    # Cleanup below is deliberately best-effort. Never let a
+                    # disk or second database error strand the content slot.
+                    REDDIT_JOB_SLOT.release()
+        if queue_error is not None:
+            if pid is not None:
+                quarantine = None
+                cleanup = None
+                try:
+                    quarantine = _quarantine_reddit_media(pid)
+                    cleanup = db()
+                    cleanup.execute("BEGIN IMMEDIATE")
+                    cleanup.execute(
+                        "DELETE FROM reddit_posts WHERE id=? AND status='staging'",
+                        (pid,))
+                    cleanup.commit()
+                    _purge_reddit_quarantine(quarantine)
+                except Exception as cleanup_error:
+                    if cleanup and cleanup.in_transaction:
+                        cleanup.rollback()
+                    if quarantine:
+                        try:
+                            _restore_reddit_quarantine(pid, quarantine)
+                        except OSError as restore_error:
+                            print(
+                                "[reddit-media] failed staging restore "
+                                f"{pid}: {restore_error}", flush=True)
+                    print(
+                        f"[reddit_draft] staging cleanup {pid}: {cleanup_error}",
+                        flush=True)
+                finally:
+                    if cleanup:
+                        cleanup.close()
+            print(f"[reddit_draft] could not queue draft: {queue_error}", flush=True)
+            self._json(500, {
+                "error": "The draft was not queued. Its staged photos are still available; "
+                         "try again."})
+            return
+        if not _start_reddit_post_worker(self._alert, slot_held=True):
+            conn = db()
+            try:
+                conn.execute(
+                    "UPDATE reddit_posts SET status='failed', stage='error', "
+                    "error='The durable worker could not start; retry this draft' "
+                    "WHERE id=?", (pid,))
+                conn.commit()
+            finally:
+                conn.close()
+            self._json(500, {"error": "The draft was saved but its worker did not start. "
+                                      "Use Retry on the draft."})
+            return
+        for photo in photos:
+            _forget_upload(photo, remove_data=True)
         self._json(200, {"ok": True, "id": pid, "status": "queued"})
 
     def _alert(self, body):
         """Tell the owner something finished. Uses the health alert
         destination, never the supplier group — Hannan has no reason to see
         Reddit drafts."""
-        target = ""
-        try:
-            with open("/root/ops-dashboard/.env") as f:
-                for line in f:
-                    if line.startswith("HEALTH_ALERT_TARGET="):
-                        target = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        break
-        except OSError:
-            pass
-        if not target:
-            print(f"[alert] no HEALTH_ALERT_TARGET set; would have sent: {body}",
-                  flush=True)
-            return
-        try:
-            subprocess.run(["hermes", "send", "--to", target, "--quiet", body],
-                           capture_output=True, text=True, timeout=120)
-        except Exception as e:
-            print(f"[alert] {e}", flush=True)
+        _send_owner_alert(body)
 
     def _handle_reddit_post_answer(self):
         """Answer the question a pass stopped on, and let the run continue."""
@@ -4344,34 +5775,133 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not answer:
             self._json(400, {"error": "an answer is needed"})
             return
-        conn = db()
-        row = conn.execute("SELECT id FROM reddit_posts WHERE id=?", (pid,)).fetchone()
-        if not row:
-            conn.close()
-            self._json(404, {"error": "no such draft"})
+        if not REDDIT_JOB_SLOT.acquire(blocking=False):
+            self._json(409, {"error": "another Reddit draft is still being prepared"})
             return
-        conn.execute("UPDATE reddit_posts SET answer=?, question=NULL, "
-                     "status='queued', rounds=COALESCE(rounds,0)+1 WHERE id=?",
-                     (answer, pid))
-        conn.commit()
-        conn.close()
-
-        def _work():
+        queued = False
+        try:
+            conn = db()
+        except Exception as exc:
+            REDDIT_JOB_SLOT.release()
+            print(f"[reddit_draft] answer database unavailable: {exc}", flush=True)
+            self._json(500, {"error": "The answer was not queued. Try again."})
+            return
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status FROM reddit_posts WHERE id=?", (pid,)).fetchone()
+            if not row:
+                conn.rollback()
+                self._json(404, {"error": "no such draft"})
+                return
+            if row["status"] != "needs_input":
+                conn.rollback()
+                self._json(409, {"error": "this draft is not waiting for an answer"})
+                return
+            conn.execute("UPDATE reddit_posts SET answer=?, question=NULL, "
+                         "status='queued', started_at=NULL, "
+                         "queued_at=datetime('now'), "
+                         "rounds=COALESCE(rounds,0)+1 WHERE id=?",
+                         (answer, pid))
+            conn.commit()
+            queued = True
+        except Exception as exc:
+            if conn.in_transaction:
+                conn.rollback()
+            print(f"[reddit_draft] answer could not queue: {exc}", flush=True)
+            self._json(500, {"error": "The answer was not queued. Try again."})
+            return
+        finally:
+            close_ok = False
             try:
-                subprocess.run(["python3", "/root/ops-dashboard/reddit_draft.py",
-                                str(pid)], capture_output=True, text=True, timeout=2400)
-            except Exception as e:
-                print(f"[reddit_draft] resume: {e}", flush=True)
-            c = db()
-            r = c.execute("SELECT status, title FROM reddit_posts WHERE id=?",
-                          (pid,)).fetchone()
-            c.close()
-            if r and r["status"] == "ready":
-                self._alert(f"*Reddit draft ready*\n{r['title']}\n\n"
-                            f"ops.timelabsco.in/ops/reddit.html")
-
-        threading.Thread(target=_work, daemon=True).start()
+                conn.close()
+                close_ok = True
+            finally:
+                if not queued or not close_ok:
+                    REDDIT_JOB_SLOT.release()
+        if not _start_reddit_post_worker(self._alert, slot_held=True):
+            conn = db()
+            try:
+                conn.execute(
+                    "UPDATE reddit_posts SET status='failed', stage='error', "
+                    "error='The durable worker could not restart; retry this draft' "
+                    "WHERE id=?", (pid,))
+                conn.commit()
+            finally:
+                conn.close()
+            self._json(500, {"error": "The answer was saved but the worker did not start. "
+                                      "Use Retry on the draft."})
+            return
         self._json(200, {"ok": True})
+
+    def _handle_reddit_post_retry(self):
+        if not self._has_tool("reddit"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            payload = json.loads(self.rfile.read(min(length, 4096)).decode())
+            post_id = int(payload.get("id") or 0)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        if not REDDIT_JOB_SLOT.acquire(blocking=False):
+            self._json(409, {"error": "another Reddit draft is still being prepared"})
+            return
+        queued = False
+        try:
+            conn = db()
+        except Exception as exc:
+            REDDIT_JOB_SLOT.release()
+            print(f"[reddit_draft] retry database unavailable: {exc}", flush=True)
+            self._json(500, {"error": "The retry was not queued. Try again."})
+            return
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status FROM reddit_posts WHERE id=?", (post_id,)).fetchone()
+            if not row:
+                conn.rollback()
+                self._json(404, {"error": "no such draft"})
+                return
+            if row["status"] != "failed":
+                conn.rollback()
+                self._json(409, {"error": "only a failed draft can be retried"})
+                return
+            conn.execute(
+                "UPDATE reddit_posts SET status='queued', stage='retrying', "
+                "error=NULL, finished_at=NULL, started_at=NULL, "
+                "queued_at=datetime('now') WHERE id=?",
+                (post_id,))
+            conn.commit()
+            queued = True
+        except Exception as exc:
+            if conn.in_transaction:
+                conn.rollback()
+            print(f"[reddit_draft] retry could not queue: {exc}", flush=True)
+            self._json(500, {"error": "The retry was not queued. Try again."})
+            return
+        finally:
+            close_ok = False
+            try:
+                conn.close()
+                close_ok = True
+            finally:
+                if not queued or not close_ok:
+                    REDDIT_JOB_SLOT.release()
+        if not _start_reddit_post_worker(self._alert, slot_held=True):
+            conn = db()
+            try:
+                conn.execute(
+                    "UPDATE reddit_posts SET status='failed', stage='error', "
+                    "error='The durable worker could not restart; retry again' WHERE id=?",
+                    (post_id,))
+                conn.commit()
+            finally:
+                conn.close()
+            self._json(500, {"error": "The worker did not start; retry again."})
+            return
+        self._json(200, {"ok": True, "id": post_id})
 
     def _handle_reddit_post_update(self):
         """Edit a draft before it goes out, or mark it as posted."""
@@ -4389,27 +5919,71 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             pid = 0
         conn = db()
-        row = conn.execute("SELECT id FROM reddit_posts WHERE id=?", (pid,)).fetchone()
-        if not row:
-            conn.close()
-            self._json(404, {"error": "no such draft"})
+        quarantine = None
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status, photos FROM reddit_posts WHERE id=?",
+                (pid,)).fetchone()
+            if not row:
+                conn.rollback()
+                self._json(404, {"error": "no such draft"})
+                return
+            active = row["status"] in ("queued", "running", "staging")
+            scheduling = (
+                p.get("slot_date") is not None
+                or p.get("assigned_to") is not None)
+            if active and not scheduling:
+                conn.rollback()
+                self._json(
+                    409, {"error": "wait for the active draft run before editing it"})
+                return
+            if scheduling:
+                conn.execute(
+                    "UPDATE reddit_posts SET slot_date=?, assigned_to=? WHERE id=?",
+                    (str(p.get("slot_date") or "")[:10] or None,
+                     str(p.get("assigned_to") or "")[:80] or None, pid))
+            elif p.get("posted"):
+                conn.execute(
+                    "UPDATE reddit_posts SET status='posted', "
+                    "posted_at=datetime('now'), posted_url=? WHERE id=?",
+                    (str(p.get("url") or "")[:400], pid))
+            elif p.get("discard"):
+                try:
+                    photos = json.loads(row["photos"] or "[]")
+                except (TypeError, json.JSONDecodeError):
+                    photos = [True]
+                quarantine = _quarantine_reddit_media(pid)
+                if photos and not quarantine:
+                    conn.rollback()
+                    self._json(
+                        409,
+                        {"error": "The draft's stored photos are missing. "
+                                  "Repair or restore them before discarding."})
+                    return
+                conn.execute("DELETE FROM reddit_posts WHERE id=?", (pid,))
+            else:
+                conn.execute(
+                    "UPDATE reddit_posts SET title=?, body=? WHERE id=?",
+                    (str(p.get("title") or "")[:300],
+                     str(p.get("body") or "")[:20000], pid))
+            conn.commit()
+        except Exception as exc:
+            if conn.in_transaction:
+                conn.rollback()
+            if quarantine:
+                try:
+                    _restore_reddit_quarantine(pid, quarantine)
+                except OSError as restore_exc:
+                    print(f"[reddit-media] restore after failed discard: {restore_exc}",
+                          flush=True)
+            print(f"[reddit] draft update failed: {exc}", flush=True)
+            self._json(500, {"error": "The draft was not changed. Try again."})
             return
-        if p.get("slot_date") is not None or p.get("assigned_to") is not None:
-            conn.execute("UPDATE reddit_posts SET slot_date=?, assigned_to=? WHERE id=?",
-                         (str(p.get("slot_date") or "")[:10] or None,
-                          str(p.get("assigned_to") or "")[:80] or None, pid))
-        elif p.get("posted"):
-            conn.execute("UPDATE reddit_posts SET status='posted', "
-                         "posted_at=datetime('now'), posted_url=? WHERE id=?",
-                         (str(p.get("url") or "")[:400], pid))
-        elif p.get("discard"):
-            conn.execute("DELETE FROM reddit_posts WHERE id=?", (pid,))
-        else:
-            conn.execute("UPDATE reddit_posts SET title=?, body=? WHERE id=?",
-                         (str(p.get("title") or "")[:300],
-                          str(p.get("body") or "")[:20000], pid))
-        conn.commit()
-        conn.close()
+        finally:
+            conn.close()
+        if p.get("discard") and quarantine:
+            _purge_reddit_quarantine(quarantine)
         self._json(200, {"ok": True})
 
     def _handle_reddit_setup(self):
@@ -4441,19 +6015,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if kind not in ("rules", "sidebar", "flair"):
             self._json(400, {"error": "unknown piece"})
             return
+        if not REDDIT_JOB_SLOT.acquire(blocking=False):
+            self._json(409, {"error": "another Reddit draft is still being prepared"})
+            return
 
         def _work():
+            ok = False
             try:
                 r = subprocess.run(
                     ["python3", "/root/ops-dashboard/reddit_setup.py", kind],
                     capture_output=True, text=True, timeout=900)
                 if r.returncode != 0:
                     print(f"[reddit_setup] {kind}: {r.stderr[:200]}", flush=True)
+                else:
+                    ok = True
             except Exception as e:
                 print(f"[reddit_setup] {kind}: {e}", flush=True)
-            hub_event("reddit_setup", f"{kind} drafted", actor, "agent")
+            finally:
+                REDDIT_JOB_SLOT.release()
+            hub_event("reddit_setup", f"{kind} " + ("drafted" if ok else "failed"),
+                      actor, "agent")
 
-        threading.Thread(target=_work, daemon=True).start()
+        try:
+            threading.Thread(target=_work, daemon=True).start()
+        except Exception:
+            REDDIT_JOB_SLOT.release()
+            raise
         self._json(200, {"ok": True, "kind": kind})
 
     def _handle_reddit_setup_save(self):
@@ -4519,27 +6106,48 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._json(404, {"error": "no such thread"})
             return
-        cur = conn.execute(
-            "INSERT INTO reddit_drafts (thread_id, draft_text, status, created_by, answer) "
-            "VALUES (?,'','queued',?,?)",
-            (tid, actor, str(p.get("note") or "").strip()[:1000]))
-        did = cur.lastrowid
-        conn.commit()
-        conn.close()
-
-        def _work():
+        if not REDDIT_JOB_SLOT.acquire(blocking=False):
+            conn.close()
+            self._json(409, {"error": "another Reddit draft is still being prepared"})
+            return
+        committed = False
+        try:
+            cur = conn.execute(
+                "INSERT INTO reddit_drafts "
+                "(thread_id, draft_text, status, created_by, answer, queued_at) "
+                "VALUES (?,'','queued',?,?,datetime('now'))",
+                (tid, actor, str(p.get("note") or "").strip()[:1000]))
+            did = cur.lastrowid
+            conn.commit()
+            committed = True
+        except Exception as exc:
+            if conn.in_transaction:
+                conn.rollback()
+            print(f"[reddit_reply] could not queue reply: {exc}", flush=True)
+            self._json(500, {"error": "The reply was not queued. Try again."})
+            return
+        finally:
+            close_ok = False
             try:
-                subprocess.run(["python3", "/root/ops-dashboard/reddit_reply.py",
-                                str(did)], capture_output=True, text=True, timeout=1800)
-            except Exception as e:
-                print(f"[reddit_reply] runner: {e}", flush=True)
-            c = db()
-            r = c.execute("SELECT status FROM reddit_drafts WHERE id=?", (did,)).fetchone()
-            c.close()
-            if r and r["status"] == "ready":
-                self._alert("*Reddit reply ready*\nops.timelabsco.in/ops/reddit.html")
+                conn.close()
+                close_ok = True
+            finally:
+                if not committed or not close_ok:
+                    REDDIT_JOB_SLOT.release()
 
-        threading.Thread(target=_work, daemon=True).start()
+        if not _start_reddit_post_worker(self._alert, slot_held=True):
+            c = db()
+            try:
+                c.execute(
+                    "UPDATE reddit_drafts SET status='failed', stage='error', "
+                    "error='The durable worker could not start; retry this reply', "
+                    "finished_at=datetime('now') WHERE id=?", (did,))
+                c.commit()
+            finally:
+                c.close()
+            self._json(500, {
+                "error": "The reply was saved but its worker did not start. Use Retry."})
+            return
         self._json(200, {"ok": True, "id": did})
 
     def _handle_reddit_reply_update(self):
@@ -4556,34 +6164,111 @@ class Handler(http.server.BaseHTTPRequestHandler):
             did = int(p.get("id") or 0)
         except (TypeError, ValueError):
             did = 0
-        conn = db()
-        if not conn.execute("SELECT id FROM reddit_drafts WHERE id=?", (did,)).fetchone():
-            conn.close()
-            self._json(404, {"error": "no such reply"})
+        queue_mode = (
+            "answer" if p.get("answer") is not None
+            else "retry" if p.get("retry") else None
+        )
+        try:
+            conn = db()
+        except Exception as exc:
+            print(f"[reddit_reply] update database unavailable: {exc}", flush=True)
+            self._json(500, {"error": "The reply was not changed. Try again."})
             return
-        if p.get("discard"):
-            conn.execute("DELETE FROM reddit_drafts WHERE id=?", (did,))
-        elif p.get("posted"):
-            conn.execute("UPDATE reddit_drafts SET status='posted', "
-                         "posted_at=datetime('now') WHERE id=?", (did,))
-        elif p.get("answer"):
-            conn.execute("UPDATE reddit_drafts SET answer=?, question=NULL, "
-                         "status='queued' WHERE id=?",
-                         (str(p.get("answer"))[:1000], did))
+        slot_held = False
+        if queue_mode:
+            if not REDDIT_JOB_SLOT.acquire(blocking=False):
+                conn.close()
+                self._json(409, {"error": "another Reddit draft is still being prepared"})
+                return
+            slot_held = True
+        queued = False
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status FROM reddit_drafts WHERE id=?", (did,)).fetchone()
+            if not row:
+                conn.rollback()
+                self._json(404, {"error": "no such reply"})
+                return
+            if row["status"] in ("queued", "running") and not queue_mode:
+                conn.rollback()
+                self._json(
+                    409, {"error": "wait for the active reply run before changing it"})
+                return
+            if p.get("discard"):
+                conn.execute("DELETE FROM reddit_drafts WHERE id=?", (did,))
+            elif p.get("posted"):
+                conn.execute(
+                    "UPDATE reddit_drafts SET status='posted', "
+                    "posted_at=datetime('now') WHERE id=?", (did,))
+            elif queue_mode == "answer":
+                if row["status"] != "needs_input":
+                    conn.rollback()
+                    self._json(409, {
+                        "error": "this reply is not waiting for an answer"})
+                    return
+                answer = str(p.get("answer") or "").strip()[:1000]
+                if not answer:
+                    conn.rollback()
+                    self._json(400, {"error": "type an answer first"})
+                    return
+                conn.execute(
+                    "UPDATE reddit_drafts SET answer=?, question=NULL, "
+                    "status='queued', stage='resuming', error=NULL, "
+                    "started_at=NULL, queued_at=datetime('now') WHERE id=?",
+                    (answer, did))
+            elif queue_mode == "retry":
+                if row["status"] != "failed":
+                    conn.rollback()
+                    self._json(409, {
+                        "error": "only a failed reply can be retried"})
+                    return
+                conn.execute(
+                    "UPDATE reddit_drafts SET status='queued', stage='retrying', "
+                    "error=NULL, finished_at=NULL, started_at=NULL, "
+                    "queued_at=datetime('now') WHERE id=?",
+                    (did,))
+            else:
+                if row["status"] in ("queued", "running"):
+                    conn.rollback()
+                    self._json(
+                        409, {"error": "wait for the active reply run before editing"})
+                    return
+                conn.execute(
+                    "UPDATE reddit_drafts SET draft_text=? WHERE id=?",
+                    (str(p.get("text") or "")[:20000], did))
             conn.commit()
-            conn.close()
-
-            def _resume():
-                subprocess.run(["python3", "/root/ops-dashboard/reddit_reply.py",
-                                str(did)], capture_output=True, text=True, timeout=1800)
-            threading.Thread(target=_resume, daemon=True).start()
-            self._json(200, {"ok": True})
+            queued = bool(queue_mode)
+        except Exception as exc:
+            if conn.in_transaction:
+                conn.rollback()
+            print(f"[reddit_reply] update failed: {exc}", flush=True)
+            self._json(500, {"error": "The reply was not changed. Try again."})
             return
-        else:
-            conn.execute("UPDATE reddit_drafts SET draft_text=? WHERE id=?",
-                         (str(p.get("text") or "")[:20000], did))
-        conn.commit()
-        conn.close()
+        finally:
+            close_ok = False
+            try:
+                conn.close()
+                close_ok = True
+            finally:
+                if slot_held and (not queued or not close_ok):
+                    REDDIT_JOB_SLOT.release()
+        if queued:
+            slot_held = False  # worker start owns/releases the acquired slot
+            if not _start_reddit_post_worker(self._alert, slot_held=True):
+                c = db()
+                try:
+                    c.execute(
+                        "UPDATE reddit_drafts SET status='failed', stage='error', "
+                        "error='The durable worker could not restart; retry this reply', "
+                        "finished_at=datetime('now') WHERE id=?", (did,))
+                    c.commit()
+                finally:
+                    c.close()
+                self._json(500, {
+                    "error": "The reply was saved but the worker did not start. "
+                             "Use Retry."})
+                return
         self._json(200, {"ok": True})
 
     def _handle_reddit_sync(self):
@@ -4646,8 +6331,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn = db()
         marks = ",".join("?" for _ in ids)
         rows = conn.execute(
-            f"SELECT id, product, quantity, case_style, dial_colour, dial_style, "
-            f"case_colour, movement, watch_size, notes FROM orders "
+            f"SELECT id, order_no, product, quantity, case_style, dial_colour, dial_style, "
+            f"case_colour, movement, watch_size FROM orders "
             f"WHERE id IN ({marks}) AND supplier_visible=1 ORDER BY id ASC", ids).fetchall()
         conn.close()
         if not rows:
@@ -4662,10 +6347,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             cards.append(
                 '<tr>'
                 f'<td class="imgcell">{f"<img src=\"{img}\">" if img else "&nbsp;"}</td>'
-                f'<td><b>#{r["id"]}</b><br>{html_mod.escape(r["product"] or "")}'
+                f'<td><b>#{r["order_no"] or r["id"]}</b><br>'
+                f'{html_mod.escape(r["product"] or "")}'
                 + (f'<br><span class="spec">{html_mod.escape(spec)}</span>' if spec else "")
-                + (f'<br><span class="spec">{html_mod.escape(r["notes"] or "")}</span>'
-                   if r["notes"] else "")
                 + f'</td><td class="qty">{r["quantity"] or 1}</td></tr>')
         import datetime as _dt
         doc = (
@@ -4815,7 +6499,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = text
         if p.get("with_pdf"):
             try:
-                pdf = make_pdf(text.replace("\n", "\n\n"), f"Order #{oid} — status")
+                display_no = o.get("ref_code") or f"#{o.get('order_no') or oid}"
+                pdf = make_pdf(
+                    text.replace("\n", "\n\n"), f"Order {display_no} — status")
                 path = os.path.join(UPLOAD_DIR, f"order-{oid}-status.pdf")
                 with open(path, "wb") as f:
                     f.write(pdf)
@@ -4834,7 +6520,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 r = subprocess.run(["hermes", "send", "--to", target, "--quiet", body],
                                    capture_output=True, text=True, timeout=120)
                 ok = r.returncode == 0
-                detail = (f"status sent to WhatsApp ({target})" if ok else
+                detail = ("status sent to configured WhatsApp destination" if ok else
                           "WhatsApp send failed: " +
                           (r.stderr or r.stdout or "unknown error").strip()[:160])
             except Exception as e:
@@ -4847,17 +6533,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 print(f"[whatsapp] could not log outcome: {e}", flush=True)
             hub_event("order_shared" if ok else "order_share_failed",
-                      f"#{oid} status -> WhatsApp" if ok else f"#{oid} WhatsApp failed",
+                      f"#{o.get('order_no') or oid} status -> WhatsApp"
+                      if ok else f"#{o.get('order_no') or oid} WhatsApp failed",
                       actor, app="orders")
 
         threading.Thread(target=_deliver, daemon=True).start()
-        self._json(200, {"ok": True, "id": oid, "target": target, "queued": True})
+        self._json(200, {"ok": True, "id": oid, "queued": True})
 
     def _handle_supplier_shipments(self):
         """Shipments with the builds they carry and what each one costs.
 
         Per-watch cost is the consignment total divided evenly by how many
-        orders are in it, so it moves as builds are added or removed — it's a
+        physical units are in it, so it moves as builds are added or removed — it's a
         live view of the split, not a number frozen at entry time that goes
         stale the moment the shipment changes."""
         if not self._supplier_ok():
@@ -4893,8 +6580,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             items = by_ship.get(s["id"], [])
             s["orders"] = items
             n = len(items)
+            units = sum(max(1, int(it.get("quantity") or 1)) for it in items)
             s["order_count"] = n
-            s["per_watch"] = round((s["total_cost"] or 0) / n, 2) if n else None
+            s["unit_count"] = units
+            s["per_watch"] = round((s["total_cost"] or 0) / units, 2) if units else None
         self._json(200, {"shipments": ships, "unassigned": unassigned})
 
     def _handle_supplier_shipment_save(self):
@@ -4916,13 +6605,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         carrier = str(p.get("carrier", "")).strip()[:60]
         notes = str(p.get("notes", "")).strip()[:400]
-        currency = (str(p.get("currency", "INR")).strip()[:8] or "INR").upper()
-        try:
-            total = float(p["total_cost"]) if str(p.get("total_cost", "")).strip() else None
-        except (TypeError, ValueError):
+        currency = self._money_currency(p.get("currency") or "INR")
+        if not currency:
+            self._json(400, {"error": "currency must be INR or USD"})
+            return
+        total = self._money_amount(p.get("total_cost"), optional=True)
+        if str(p.get("total_cost", "")).strip() and total is None:
             self._json(400, {"error": "the total cost should be a number"})
             return
         conn = db()
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT id FROM shipments WHERE code=?", (code,)).fetchone()
         if row:
             sid = row["id"]
@@ -4952,12 +6644,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._json(400, {"error": "bad request"})
             return
-        ids = [int(i) for i in (p.get("ids") or []) if str(i).strip().isdigit()][:200]
+        ids = list(dict.fromkeys(
+            int(i) for i in (p.get("ids") or []) if str(i).strip().isdigit()
+        ))[:200]
         if not ids:
             self._json(400, {"error": "no orders selected"})
             return
         sid = p.get("shipment_id")
         conn = db()
+        conn.execute("BEGIN IMMEDIATE")
         code = None
         if sid in (None, "", 0):
             sid = None
@@ -4975,21 +6670,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             code = row["code"]
         marks = ",".join("?" for _ in ids)
+        eligible = [r["id"] for r in conn.execute(
+            f"SELECT id FROM orders WHERE id IN ({marks}) "
+            "AND supplier_visible=1 AND status NOT IN ('cancelled','delivered')",
+            ids).fetchall()]
+        if not eligible:
+            conn.close()
+            self._json(404, {"error": "none of those active builds are in the queue"})
+            return
+        eligible_set = set(eligible)
+        skipped = [oid for oid in ids if oid not in eligible_set]
+        marks = ",".join("?" for _ in eligible)
         conn.execute(f"UPDATE orders SET shipment_id=? WHERE id IN ({marks}) "
-                     f"AND supplier_visible=1", [sid] + ids)
+                     f"AND supplier_visible=1", [sid] + eligible)
         if code:
             conn.execute(f"UPDATE orders SET tracking_code=? WHERE id IN ({marks}) "
                         f"AND supplier_visible=1 AND (tracking_code IS NULL OR tracking_code='')",
-                        [code] + ids)
-        for oid in ids:
+                        [code] + eligible)
+        for oid in eligible:
             order_event(conn, oid, "shipment",
                        f"added to shipment {code}" if code else "removed from its shipment",
                        actor)
         conn.commit()
         conn.close()
         hub_event("shipment_assign",
-                 f"{len(ids)} order(s) -> {code or 'no shipment'}", actor, app="orders")
-        self._json(200, {"ok": True, "count": len(ids), "shipment_id": sid})
+                 f"{len(eligible)} order(s) -> {code or 'no shipment'}", actor, app="orders")
+        self._json(200, {"ok": True, "count": len(eligible), "skipped": skipped,
+                         "shipment_id": sid})
 
     def _handle_supplier_bulk(self):
         """One action across many builds — the point of the checkboxes. Status
@@ -4999,6 +6706,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(403, {"error": "not available for this account"})
             return
         from order_form import STATUSES
+        import order_stages
         actor = self._order_user()
         length = int(self.headers.get("Content-Length", 0))
         try:
@@ -5006,7 +6714,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._json(400, {"error": "bad request"})
             return
-        ids = [int(i) for i in (p.get("ids") or []) if str(i).strip().isdigit()][:200]
+        ids = list(dict.fromkeys(
+            int(i) for i in (p.get("ids") or []) if str(i).strip().isdigit()
+        ))[:200]
         if not ids:
             self._json(400, {"error": "no orders selected"})
             return
@@ -5019,15 +6729,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "nothing to change"})
             return
         conn = db()
+        conn.execute("BEGIN IMMEDIATE")
         marks = ",".join("?" for _ in ids)
-        owned = [r["id"] for r in conn.execute(
-            f"SELECT id FROM orders WHERE id IN ({marks}) AND supplier_visible=1", ids)]
+        owned_rows = list(conn.execute(
+            f"SELECT id, status FROM orders WHERE id IN ({marks}) "
+            f"AND supplier_visible=1", ids))
+        owned = [r["id"] for r in owned_rows]
         if not owned:
             conn.close()
             self._json(404, {"error": "none of those orders are in your queue"})
             return
         m2 = ",".join("?" for _ in owned)
         if status:
+            blocked = [
+                r for r in owned_rows
+                if not order_stages.supplier_can_advance(
+                    r["status"] or order_stages.DEFAULT_STAGE, status)
+            ]
+            if blocked:
+                conn.close()
+                self._json(409, {
+                    "error": "Bulk status updates must move every selected build exactly "
+                             "one stage forward. Split selections at different stages."})
+                return
             conn.execute(f"UPDATE orders SET status=? WHERE id IN ({m2})", [status] + owned)
             for oid in owned:
                 order_event(conn, oid, "status", f"-> {status} (bulk)", actor)
@@ -5070,15 +6794,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "write something first"})
             return
         conn = db()
-        if not conn.execute("SELECT 1 FROM orders WHERE id=? AND supplier_visible=1",
-                            (oid,)).fetchone():
+        conn.execute("BEGIN IMMEDIATE")
+        note_order = conn.execute(
+            "SELECT order_no FROM orders WHERE id=? AND supplier_visible=1",
+            (oid,)).fetchone()
+        if not note_order:
+            conn.rollback()
             conn.close()
             self._json(404, {"error": "no such order"})
             return
         order_event(conn, oid, "note", note, actor)
         conn.commit()
         conn.close()
-        hub_event("supplier_note", f"#{oid}: {note[:120]}", actor, app="orders")
+        hub_event("supplier_note", f"#{note_order['order_no'] or oid}: {note[:120]}",
+                  actor, app="orders")
         self._json(200, {"ok": True, "id": oid})
 
     def _handle_customers_list(self):
@@ -5111,34 +6840,109 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             payload = {}
         commit = bool(payload.get("commit"))
+        actor = (self.headers.get("X-User-Email") or "?").strip().lower()
+
+        def manifest():
+            conn = sqlite3.connect(SUPPLIERS_DB, timeout=5)
+            try:
+                have = {r[0] for r in conn.execute(
+                    "SELECT source_file FROM invoices WHERE source_file IS NOT NULL")}
+            finally:
+                conn.close()
+            rows = []
+            for path in sorted(glob.glob(os.path.join(INVOICE_INBOX, "*.xlsx"))):
+                name = os.path.basename(path)
+                if name in have:
+                    continue
+                digest = hashlib.sha256()
+                with open(path, "rb") as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                st = os.stat(path)
+                rows.append((name, st.st_size, st.st_mtime_ns, digest.hexdigest()))
+            return rows
+
+        with LEDGER_PREVIEW_LOCK:
+            now = time.time()
+            for old_token, rec in list(LEDGER_PREVIEWS.items()):
+                if rec["expires"] < now:
+                    LEDGER_PREVIEWS.pop(old_token, None)
+            if commit:
+                token = str(payload.get("preview_token") or "")
+                rec = LEDGER_PREVIEWS.pop(token, None)
+                if not rec or rec["actor"] != actor or rec["expires"] < now:
+                    self._json(409, {
+                        "error": "That invoice preview expired. Scan and review it again."})
+                    return
+                try:
+                    current_manifest = manifest()
+                except Exception as e:
+                    self._json(500, {"error": f"couldn't recheck invoice files: {e}"})
+                    return
+                if current_manifest != rec["manifest"]:
+                    self._json(409, {
+                        "error": "The invoice folder changed after preview. Scan it again."})
+                    return
+            else:
+                try:
+                    current_manifest = manifest()
+                except Exception as e:
+                    self._json(500, {"error": f"couldn't inspect invoice files: {e}"})
+                    return
+
         # run via the venv python (has openpyxl; this server runs on system python)
         cmd = ["/root/ops-dashboard/venv/bin/python", "/root/ops-dashboard/invoice_import.py", "--json"]
         if commit:
             cmd.append("--commit")
         try:
             out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if out.returncode != 0:
+                raise RuntimeError(out.stderr[-300:] or f"parser exited {out.returncode}")
             data = json.loads(out.stdout.strip() or "{}")
             results = data.get("results", [])
         except Exception as e:
             self._json(500, {"error": f"invoice parse failed: {e} · {out.stderr[-160:] if 'out' in dir() else ''}"})
             return
+        preview_token = None
         if commit:
             imported = [r for r in results if not r.get("error")]
             subprocess.Popen(["/root/ops-dashboard/venv/bin/python3", "/root/ops-dashboard/ledger.py"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if imported:
-                actor = (self.headers.get("X-User-Email") or "?").strip().lower()
                 hub_event("invoice_import",
                           f"{len(imported)} invoice(s): " + ", ".join(r["file"] for r in imported),
                           actor, app="ledger")
-        self._json(200, {"committed": commit, "results": results})
+        else:
+            try:
+                after_manifest = manifest()
+            except Exception as e:
+                self._json(500, {"error": f"invoice folder changed while scanning: {e}"})
+                return
+            if after_manifest != current_manifest:
+                self._json(409, {
+                    "error": "The invoice folder changed while scanning. Try again."})
+                return
+            preview_token = secrets.token_urlsafe(24)
+            with LEDGER_PREVIEW_LOCK:
+                LEDGER_PREVIEWS[preview_token] = {
+                    "actor": actor, "expires": time.time() + LEDGER_PREVIEW_TTL,
+                    "manifest": current_manifest,
+                }
+        self._json(200, {"committed": commit, "results": results,
+                         "preview_token": preview_token})
 
     def _handle_new_session(self):
         if not self._has_tool("chat"):
             self._json(403, {"error": "not available for this account"})
             return
+        email = (self.headers.get("X-User-Email") or "").strip().lower()
         conn = db()
-        cur = conn.execute("INSERT INTO webchat_sessions (title) VALUES ('New chat')")
+        cur = conn.execute(
+            "INSERT INTO webchat_sessions (title, owner_email, visibility) "
+            "VALUES ('New chat', ?, 'private')", (email,))
         conn.commit()
         sid = cur.lastrowid
         conn.close()
@@ -5152,7 +6956,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self._has_tool("chat"):
             self._json(403, {"error": "not available for this account"})
             return
-        tools_for_caller = toolset_for(self.headers.get("X-User-Email"))
+        caller_email = (self.headers.get("X-User-Email") or "").strip().lower()
+        tools_for_caller = toolset_for(caller_email)
+        isolate_caller = caller_email not in ADMIN_EMAILS
         length = int(self.headers.get("Content-Length", 0))
         try:
             payload = json.loads(self.rfile.read(min(length, 32768)).decode())
@@ -5165,14 +6971,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             self._json(400, {"error": "bad request"})
             return
-        if not ensure_session(session_id):
-            self._json(400, {"error": "unknown session"})
+        email = caller_email
+        if not ensure_session(session_id, email):
+            self._json(404, {"error": "no such conversation"})
             return
         # only accept paths our own /upload handed out (cap 8 per message)
         images = []
         for im in raw_images[:8]:
-            p = str((im or {}).get("path") or "")
-            if p.startswith(UPLOAD_DIR + "/") and os.path.isfile(p):
+            raw_path = str((im or {}).get("path") or "")
+            p = _upload_owned(raw_path, caller_email)
+            if p:
                 images.append((p, (im.get("name") or os.path.basename(p)), None))
         if not message and not images:
             self._json(400, {"error": "empty message"})
@@ -5194,13 +7002,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             shown = message or ("(photo)" if len(images) == 1 else f"({len(images)} photos)")
             for _, name, _ in images:
                 shown += f"  [attached photo: {name}]"
-            store(session_id, "user", shown)
             expanded = expand_template(message) if message else (
                 "Please look at the attached photo." if len(images) == 1
                 else f"Please look at the {len(images)} attached photos."
             )
             images = [(p, n, ocr_image(p)) for p, n, _ in images]
-            prompt = build_prompt(session_id, expanded, images)
+            prompt = build_prompt(
+                session_id, expanded, images, admin=not isolate_caller)
+            # Build from the existing history, then store this turn. Storing first
+            # makes recent() include the message and build_prompt() append it again,
+            # which can cause Hermes to interpret one action request twice.
+            store(session_id, "user", shown)
             pref_model, pref_provider = get_model_pref(session_id)
             candidates = route_models(pref_model, pref_provider, bool(images))
         except Exception:
@@ -5217,7 +7029,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     try:
                         print(f"[route] session={session_id} trying model={model or 'hermes-default'}"
                               + (f" ({note})" if note else ""), flush=True)
-                        reply = run_hermes(prompt, model, provider, tools_for_caller)
+                        reply = run_hermes(
+                            prompt, model, provider, tools_for_caller,
+                            ignore_rules=isolate_caller)
                         if note and "auto-switched" in note:
                             reply += f"\n\n*({note} — set `/model claude` to keep it, or `/model default`)*"
                         elif note and model != (pref_model or FAILOVER_CHAIN[0][0]):
@@ -5239,6 +7053,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 try:
                     store(session_id, "agent", outcome.get("reply") or "(no reply)")
                 finally:
+                    for image_path, _name, _ocr in images:
+                        _forget_upload(image_path, remove_data=True)
                     done.set()
                     LOCK.release()
 
@@ -5259,7 +7075,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ctype = self.headers.get("Content-Type", "")
         m = re.search(r'boundary="?([^";]+)"?', ctype)
         length = int(self.headers.get("Content-Length", 0))
-        if "multipart/form-data" not in ctype or not m or length > MAX_UPLOAD_BYTES:
+        if ("multipart/form-data" not in ctype or not m
+                or length <= 0 or length > MAX_UPLOAD_BYTES):
             self._json(400, {"error": f"expected a multipart image (jpg, png, or webp) under {MAX_UPLOAD_MB} MB"})
             return
         body = self.rfile.read(length)
@@ -5268,7 +7085,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if b"Content-Disposition" not in part or b'name="image"' not in part:
                 continue
             header_blob, _, data = part.partition(b"\r\n\r\n")
-            data = data.rstrip(b"\r\n-")
+            # The multipart delimiter contributes one CRLF after the payload.
+            # rstrip(b"\\r\\n-") corrupts valid images whose last byte happens
+            # to be a dash or newline.
+            if data.endswith(b"\r\n"):
+                data = data[:-2]
             fn = re.search(rb'filename="([^"]*)"', header_blob)
             orig = fn.group(1).decode(errors="replace") if fn else "image"
             ext = os.path.splitext(orig)[1].lower()
@@ -5280,9 +7101,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
                 self._json(400, {"error": "file does not look like an image"})
                 return
-            path = os.path.join(UPLOAD_DIR, secrets.token_hex(8) + ext)
-            with open(path, "wb") as f:
-                f.write(data)
+            try:
+                path = _store_user_upload(self._order_user(), ext, data=data)
+            except ValueError as e:
+                self._json(409, {"error": str(e)})
+                return
+            except OSError:
+                self._json(507, {"error": "the server could not store that upload"})
+                return
             self._json(200, {"path": path})
             return
         self._json(400, {"error": "no image field found"})
@@ -5476,6 +7302,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_reddit_post_create()
         elif path == "/reddit/post/answer":
             self._handle_reddit_post_answer()
+        elif path == "/reddit/post/retry":
+            self._handle_reddit_post_retry()
         elif path == "/reddit/post/update":
             self._handle_reddit_post_update()
         elif path == "/reddit/sync":
@@ -5488,6 +7316,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_orders_bulk()
         elif path == "/access/set":
             self._handle_access_set()
+        elif path == "/access/invite":
+            self._handle_access_invite()
         elif path == "/shopify/product/ai-draft":
             self._handle_shopify_ai_draft()
         elif path == "/shopify/product/create":
@@ -5518,4 +7348,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    http.server.ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    # Bind first. A second/manual invocation must fail on the occupied port
+    # before it can reset the live process's running Reddit jobs to queued.
+    server = http.server.ThreadingHTTPServer((HOST, PORT), Handler)
+    _recover_reddit_post_jobs()
+    server.serve_forever()

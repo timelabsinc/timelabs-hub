@@ -671,16 +671,22 @@ function costEl(o){
     '<span class="defc">or '+inr(o.default_cost)+' '+
     (o.default_label==='unidentified'?'default':esc(o.default_label))+'</span></div>';
 }
+function cancelledCostEl(o){
+  var amount=o.supplier_cost!=null
+    ?rs(o.supplier_cost,o.supplier_cost_ccy)
+    :inr(o.default_cost)+' '+(o.default_label==='unidentified'?'default':esc(o.default_label));
+  return '<div class="ocost locked"><span class="cl">Cost</span><b>'+amount+'</b></div>';
+}
 
 function cardEl(o){
-  var nxt=nextOf(o.status), le=lastEvent(o);
+  var nxt=nextOf(o.status), le=lastEvent(o), problem=o.status==='cancelled';
   /* Only the first section (Pending) is a to-do; give those cards the accent
      edge. Once moving, the section itself says where it is. */
   var attn=(o.status===PIPELINE[0]);
   var onum=o.order_no||o.id;
-  return '<article class="ocard'+(attn?' attn':'')+(selectMode?' selectable':'')+
-      (SEL[o.id]?' sel':'')+'" data-id="'+o.id+'">'+
-    (selectMode?'<button class="osel'+(SEL[o.id]?' on':'')+'" data-sel="'+o.id+
+  return '<article class="ocard'+(attn?' attn':'')+(selectMode&&!problem?' selectable':'')+
+      (SEL[o.id]&&!problem?' sel':'')+'" data-id="'+o.id+'">'+
+    (selectMode&&!problem?'<button class="osel'+(SEL[o.id]?' on':'')+'" data-sel="'+o.id+
       '" aria-label="Select order '+onum+'"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>':'')+
     '<div class="otop">'+photoEl(o)+
       '<div class="omid">'+
@@ -689,7 +695,7 @@ function cardEl(o){
           (o.quantity>1?'<span class="oqty">x'+o.quantity+'</span>':'')+'</h3>'+
         specEl(o)+
         (o.notes?'<div class="onote">'+esc(o.notes)+'</div>':'')+
-        costEl(o)+
+        (problem?cancelledCostEl(o):costEl(o))+
       '</div>'+
     '</div>'+
     '<div class="obar">'+
@@ -697,10 +703,10 @@ function cardEl(o){
         (le?' <span class="when">· '+esc(ago(le.at))+'</span>':'')+'</span>'+
     '</div>'+
     '<div class="oact">'+
-      (nxt?'<button class="obtn" data-adv="'+o.id+'" data-to="'+esc(nxt)+'">'+
+      (problem?'<span class="obtn" aria-label="Needs admin review">Needs admin review</span>'
+       :nxt?'<button class="obtn" data-adv="'+o.id+'" data-to="'+esc(nxt)+'">'+
         '<svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>'+esc(stLabel(nxt))+'</button>'
-       :'<button class="obtn" data-sheet="'+o.id+'">Change stage</button>')+
-      (nxt?'<button class="obtn ghost" data-sheet="'+o.id+'" aria-label="Other stage">&#8943;</button>':'')+
+       :'<span class="obtn" aria-label="Build complete">Complete</span>')+
       '<button class="obtn ghost" data-share="'+o.id+'" aria-label="Share status">'+
         '<svg viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="M12 15V3M8 7l4-4 4 4"/></svg></button>'+
       '<button class="obtn ghost" data-det="'+o.id+'" aria-label="Details">&#9432;</button>'+
@@ -746,6 +752,10 @@ function drawStageBar(counts){
     return '<button class="stg'+(k===filter?' on':'')+'" data-f="'+esc(k)+'">'+
       '<b>'+(counts[k]||0)+'</b><span class="lbl">'+esc(stLabel(k))+'</span></button>';
   });
+  if(counts.cancelled){
+    html.push('<button class="stg'+('cancelled'===filter?' on':'')+
+      '" data-f="cancelled"><b>'+counts.cancelled+'</b><span class="lbl">Problems</span></button>');
+  }
   html.push('<button class="stg'+('all'===filter?' on':'')+'" data-f="all">'+
     '<b>'+(counts.all||0)+'</b><span class="lbl">All</span></button>');
   bar.innerHTML=html.join('');
@@ -760,7 +770,7 @@ function render(){
   var groups={};
   PIPELINE.forEach(function(k){groups[k]=[];});
   vis.forEach(function(o){ (groups[o.status]||(groups[o.status]=[])).push(o); });
-  var show = filter==='all' ? PIPELINE : [filter];
+  var show = filter==='all' ? PIPELINE.concat(['cancelled']) : [filter];
   var html='';
   show.forEach(function(k){
     var list=sortOrders(groups[k]||[]);
@@ -780,6 +790,7 @@ function render(){
   $('list').innerHTML=html;
   var counts={all:vis.length};
   PIPELINE.forEach(function(k){counts[k]=(groups[k]||[]).length;});
+  counts.cancelled=(groups.cancelled||[]).length;
   drawStageBar(counts);
   document.querySelectorAll('.schip[data-sort]').forEach(function(c){
     c.classList.toggle('on',c.dataset.sort===sort);
@@ -799,7 +810,12 @@ function render(){
 }
 
 /* ---- multi-select + bulk ---- */
-function selIds(){ return Object.keys(SEL).filter(function(k){return SEL[k];}).map(Number); }
+function selIds(){
+  return Object.keys(SEL).filter(function(k){return SEL[k];}).map(Number).filter(function(id){
+    var o=byId(id);
+    return o&&o.status!=='cancelled';
+  });
+}
 function drawBulk(){
   var ids=selIds();
   /* Visible for the whole of select mode, not only once something is ticked —
@@ -808,14 +824,18 @@ function drawBulk(){
   $('bulkbar').classList.toggle('on',selectMode);
   var tot=ids.reduce(function(a,i){
     var o=byId(i); if(!o)return a;
-    return a+(o.supplier_cost!=null?toINR(o.supplier_cost,o.supplier_cost_ccy):(o.default_cost||0));
+    var unit=o.supplier_cost!=null?toINR(o.supplier_cost,o.supplier_cost_ccy):(o.default_cost||0);
+    return a+unit*Math.max(1,Number(o.quantity)||1);
   },0);
   $('bulkn').textContent=ids.length?ids.length+' selected · '+inr(tot):'Nothing selected';
   $('bulk-bill').disabled=!ids.length;
   $('bulk-bill').style.opacity=ids.length?'':'.5';
 }
 function unbilledIds(){
-  return ORDERS.filter(function(o){return !o.bill_id;}).map(function(o){return o.id;});
+  return ORDERS.filter(function(o){
+    return !o.bill_id&&o.status!=='cancelled'&&matches(o)&&
+      (filter==='all'||bucket(o)===filter);
+  }).map(function(o){return o.id;});
 }
 function enterSelect(preselect){
   selectMode=true;
@@ -1031,7 +1051,8 @@ function openSheet(id){
   var o=ORDERS.filter(function(x){return x.id===id;})[0];
   if(!o)return;
   $('sheet-title').textContent='Order #'+id;
-  $('sheet-opts').innerHTML=STATUSES.map(function(s){
+  var allowed=[o.status];var nxt=nextOf(o.status);if(nxt)allowed.push(nxt);
+  $('sheet-opts').innerHTML=allowed.map(function(s){
     return '<button class="opt'+(s===o.status?' cur':'')+'" data-s="'+esc(s)+'"><i></i>'+esc(s)+'</button>';
   }).join('');
   $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
@@ -1086,14 +1107,20 @@ function billCard(b){
   if(arr)paid=arr.paid_inr||0;
   var totINR=b.total_inr!=null?b.total_inr:toINR(b.total,b.currency);
   var lines=(b.items||[]).map(function(it){
-    return '<li><span>'+esc(it.ref_code||('#'+it.order_id))+' · '+
-      esc(it.description||'')+'</span><b>'+rs(it.cost,b.currency)+'</b></li>';
+    var qty=Math.max(1,Number(it.quantity||1));
+    return '<li><span>'+esc(it.ref_code||('#'+(it.order_no||it.order_id)))+' · '+
+      esc(it.description||'')+(qty>1?' · '+qty+' watches':'')+'</span><b>'+
+      rs(Number(it.cost||0)*qty,b.currency)+'</b></li>';
   }).join('');
+  var units=(b.items||[]).reduce(function(n,it){
+    return n+Math.max(1,Number(it.quantity||1));},0);
   return '<article class="bcard'+(ack?' ack':'')+'" data-bill="'+b.id+'">'+
     '<div class="btop">'+
       '<div><div class="bno">'+esc(b.bill_no)+'</div>'+
-        '<div class="bmeta">'+(b.items||[]).length+' build'+
-        ((b.items||[]).length===1?'':'s')+' · '+esc((b.created_at||'').slice(0,10))+'</div></div>'+
+        '<div class="bmeta">'+units+' watch'+(units===1?'':'es')+
+        ' across '+(b.items||[]).length+' order'+
+        ((b.items||[]).length===1?'':'s')+' · '+
+        esc((b.created_at||'').slice(0,10))+'</div></div>'+
       '<div class="bright"><div class="btot">'+inr(totINR)+'</div>'+
         '<span class="bstat '+(ack?'ok':'draft')+'">'+(ack?'Acknowledged':'Not yet agreed')+'</span></div>'+
     '</div>'+
@@ -1164,7 +1191,8 @@ function drawBills(){
       if(!b)return;
       var costs={};
       for(var i=0;i<(b.items||[]).length;i++){
-        var it=b.items[i], raw=prompt('Cost for '+(it.ref_code||('#'+it.order_id))+':',it.cost);
+        var it=b.items[i], raw=prompt('Cost per watch for '+
+          (it.ref_code||('#'+(it.order_no||it.order_id)))+':',it.cost);
         if(raw===null)return;
         costs[String(it.id)]=raw;
       }
@@ -1288,7 +1316,8 @@ function drawMoney(){
   if(!ARREARS){ box.innerHTML=''; return; }
   var costed=ORDERS.filter(function(o){return o.supplier_cost!=null;});
   var total=costed.reduce(function(a,o){
-    return a+toINR(o.supplier_cost,o.supplier_cost_ccy);},0);
+    return a+toINR(o.supplier_cost,o.supplier_cost_ccy)*
+      Math.max(1,Number(o.quantity||1));},0);
   var owed=ARREARS.owed_inr||0;
   var cells=[
     ['Builds', String(ORDERS.length)],
@@ -1311,7 +1340,7 @@ $('bulk-clear').onclick=exitSelect;
 $('bulk-cost').onclick=function(){
   var ids=selIds();
   if(!ids.length){toast('Nothing selected');return;}
-  var v=prompt('Cost per build, in ₹ (applies to all '+ids.length+'):');
+  var v=prompt('Cost per watch, in ₹ (applies to all '+ids.length+' orders):');
   if(v===null)return;
   v=v.trim(); if(v==='')return;
   jpost('/supplier/cost/bulk',{ids:ids,cost:v,currency:'INR'}).then(function(d){
@@ -1352,9 +1381,15 @@ $('newbatch').onclick=function(){
 $('pick-all').onclick=function(){ enterSelect(true); };
 $('pick-none').onclick=function(){ clearSel(); };
 $('bulk-status').onclick=function(){
-  $('sheet-title').textContent=selIds().length+' orders — set stage';
-  $('sheet-opts').innerHTML=STATUSES.map(function(s){
-    return '<button class="opt" data-s="'+esc(s)+'"><i></i>'+esc(stLabel(s))+'</button>';}).join('');
+  var chosen=selIds().map(byId).filter(Boolean);
+  var stages={};chosen.forEach(function(o){stages[o.status]=1;});
+  var current=Object.keys(stages);
+  if(current.length!==1){toast('Select builds at the same stage to move them together');return;}
+  var nxt=nextOf(current[0]);
+  if(!nxt){toast('Those builds have no next stage');return;}
+  $('sheet-title').textContent=chosen.length+' orders — next stage';
+  $('sheet-opts').innerHTML='<button class="opt" data-s="'+esc(nxt)+
+    '"><i></i>'+esc(stLabel(nxt))+'</button>';
   $('sheet-opts').querySelectorAll('.opt').forEach(function(b){
     b.onclick=function(){ closeSheet(); bulkDo({status:b.dataset.s},'Status set'); };
   });

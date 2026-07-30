@@ -95,6 +95,8 @@ OF_CSS = r"""
   .of-field:last-child{margin-bottom:0;}
   .of-field label{display:block;font-size:11.5px;font-weight:650;color:var(--muted);
     text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;}
+  .of-label{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;}
+  .of-label>label{margin-bottom:0;}
   .of-field .req{color:var(--accent);}
   .of-row{display:grid;grid-template-columns:1fr 1fr;gap:13px;}
   .of-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:13px;}
@@ -263,7 +265,8 @@ OF_CSS = r"""
   /* Builds made without a buyer. The convention already existed by hand, with
      the customer typed as "Self"; this makes it a real field so stock stops
      being counted as sales. */
-  .stocktog{float:right;font-weight:400;color:var(--muted);font-size:11.5px;
+  .of-label .stocktog{display:inline-flex;}
+  .stocktog{font-weight:400;color:var(--muted);font-size:11.5px;
     display:inline-flex;align-items:center;gap:5px;cursor:pointer;}
   .stocktog input{width:14px;height:14px;accent-color:var(--accent);cursor:pointer;}
   .pill.stock{color:var(--accent);background:var(--accent-bg);}
@@ -327,6 +330,9 @@ OF_CSS = r"""
   .brm{border:1px solid var(--border);background:none;color:var(--muted);border-radius:6px;
     width:30px;height:30px;font-size:17px;line-height:1;cursor:pointer;flex:none;}
   .brm:hover{border-color:var(--bad);color:var(--bad);}
+  .bretry{border:1px solid var(--bad);background:var(--bad-bg);color:var(--bad);
+    border-radius:6px;min-height:30px;padding:0 8px;font:inherit;font-size:11px;
+    font-weight:700;cursor:pointer;flex:none;}
   .bresult{background:var(--good-bg);color:var(--good);border-radius:var(--r-s);padding:12px 14px;
     font-size:13.5px;line-height:1.55;margin-top:14px;}
   .bresult a{color:var(--accent);font-weight:650;}
@@ -427,17 +433,33 @@ function parseBlock(text){
     out['f-address']=out['f-address'].replace(new RegExp('[,\\s]*'+out['f-pincode']+'\\b'),'').trim();
   }
   if(out['f-qty'])out['f-qty']=(out['f-qty'].match(/\d+/)||['1'])[0];
-  if(out['f-price'])out['f-price']=(out['f-price'].match(/[\d.]+/)||[''])[0];
+  if(out['f-price']){
+    var pv=out['f-price']
+      .replace(/(?:INR|Rs\.?|₹)/ig,'')
+      .replace(/,\s*/g,'')
+      .replace(/\s+/g,'')
+      .replace(/\/-$/,'');
+    out['f-price']=/^\d+(?:\.\d{1,2})?$/.test(pv)?pv:'';
+  }
   return out;
 }
 
+var pasteFilled={};
+function clearPasteFields(){
+  Object.keys(pasteFilled).forEach(function(id){
+    if($(id)&&$(id).value===pasteFilled[id])$(id).value='';
+  });
+  pasteFilled={};
+  syncProductAttrs();
+}
 function applyPaste(){
   var text=$('paste').value;
-  if(!text.trim()){$('caught').innerHTML='';return;}
+  if(!text.trim()){clearPasteFields();$('caught').innerHTML='';canSave();return;}
+  clearPasteFields();
   var got=parseBlock(text), chips='', n=0;
   FIELD_MAP.forEach(function(f){
     var v=got[f[0]];
-    if(v){$(f[0]).value=v;n++;chips+='<span>'+esc(f[2])+'</span>';}
+    if(v){$(f[0]).value=v;pasteFilled[f[0]]=v;n++;chips+='<span>'+esc(f[2])+'</span>';}
   });
   if(!n)chips='<span class="miss">Nothing recognised — type it in below</span>';
   $('caught').innerHTML=chips;
@@ -445,7 +467,9 @@ function applyPaste(){
   if(n){toast('Filled '+n+' field'+(n===1?'':'s')+' — check and save');enrich();}
 }
 $('paste').addEventListener('input',applyPaste);
-$('clear-paste').onclick=function(){$('paste').value='';$('caught').innerHTML='';};
+$('clear-paste').onclick=function(){
+  $('paste').value='';clearPasteFields();$('caught').innerHTML='';canSave();
+};
 
 /* Read the clipboard on demand — the only way in on a phone, where there's
    no ⌘V. Needs a user gesture, which the click provides. */
@@ -464,15 +488,26 @@ if(!(navigator.clipboard&&navigator.clipboard.readText))$('pull-clip').style.dis
 
 /* server fills city/state from the address and attributes from the product,
    so the vocabulary lives in exactly one place */
-var enrichT;
+var enrichT, enrichGen=0, enrichProduct='';
+function syncProductAttrs(){
+  var prod=$('f-product').value.trim();
+  if(prod===enrichProduct)return;
+  enrichProduct=prod;
+  enrichGen++;                    /* invalidate a parse already in flight */
+  attrs={};dropped={};drawAttrs();
+}
 function enrich(){
   clearTimeout(enrichT);
+  syncProductAttrs();
   enrichT=setTimeout(async function(){
     var addr=$('f-address').value.trim(), prod=$('f-product').value.trim();
     if(!addr&&!prod)return;
+    var gen=++enrichGen, pin=$('f-pincode').value.trim(), notes=$('f-notes').value.trim();
     try{
-      var d=await jpost('/orders/parse',{address:addr,pincode:$('f-pincode').value.trim(),
-        product:prod,notes:$('f-notes').value.trim()});
+      var d=await jpost('/orders/parse',{address:addr,pincode:pin,product:prod,notes:notes});
+      if(gen!==enrichGen||addr!==$('f-address').value.trim()||
+          pin!==$('f-pincode').value.trim()||prod!==$('f-product').value.trim()||
+          notes!==$('f-notes').value.trim())return;
       if(d.city&&!$('f-city').value)$('f-city').value=d.city;
       if(d.state&&!$('f-state').value)$('f-state').value=d.state;
       /* honour chips the user deliberately removed — re-extracting on every
@@ -484,6 +519,7 @@ function enrich(){
     }catch(e){}
   },350);
 }
+$('f-product').addEventListener('input',syncProductAttrs);
 ['f-address','f-pincode','f-product','f-notes'].forEach(function(id){
   $(id).addEventListener('input',enrich);
 });
@@ -712,6 +748,7 @@ function reset(){
    'f-product','f-price','f-notes','paste'].forEach(function(id){$(id).value='';});
   $('f-qty').value='1';$('f-status').value='pending';
   $('caught').innerHTML='';
+  clearTimeout(enrichT);enrichProduct='';enrichGen++;
   attrs={};dropped={};drawAttrs();
   /* release the blob URLs before dropping the records, or a long session of
      logging orders on a phone slowly leaks every photo it ever previewed */
@@ -889,7 +926,7 @@ async function loadOrders(){
             (cancelled?' disabled title="Cancelled orders stay out of the supplier queue"':
              (sent&&!canRemove?' disabled title="Already in progress, shipped, or billed"':''))+'>'+
             (cancelled?'Not sent':(sent?'With supplier':'Send to supplier'))+'</button></td>'+
-          '<td data-l="Status"><select class="pill-select '+stClass(st)+'" data-id="'+o.id+'" data-was="'+esc(st)+'">'+
+          '<td data-l="Status"><select class="pill-select '+stClass(st)+'" aria-label="Status for order '+esc(orderNo(o))+'" data-id="'+o.id+'" data-was="'+esc(st)+'">'+
             STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(stLabel(s))+'</option>';}).join('')+
             '</select></td>'+
           '<td data-l="Photos">'+photoCell(o)+'</td>'+
@@ -1038,7 +1075,7 @@ function renderProductsTable(){
   box.querySelectorAll('.pname').forEach(function(el){
     el.onclick=function(){
       var old=el.dataset.name;
-      el.innerHTML='<input type="text" value="'+esc(old)+'">';
+      el.innerHTML='<input type="text" aria-label="Rename product '+esc(old)+'" value="'+esc(old)+'">';
       var inp=el.querySelector('input');inp.focus();inp.select();
       var done=false;
       function commit(){
@@ -1105,9 +1142,10 @@ function bulkDraw(){
       el.setAttribute('data-k',r.key);
       el.innerHTML='<div class="bthumb"><img alt=""><span class="up">…</span></div>'+
         '<div class="bmid">'+
-          '<input class="bref" data-f="ref" placeholder="Order # (from the caption)" inputmode="numeric">'+
-          '<input data-f="product" placeholder="Product (optional — photo is the spec)">'+
+          '<input class="bref" data-f="ref" aria-label="Order number" placeholder="Order # (from the caption)" inputmode="numeric">'+
+          '<input data-f="product" aria-label="Product" placeholder="Product (optional — photo is the spec)">'+
         '</div>'+
+        '<button type="button" class="bretry" hidden>Retry</button>'+
         '<button class="brm" title="Remove" aria-label="Remove">&times;</button>';
       el.querySelector('img').src=r.url;
       el.querySelectorAll('input').forEach(function(inp){
@@ -1121,9 +1159,13 @@ function bulkDraw(){
         });
         bulkDraw();
       };
+      el.querySelector('.bretry').onclick=function(){retryBulk(r);};
       box.appendChild(el);
     }
-    el.querySelector('.bthumb .up').style.display=r.path?'none':'';
+    var up=el.querySelector('.bthumb .up'), retry=el.querySelector('.bretry');
+    up.style.display=r.path?'none':'';
+    up.textContent=r.error?'Failed':'…';
+    retry.hidden=!r.error;
     if(box.children[idx]!==el)box.insertBefore(el,box.children[idx]||null);
   });
   Array.prototype.slice.call(box.children).forEach(function(el){
@@ -1136,6 +1178,19 @@ function bulkDraw(){
     ? 'Uploading '+pend+'…'
     : 'Add '+bulkRows.length+' build'+(bulkRows.length===1?'':'s');
 }
+async function uploadBulk(rec){
+  rec.error='';bulkDraw();
+  try{
+    var fd=new FormData(); fd.append('image',rec.file,rec.file.name||('shot-'+Date.now()+'.jpg'));
+    var d=await api('/upload',{method:'POST',body:fd});
+    rec.path=d.path;
+  }catch(err){
+    rec.path=null;rec.error=err.message||'Upload failed';
+    toast(rec.error);
+  }
+  bulkDraw();
+}
+function retryBulk(rec){if(rec.file)uploadBulk(rec);}
 async function bulkAddFiles(files){
   var list=Array.prototype.slice.call(files||[]).filter(function(f){
     return f&&f.type&&f.type.indexOf('image/')===0;});
@@ -1143,17 +1198,9 @@ async function bulkAddFiles(files){
     if(bulkRows.length>=60){toast('60 at a time is the limit');break;}
     var f=list[i];
     var rec={key:String(Date.now())+'-'+i+'-'+Math.random().toString(36).slice(2,7),
-             url:URL.createObjectURL(f),path:null,ref:'',product:''};
+             url:URL.createObjectURL(f),file:f,path:null,error:'',ref:'',product:''};
     bulkRows.push(rec);bulkDraw();
-    try{
-      var fd=new FormData(); fd.append('image',f,f.name||('shot-'+Date.now()+'.jpg'));
-      var d=await api('/upload',{method:'POST',body:fd});
-      rec.path=d.path;
-    }catch(err){
-      bulkRows=bulkRows.filter(function(x){return x.key!==rec.key;});
-      toast(err.message);
-    }
-    bulkDraw();
+    await uploadBulk(rec);
   }
 }
 function drawBulkSources(){
@@ -1187,12 +1234,19 @@ $('bulk-save').onclick=async function(){
       '<b>'+n+' order'+(n===1?'':'s')+' logged.</b> Review them in Orders, then '+
       'send the chosen builds to the supplier.'+
       (bad?' '+bad+' row'+(bad===1?'':'s')+' couldn\'t be added.':'')+'</div>';
-    bulkRows.forEach(function(x){ if(x.url){ try{URL.revokeObjectURL(x.url);}catch(e){} } });
-    bulkRows=[]; bulkDraw();
+    var failures={};
+    (d.failed||[]).forEach(function(f){failures[f.i]=f.error||'Could not add this row';});
+    var keep=[];
+    bulkRows.forEach(function(x,i){
+      if(failures[i]!=null){
+        x.path=null;x.error=failures[i];keep.push(x);
+      }else if(x.url){try{URL.revokeObjectURL(x.url);}catch(e){}}
+    });
+    bulkRows=keep;bulkDraw();
     loaded={};
     toast(n+' order'+(n===1?'':'s')+' logged');
   }catch(e){ toast(e.message); }
-  btn.disabled=false;
+  bulkDraw();
 };
 
 /* ---------------- boot ---------------- */
@@ -1272,7 +1326,7 @@ def build():
           <button class="btn sm" id="pull-clip"><svg viewBox="0 0 24 24"><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><path d="M14 4h7v7"/><path d="M10 14L20 4"/></svg>Paste from clipboard</button>
           <button class="btn sm" id="clear-paste">Clear</button>
         </div>
-        <textarea id="paste" placeholder="Name: Anurag Mavi&#10;Email: name@example.com&#10;Phone no: 98765 43210&#10;Address: Village Morna, Sector 168&#10;            Gautam Buddha Nagar&#10;            Uttar Pradesh&#10;Pincode: 201301"></textarea>
+        <textarea id="paste" aria-label="Paste customer details" placeholder="Name: Anurag Mavi&#10;Email: name@example.com&#10;Phone no: 98765 43210&#10;Address: Village Morna, Sector 168&#10;            Gautam Buddha Nagar&#10;            Uttar Pradesh&#10;Pincode: 201301"></textarea>
         <div class="caught" id="caught"></div>
       </div>
 
@@ -1286,28 +1340,28 @@ def build():
             <div class="dz-s">Tap to use the camera roll &middot; drag them here &middot; or press <span class="kbd">&#8984;V</span></div>
             <div class="dz-btns"><button type="button" class="btn sm" id="paste-img"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg>Paste image from clipboard</button></div>
           </div>
-          <input type="file" id="ph-file" accept="image/jpeg,image/png,image/webp" multiple>
+          <input type="file" id="ph-file" accept="image/jpeg,image/png,image/webp" aria-label="Add reference photos" multiple>
         </div>
 
         <div class="of-sep"></div>
         <div class="of-legend">Customer</div>
         <div class="of-row">
-          <div class="of-field"><label>Name <span class="req">*</span>
-            <label class="stocktog"><input type="checkbox" id="f-stock">for stock</label></label>
+          <div class="of-field"><div class="of-label"><label for="f-cust">Name <span class="req">*</span></label>
+            <label class="stocktog" for="f-stock"><input type="checkbox" id="f-stock">for stock</label></div>
             <input id="f-cust" class="pin" autocomplete="off"></div>
-          <div class="of-field"><label>Phone</label>
+          <div class="of-field"><label for="f-phone">Phone</label>
             <input id="f-phone" class="pin" inputmode="tel" autocomplete="off"></div>
         </div>
-        <div class="of-field"><label>Email</label>
+        <div class="of-field"><label for="f-email">Email</label>
           <input id="f-email" class="pin" inputmode="email" autocomplete="off"></div>
-        <div class="of-field"><label>Address</label>
+        <div class="of-field"><label for="f-address">Address</label>
           <textarea id="f-address" class="pin"></textarea></div>
         <div class="of-row3">
-          <div class="of-field"><label>City</label>
+          <div class="of-field"><label for="f-city">City</label>
             <input id="f-city" class="pin" autocomplete="off"></div>
-          <div class="of-field"><label>State</label>
+          <div class="of-field"><label for="f-state">State</label>
             <input id="f-state" class="pin" autocomplete="off"></div>
-          <div class="of-field"><label>Pincode</label>
+          <div class="of-field"><label for="f-pincode">Pincode</label>
             <input id="f-pincode" class="pin" inputmode="numeric" autocomplete="off"></div>
         </div>
 
@@ -1315,22 +1369,22 @@ def build():
         <div class="of-legend">Order</div>
         <div class="of-field"><label>Where did it come from?</label>
           <div class="srcs" id="srcs"></div></div>
-        <div class="of-field"><label>Product <span class="req">*</span></label>
+        <div class="of-field"><label for="f-product">Product <span class="req">*</span></label>
           <div class="combo-wrap">
-            <input id="f-product" class="pin" placeholder="e.g. datejust arabic light blue dial 36mm NH35" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false">
+            <input id="f-product" class="pin" placeholder="e.g. datejust arabic light blue dial 36mm NH35" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="prod-list" aria-expanded="false">
             <div class="combo-list" id="prod-list" hidden></div>
           </div>
           <div class="attrs" id="attrs"></div>
           <div class="attr-hint" id="attr-hint">Case style, dial colour, movement and size are picked out of what you type — they drive the What's selling tab. Start typing to see what's sold before.</div></div>
         <div class="of-row3">
-          <div class="of-field"><label>Qty</label>
+          <div class="of-field"><label for="f-qty">Qty</label>
             <input id="f-qty" class="pin" type="number" min="1" step="1" value="1"></div>
-          <div class="of-field"><label>Price</label>
+          <div class="of-field"><label for="f-price">Price</label>
             <div class="price-wrap"><span>&#8377;</span><input id="f-price" class="pin" type="number" step="0.01" min="0" placeholder="0.00"></div></div>
-          <div class="of-field"><label>Status</label>
+          <div class="of-field"><label for="f-status">Status</label>
             <select id="f-status" class="pin">{status_opts}</select></div>
         </div>
-        <div class="of-field"><label>Notes</label>
+        <div class="of-field"><label for="f-notes">Notes</label>
           <textarea id="f-notes" class="pin" placeholder="Sizing, deadline, anything to remember…"></textarea></div>
 
         <button class="btn primary" id="save" disabled>Save order</button>
@@ -1349,7 +1403,7 @@ def build():
           <div class="dz-t">Add screenshots</div>
           <div class="dz-s">Tap to pick from your photos &middot; or drag them here</div>
         </div>
-        <input type="file" id="bulk-file" accept="image/jpeg,image/png,image/webp" multiple>
+        <input type="file" id="bulk-file" accept="image/jpeg,image/png,image/webp" aria-label="Add order screenshots" multiple>
         <div id="bulk-rows" style="margin-top:14px"></div>
         <div id="bulk-actions" style="display:none;margin-top:6px">
           <div class="of-field"><label>Where did these come from?</label>
@@ -1398,47 +1452,47 @@ def build():
     <input type="hidden" id="e-id">
     <div class="of-legend">Customer</div>
     <div class="of-row">
-      <div class="of-field"><label>Name</label><input id="e-cust" class="pin"></div>
-      <div class="of-field"><label>Phone</label><input id="e-phone" class="pin" inputmode="tel"></div>
+      <div class="of-field"><label for="e-cust">Name</label><input id="e-cust" class="pin"></div>
+      <div class="of-field"><label for="e-phone">Phone</label><input id="e-phone" class="pin" inputmode="tel"></div>
     </div>
-    <div class="of-field"><label>Email</label><input id="e-email" class="pin" inputmode="email"></div>
-    <div class="of-field"><label>Address</label><textarea id="e-address" class="pin"></textarea></div>
+    <div class="of-field"><label for="e-email">Email</label><input id="e-email" class="pin" inputmode="email"></div>
+    <div class="of-field"><label for="e-address">Address</label><textarea id="e-address" class="pin"></textarea></div>
     <div class="of-row3">
-      <div class="of-field"><label>City</label><input id="e-city" class="pin"></div>
-      <div class="of-field"><label>State</label><input id="e-state" class="pin"></div>
-      <div class="of-field"><label>Pincode</label><input id="e-pin" class="pin" inputmode="numeric"></div>
+      <div class="of-field"><label for="e-city">City</label><input id="e-city" class="pin"></div>
+      <div class="of-field"><label for="e-state">State</label><input id="e-state" class="pin"></div>
+      <div class="of-field"><label for="e-pin">Pincode</label><input id="e-pin" class="pin" inputmode="numeric"></div>
     </div>
     <div class="of-sep"></div>
     <div class="of-legend">Order</div>
     <div class="of-row">
-      <div class="of-field"><label>Source</label><input id="e-source" class="pin"></div>
-      <div class="of-field"><label>Product <span class="req">*</span></label>
+      <div class="of-field"><label for="e-source">Source</label><input id="e-source" class="pin"></div>
+      <div class="of-field"><label for="e-product">Product <span class="req">*</span></label>
         <input id="e-product" class="pin"></div>
     </div>
     <div class="of-row3">
-      <div class="of-field"><label>Qty</label>
+      <div class="of-field"><label for="e-qty">Qty</label>
         <input id="e-qty" class="pin" type="number" min="1" max="1000" step="1"></div>
-      <div class="of-field"><label>Price</label>
+      <div class="of-field"><label for="e-price">Price</label>
         <div class="price-wrap"><span>&#8377;</span>
           <input id="e-price" class="pin" type="number" min="0" step="0.01"></div></div>
       <div class="of-field"><label>Stock build</label>
-        <label class="checkline"><input id="e-stock" type="checkbox">Made for stock</label></div>
+        <label class="checkline" for="e-stock"><input id="e-stock" type="checkbox">Made for stock</label></div>
     </div>
-    <div class="of-field"><label>Notes</label><textarea id="e-notes" class="pin"></textarea></div>
+    <div class="of-field"><label for="e-notes">Notes</label><textarea id="e-notes" class="pin"></textarea></div>
     <div class="of-field"><label>Reference images</label>
       <div class="shots" id="e-shots"></div>
       <button class="btn" type="button" id="e-add-photo">+ Add image</button>
-      <input id="e-photo-input" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+      <input id="e-photo-input" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Add reference images" multiple>
     </div>
     <div class="of-sep"></div>
     <div class="of-legend">Build details</div>
     <div class="of-row3">
-      <div class="of-field"><label>Case style</label><input id="e-case" class="pin"></div>
-      <div class="of-field"><label>Dial colour</label><input id="e-dial-colour" class="pin"></div>
-      <div class="of-field"><label>Dial style</label><input id="e-dial-style" class="pin"></div>
-      <div class="of-field"><label>Case colour</label><input id="e-case-colour" class="pin"></div>
-      <div class="of-field"><label>Movement</label><input id="e-movement" class="pin"></div>
-      <div class="of-field"><label>Size</label><input id="e-size" class="pin"></div>
+      <div class="of-field"><label for="e-case">Case style</label><input id="e-case" class="pin"></div>
+      <div class="of-field"><label for="e-dial-colour">Dial colour</label><input id="e-dial-colour" class="pin"></div>
+      <div class="of-field"><label for="e-dial-style">Dial style</label><input id="e-dial-style" class="pin"></div>
+      <div class="of-field"><label for="e-case-colour">Case colour</label><input id="e-case-colour" class="pin"></div>
+      <div class="of-field"><label for="e-movement">Movement</label><input id="e-movement" class="pin"></div>
+      <div class="of-field"><label for="e-size">Size</label><input id="e-size" class="pin"></div>
     </div>
     <div class="oedit-actions">
       <button class="btn" id="e-cancel">Cancel</button>
@@ -1457,7 +1511,8 @@ def build():
         'padding:16px 0;border-bottom:1px solid var(--border);margin-bottom:18px">'
         '<b>Labs OS</b><span style="font-size:13px;color:var(--muted)">Order intake</span>'
         '</header>')
-    intake_doc = doc.replace("<body>", '<body class="intake">', 1)
+    intake_doc = doc.replace(
+        "<body>", '<body class="intake" data-no-assist>', 1)
     intake_doc = intake_doc.replace(header, intake_header, 1).replace(tabs, "", 1)
     intake_doc = intake_doc.replace(
         "Every order lands here first. Review it, then send only the orders that need building to the supplier.",

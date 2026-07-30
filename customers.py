@@ -10,11 +10,18 @@ Tags are half automatic, half yours: "repeat" and "VIP" are recomputed on every
 write, anything you type by hand is preserved alongside them.
 """
 import sqlite3
+from order_metrics import SALE_ORDER_PREDICATE
 
 DB = "/root/ops-dashboard/data/hermes.db"
 
 VIP_SPEND = 50000.0   # ₹ lifetime — above this they're a VIP
 VIP_ORDERS = 5        # …or this many orders, whichever lands first
+
+# One definition for a sale everywhere customer lifetime metrics are rebuilt.
+# Stock builds are inventory, while refunded/voided/cancelled orders are not
+# lifetime revenue or repeat purchases.
+LIVE_ORDER_PREDICATE = SALE_ORDER_PREDICATE
+PHONE_SQL_FUNCTION = "labs_phone10"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS customers (
@@ -33,15 +40,25 @@ CREATE TABLE IF NOT EXISTS customers (
 """
 
 
+def normalize_phone(phone):
+    """Return the canonical ten-digit identity, or an empty string if absent."""
+    digits = "".join(c for c in str(phone or "") if c.isdigit())[-10:]
+    return digits if len(digits) == 10 else ""
+
+
 def ensure_schema(conn):
+    # SQL aggregation must use the exact same rules as key_for(). Registering
+    # the Python normalizer avoids another punctuation-specific SQL expression
+    # drifting away from the customer key again.
+    conn.create_function(PHONE_SQL_FUNCTION, 1, normalize_phone, deterministic=True)
     conn.execute(SCHEMA)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone)")
 
 
 def key_for(phone, email, name):
     """Phone first — it's the one field a pasted order almost always carries."""
-    digits = "".join(c for c in (phone or "") if c.isdigit())[-10:]
-    if len(digits) == 10:
+    digits = normalize_phone(phone)
+    if digits:
         return "p:" + digits
     if (email or "").strip():
         return "e:" + email.strip().lower()
@@ -67,9 +84,9 @@ def upsert_from_order(conn, order):
     row = conn.execute("SELECT * FROM customers WHERE ckey=?", (ckey,)).fetchone()
 
     # Recompute from the orders table so totals can't drift out of step.
-    digits = "".join(c for c in (order.get("customer_phone") or "") if c.isdigit())[-10:]
-    if len(digits) == 10:
-        where, params = "REPLACE(REPLACE(customer_phone,' ',''),'-','') LIKE ?", ("%" + digits,)
+    digits = normalize_phone(order.get("customer_phone"))
+    if digits:
+        where, params = f"{PHONE_SQL_FUNCTION}(customer_phone)=?", (digits,)
     elif (order.get("customer_email") or "").strip():
         where, params = "LOWER(customer_email)=?", (order["customer_email"].strip().lower(),)
     else:
@@ -78,12 +95,18 @@ def upsert_from_order(conn, order):
     agg = conn.execute(
         f"SELECT COUNT(*) n, COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) spent, "
         f"MIN(received_at) first_at, MAX(received_at) last_at FROM orders "
-        f"WHERE status != 'cancelled' AND {where}", params).fetchone()
+        f"WHERE {LIVE_ORDER_PREDICATE} AND {where}", params).fetchone()
 
     n = agg["n"] or 0
     spent = float(agg["spent"] or 0)
     aov = round(spent / n, 2) if n else 0.0
     auto = _tags(n, spent)
+
+    if not n:
+        if row:
+            conn.execute("DELETE FROM customers WHERE ckey=?", (ckey,))
+            conn.commit()
+        return None
 
     if row:
         conn.execute(
@@ -123,7 +146,10 @@ def recount(conn, ckey):
         return 0
     kind, _, val = ckey.partition(":")
     if kind == "p":
-        where, params = "REPLACE(REPLACE(customer_phone,' ',''),'-','') LIKE ?", ("%" + val,)
+        digits = normalize_phone(val)
+        if not digits:
+            return row["orders_count"] or 0
+        where, params = f"{PHONE_SQL_FUNCTION}(customer_phone)=?", (digits,)
     elif kind == "e":
         where, params = "LOWER(customer_email)=?", (val,)
     else:
@@ -131,7 +157,7 @@ def recount(conn, ckey):
     agg = conn.execute(
         f"SELECT COUNT(*) n, COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) spent, "
         f"MIN(received_at) first_at, MAX(received_at) last_at FROM orders "
-        f"WHERE status != 'cancelled' AND {where}", params).fetchone()
+        f"WHERE {LIVE_ORDER_PREDICATE} AND {where}", params).fetchone()
     n = agg["n"] or 0
     if not n:
         conn.execute("DELETE FROM customers WHERE ckey=?", (ckey,))

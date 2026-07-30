@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """System files — admin tool. Renders /var/www/ops/files.html.
 
-A clean, read-only browser over the Hermes home (/root): navigate folders,
-toggle hidden files, preview text inline, download anything. Distinct from Drop
-(which is purely the product-media store). Credential files (.env, keys, oauth
-secrets) are listed but their contents are withheld by the server.
+A clean, read-only browser over the Labs OS source tree: navigate folders,
+preview text inline, and download safe project files. Runtime data, backups,
+credentials, hidden paths and symlinks are refused by the server.
 """
 import os
 import sys
@@ -60,26 +59,27 @@ def build():
   <main>
     <div class="page-head">
       <h1 class="page-title">System files</h1>
-      <p class="page-sub">Browse the Hermes home directly — read-only. Credential files are listed but their contents stay protected. (Drop is separate; that's your product media.)</p>
+      <p class="page-sub">Browse the Labs OS project source — read-only. Runtime data, backups and credentials stay outside this browser. (Drop is separate; that's your product media.)</p>
     </div>
     <div class="fb-bar">
       <div class="crumbs" id="crumbs"></div>
       <label class="fb-toggle"><input type="checkbox" id="hid"> Show hidden</label>
     </div>
     <div class="flist" id="list"><div class="empty2">Loading…</div></div>
-    <div class="note">Rooted at <code>/root</code>. Files over 512&nbsp;KB and binaries open as downloads. To read a protected file, use SSH.</div>
+    <div class="note">Rooted at <code>/root/ops-dashboard</code>. Files over 512&nbsp;KB and binaries open as downloads.</div>
     {hub_footer()}
   </main>
 </div>
-<div class="modal" id="modal"><div class="sheet">
-  <header><b id="mv-name"></b><a class="dl" id="mv-dl" href="#" style="display:none">Download</a><button class="x" id="mv-x">&times;</button></header>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="mv-name" hidden><div class="sheet">
+  <header><b id="mv-name"></b><a class="dl" id="mv-dl" href="#" style="display:none">Download</a><button class="x" id="mv-x" aria-label="Close preview">&times;</button></header>
   <div id="mv-body"></div>
 </div></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script>
 'use strict';
 var API='/ops/agent/api';
-var state={{path:'/root',hidden:false,root:'/root'}};
+var state={{path:'/root/ops-dashboard',hidden:false,root:'/root/ops-dashboard'}};
+var loadSeq=0,fileSeq=0,lastFocus=null;
 function $(id){{return document.getElementById(id);}}
 function esc(s){{var d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}}
 var toastT;
@@ -98,20 +98,22 @@ var FILE='<svg class="fic" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14
 var LOCK='<svg class="fic" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>';
 
 async function load(){{
+  var seq=++loadSeq, requested=state.path;
   $('list').innerHTML='<div class="empty2">Loading…</div>';
   try{{
-    var d=await api('/fs/list?hidden='+(state.hidden?'1':'0')+'&path='+encodeURIComponent(state.path));
+    var d=await api('/fs/list?hidden='+(state.hidden?'1':'0')+'&path='+encodeURIComponent(requested));
+    if(seq!==loadSeq)return;
     state.path=d.path; state.root=d.root;
     crumbs(d);
     if(!d.entries.length){{ $('list').innerHTML='<div class="empty2">Empty folder.</div>'; return; }}
     var html='';
-    if(d.parent){{ html+='<div class="frow dir" data-up="'+esc(d.parent)+'">'+DIR+'<div class="fnm">..</div><span class="chev">&rsaquo;</span></div>'; }}
+    if(d.parent){{ html+='<div class="frow dir" role="button" tabindex="0" data-up="'+esc(d.parent)+'">'+DIR+'<div class="fnm">..</div><span class="chev">&rsaquo;</span></div>'; }}
     d.entries.forEach(function(e){{
       var icon = e.is_dir?DIR:(e.protected?LOCK:FILE);
       var badge = e.protected?'<span class="badge lock">protected</span>':(e.link?'<span class="badge link">link</span>':'');
       var meta = e.is_dir?'':('<span class="fmeta">'+fmtSize(e.size)+' &middot; '+fmtDate(e.mtime)+'</span>');
       var cls='frow'+(e.is_dir?' dir':'')+(e.hidden?' hidden':'');
-      html+='<div class="'+cls+'" data-dir="'+(e.is_dir?'1':'0')+'" data-path="'+esc(e.path)+'" data-name="'+esc(e.name)+'" data-prot="'+(e.protected?'1':'0')+'">'+
+      html+='<div class="'+cls+'" role="button" tabindex="0" data-dir="'+(e.is_dir?'1':'0')+'" data-path="'+esc(e.path)+'" data-name="'+esc(e.name)+'" data-prot="'+(e.protected?'1':'0')+'">'+
         icon+'<div class="fnm">'+esc(e.name)+'</div>'+badge+meta+(e.is_dir?'<span class="chev">&rsaquo;</span>':'')+'</div>';
     }});
     $('list').innerHTML=html;
@@ -121,24 +123,27 @@ async function load(){{
         if(row.dataset.dir==='1'){{ state.path=row.dataset.path; load(); }}
         else openFile(row.dataset.path, row.dataset.name, row.dataset.prot==='1');
       }};
+      row.onkeydown=function(e){{ if(e.key==='Enter'||e.key===' '){{e.preventDefault();row.click();}} }};
     }});
-  }}catch(e){{ if(e.message!=='auth') $('list').innerHTML='<div class="empty2">'+esc(e.message)+'</div>'; }}
+  }}catch(e){{ if(seq===loadSeq&&e.message!=='auth') $('list').innerHTML='<div class="empty2">'+esc(e.message)+'</div>'; }}
 }}
 
 function crumbs(d){{
   var c=$('crumbs'); var rel=d.path===d.root?'':d.path.slice(d.root.length).replace(/^\\//,'');
-  var html='<a data-p="'+esc(d.root)+'">root</a>';
+  var html='<a role="button" tabindex="0" data-p="'+esc(d.root)+'">root</a>';
   var acc=d.root;
-  rel.split('/').filter(Boolean).forEach(function(seg){{ acc=acc+'/'+seg; html+='<span class="sep">/</span><a data-p="'+esc(acc)+'">'+esc(seg)+'</a>'; }});
+  rel.split('/').filter(Boolean).forEach(function(seg){{ acc=acc+'/'+seg; html+='<span class="sep">/</span><a role="button" tabindex="0" data-p="'+esc(acc)+'">'+esc(seg)+'</a>'; }});
   c.innerHTML=html;
-  c.querySelectorAll('a').forEach(function(a){{ a.onclick=function(){{ state.path=a.dataset.p; load(); }}; }});
+  c.querySelectorAll('a').forEach(function(a){{ a.onclick=function(){{ state.path=a.dataset.p; load(); }}; a.onkeydown=function(e){{if(e.key==='Enter'||e.key===' '){{e.preventDefault();a.click();}}}}; }});
 }}
 
 async function openFile(path, name, prot){{
+  var seq=++fileSeq;
+  lastFocus=document.activeElement;
   $('mv-name').textContent=name;
   var dl=$('mv-dl'); dl.style.display='none';
   $('mv-body').innerHTML='<div class="msg">Loading…</div>';
-  $('modal').classList.add('on');
+  $('modal').hidden=false;$('modal').classList.add('on');$('mv-x').focus();
   if(prot){{
     $('mv-body').innerHTML='<div class="msg"><svg class="lk" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>'+
       'This file holds credentials, so its contents are protected from the browser.<br>Open it over SSH if you truly need it.</div>';
@@ -146,16 +151,27 @@ async function openFile(path, name, prot){{
   }}
   try{{
     var d=await api('/fs/read?path='+encodeURIComponent(path));
+    if(seq!==fileSeq)return;
     dl.href=API+'/fs/download?path='+encodeURIComponent(path); dl.style.display='';
     if(d.content!=null){{ var pre=document.createElement('pre'); pre.textContent=d.content; $('mv-body').innerHTML=''; $('mv-body').appendChild(pre); }}
     else if(d.binary){{ $('mv-body').innerHTML='<div class="msg">Binary file ('+fmtSize(d.size)+') — no inline preview.<br>Use Download to grab it.</div>'; }}
     else if(d.too_large){{ $('mv-body').innerHTML='<div class="msg">Large file ('+fmtSize(d.size)+') — too big to preview inline.<br>Use Download to grab it.</div>'; }}
     else{{ $('mv-body').innerHTML='<div class="msg">Nothing to show.</div>'; }}
-  }}catch(e){{ $('mv-body').innerHTML='<div class="msg">'+esc(e.message)+'</div>'; }}
+  }}catch(e){{ if(seq===fileSeq)$('mv-body').innerHTML='<div class="msg">'+esc(e.message)+'</div>'; }}
 }}
-$('mv-x').onclick=function(){{ $('modal').classList.remove('on'); }};
-$('modal').addEventListener('click',function(e){{ if(e.target===$('modal')) $('modal').classList.remove('on'); }});
-document.addEventListener('keydown',function(e){{ if(e.key==='Escape') $('modal').classList.remove('on'); }});
+function closeModal(){{fileSeq++;$('modal').classList.remove('on');$('modal').hidden=true;if(lastFocus&&lastFocus.focus)lastFocus.focus();}}
+$('mv-x').onclick=closeModal;
+$('modal').addEventListener('click',function(e){{ if(e.target===$('modal')) closeModal(); }});
+document.addEventListener('keydown',function(e){{
+  if(!$('modal').classList.contains('on'))return;
+  if(e.key==='Escape'){{closeModal();return;}}
+  if(e.key==='Tab'){{
+    var f=Array.prototype.slice.call($('modal').querySelectorAll('a[href],button:not([disabled])')).filter(function(x){{return x.offsetParent!==null;}});
+    if(!f.length)return;
+    var i=f.indexOf(document.activeElement),n=e.shiftKey?(i<=0?f.length-1:i-1):(i===f.length-1?0:i+1);
+    e.preventDefault();f[n].focus();
+  }}
+}});
 $('hid').addEventListener('change',function(){{ state.hidden=$('hid').checked; load(); }});
 
 load();

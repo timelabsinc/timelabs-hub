@@ -147,7 +147,7 @@ function editorShell(a){{
       '<div class="field"><label>Blog</label><select id="f-blog" class="pin"'+(a?' disabled':'')+'>'+blogOpts+'</select></div>'+
       '<div class="field"><label>Author</label><input id="f-author" class="pin" placeholder="Timelabs"></div>'+
     '</div>'+
-    '<div class="field"><label>Summary <small style="text-transform:none;font-weight:400">(excerpt shown in listings)</small></label>'+
+    '<div class="field"><label for="f-summary">Summary <small style="text-transform:none;font-weight:400">(excerpt shown in listings)</small></label>'+
       '<textarea id="f-summary" class="pin"></textarea></div>'+
     '<div class="field"><label>Post</label><div id="f-body"></div></div>'+
     '<div class="row2">'+

@@ -35,8 +35,11 @@ sys.path.insert(0, "/root/ops-dashboard")
 import reddit_clean
 
 DB = "/root/ops-dashboard/data/hermes.db"
+REDDIT_MEDIA = "/root/ops-dashboard/data/reddit-media"
 SUB = "IndiaWatchMods"
 HERMES_TIMEOUT = 420
+HERMES_TOOLSET = "web"
+PHOTO_EXTENSIONS = frozenset((".jpg", ".jpeg", ".png", ".webp"))
 
 
 def db():
@@ -50,9 +53,10 @@ def hermes(prompt, toolset=None):
 
     Cleaning here rather than only at the end means no later pass ever sees a
     dash or a watermark character and copies the habit forward."""
-    cmd = ["hermes"]
-    if toolset:
-        cmd += ["-t", toolset]
+    # Briefs and collected thread titles are untrusted text. Never let a
+    # drafting prompt inherit the owner's global rules/memory or root-capable
+    # default toolset, even when this worker was launched by a content user.
+    cmd = ["hermes", "--ignore-rules", "-t", toolset or HERMES_TOOLSET]
     cmd += ["-z", prompt]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=HERMES_TIMEOUT)
     out = (r.stdout or "").strip()
@@ -144,6 +148,53 @@ def answered(post_id):
     return (row["answer"] or "").strip() if row else ""
 
 
+def validated_photos(post_id, raw):
+    """Resolve only this post's durable regular image files.
+
+    A retry can happen days after upload. Refuse to draft if a referenced file
+    has disappeared instead of claiming the model saw a build that was no
+    longer present.
+    """
+    if not isinstance(raw, list):
+        raise RuntimeError("draft photos are not a valid list")
+    root = os.path.join(REDDIT_MEDIA, str(int(post_id)))
+    photos = []
+    for value in raw:
+        if not isinstance(value, str):
+            raise RuntimeError("draft contains a non-text photo path")
+        filename = os.path.basename(value)
+        stem, ext = os.path.splitext(filename)
+        expected = os.path.join(root, filename)
+        if (value != expected or not stem.isascii() or not stem.isdigit()
+                or str(int(stem)) != stem or int(stem) < 1
+                or ext.lower() not in PHOTO_EXTENSIONS
+                or os.path.islink(value) or not os.path.isfile(value)):
+            raise RuntimeError(
+                "a persisted draft photo is missing or outside its private post folder")
+        photos.append(value)
+    return photos
+
+
+def inspect_photos(photos):
+    """Ground the writing context in what is actually visible.
+
+    The long writing passes can stay on the inexpensive web model. This one
+    bounded pass gets only the vision tool and is explicitly forbidden from
+    guessing hidden parts or commercial claims.
+    """
+    listing = "\n".join(f"{index}. {path}" for index, path in enumerate(photos, 1))
+    return hermes(
+        "Use the vision tool to open every numbered local image below before "
+        "answering. These are photos of one watch build. Return concise factual "
+        "observations only: visible dial colour/design, case finish/shape, bezel, "
+        "hands, bracelet or strap, complications, and text only when genuinely "
+        "readable. Distinguish observations by image where useful. Do not infer "
+        "the movement, materials, water resistance, price, origin, durability, "
+        "or any hidden specification. Say uncertain when the photo does not prove "
+        "something.\n\nImages:\n" + listing,
+        toolset="vision")
+
+
 def run(post_id):
     conn = db()
     post = conn.execute("SELECT * FROM reddit_posts WHERE id=?", (post_id,)).fetchone()
@@ -151,11 +202,28 @@ def run(post_id):
     if not post:
         raise SystemExit(f"no post {post_id}")
 
-    photos = json.loads(post["photos"] or "[]")
+    try:
+        raw_photos = json.loads(post["photos"] or "[]")
+    except (TypeError, json.JSONDecodeError):
+        raise RuntimeError("draft photos contain invalid JSON")
+    photos = validated_photos(post_id, raw_photos)
     brief = (post["brief"] or "").strip()
     kind = post["kind"] or "showcase"
-    shots = (f"{len(photos)} photo(s) of the build will be attached by hand "
-             f"when posting." if photos else "No photos attached.")
+    out = {}
+    if photos:
+        set_stage(post_id, "inspect photos", status="running")
+        out["image_observations"] = inspect_photos(photos)
+        # Persist the grounding pass immediately. If a later writing call
+        # fails, the owner can still inspect what the model actually saw.
+        set_stage(
+            post_id, "inspect photos", status="running",
+            passes=json.dumps({"image_observations": out["image_observations"]}))
+        shots = (
+            f"{len(photos)} photo(s) will be attached when posting.\n"
+            "Grounded observations from opening those exact files:\n"
+            f"{out['image_observations']}")
+    else:
+        shots = "No photos attached."
 
     context = (
         f"You are writing for r/{SUB}, a brand-new subreddit run by Timelabs Co, "
@@ -167,8 +235,6 @@ def run(post_id):
         f"Post type: {kind}.\n"
         f"What the owner said about this build: {brief or '(nothing beyond the photos)'}\n"
         f"{shots}\n")
-
-    out = {}
 
     # 1 — research
     set_stage(post_id, "research", status="running")

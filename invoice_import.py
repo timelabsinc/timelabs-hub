@@ -8,6 +8,7 @@ Usage:
   python3 invoice_import.py --commit   # actually insert new invoices
 """
 import glob
+import fcntl
 import os
 import re
 import sqlite3
@@ -16,6 +17,7 @@ import sys
 DB = "/root/ops-dashboard/data/suppliers.db"
 INBOX = "/srv/timelabs-drop/Supplier Invoices"
 SUPPLIER_NAME = "Shenzhen Chengdaxin Technology Co.,Ltd"
+LOCK_PATH = "/root/ops-dashboard/data/.invoice-import.lock"
 
 
 def _num(v):
@@ -89,7 +91,7 @@ def parse_invoice(path):
             "source_file": os.path.basename(path)}
 
 
-def import_new(commit=False):
+def _import_new_locked(commit=False):
     conn = sqlite3.connect(DB)
     have = {r[0] for r in conn.execute("SELECT source_file FROM invoices")}
     sup = conn.execute("SELECT id FROM suppliers WHERE name=?", (SUPPLIER_NAME,)).fetchone()
@@ -125,6 +127,13 @@ def import_new(commit=False):
         conn.commit()
     conn.close()
     return results
+
+
+def import_new(commit=False):
+    """Serialize scans and commits across web requests and manual CLI runs."""
+    with open(LOCK_PATH, "a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        return _import_new_locked(commit=commit)
 
 
 if __name__ == "__main__":

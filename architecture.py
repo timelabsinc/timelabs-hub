@@ -7,6 +7,7 @@ service health from systemctl, table counts from the databases, and recent
 activity from hub_events. Re-run (or the daily refresh) and it's current.
 """
 import os
+import html
 import subprocess
 import sqlite3
 import shutil
@@ -133,9 +134,11 @@ def build():
         for i, (name, note) in enumerate(FLOW))
 
     act_html = "".join(
-        f'<div class="act"><span class="f-meta num">{(r[0] or "")[:16]}</span>'
-        f'<span class="pill muted">{r[1]}</span><b>{r[2]}</b>'
-        f'<span class="adet">{(r[4] or "")[:60]}</span></div>'
+        f'<div class="act"><span class="f-meta num">'
+        f'{html.escape(str(r[0] or "")[:16])}</span>'
+        f'<span class="pill muted">{html.escape(str(r[1] or ""))}</span>'
+        f'<b>{html.escape(str(r[2] or ""))}</b>'
+        f'<span class="adet">{html.escape(str(r[4] or "")[:60])}</span></div>'
         for r in recent) or '<p class="empty">No activity yet.</p>'
 
     generated = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())

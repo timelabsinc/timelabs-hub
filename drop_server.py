@@ -11,9 +11,9 @@ Runs on 127.0.0.1:8903 behind nginx (gated by Key / oauth2-proxy):
   POST /upload/finish       {id} -> {name}  (collision-safe final placement)
   GET  /thumb?path=         320px jpeg thumbnail (Pillow images / ffmpeg video)
 
-Uploads are resumable by design: files land in .uploads/<id>.part where <id>
-is derived from (path, name, size, mtime) — the same file re-picked after a
-dropped connection or page reload resumes at the byte the server already has.
+Uploads are resumable by design: files land in .uploads/<random-id>.part with
+owner/path/size metadata — the same owner re-picking the same file resumes at
+the byte the server already has without letting another account claim it.
 Downloads/streaming are NOT served here: nginx serves /drop/files/ straight
 from disk (with HTTP Range for video scrubbing).
 
@@ -48,10 +48,20 @@ SHARES = os.path.join(ROOT, ".shares")   # public share tokens -> target json
 # undo is for "that looked wrong, put it back", not an audit trail.
 UNDO_LOG = os.path.join(ROOT, ".last-organize.json")
 PUBLIC_BASE = "https://ops.timelabsco.in"
-GDRIVE_TOKEN = "/root/ops-dashboard/.gdrive-token.json"
 OAUTH_CLIENT = "/root/oauth-client.json"
 GDRIVE_REDIRECT = PUBLIC_BASE + "/drop/api/gdrive/callback"
 HERMES_DB = "/root/ops-dashboard/data/hermes.db"
+GDRIVE_STATE_TTL = 10 * 60
+# Connecting Drive mints a credential shared by the whole OS (Drop, Sheets,
+# and backups), so this boundary is intentionally not delegated through the
+# editable role store. Changing who may mint that credential is a code review,
+# not a checkbox in People & Access.
+DRIVE_ADMIN_EMAILS = frozenset({
+    "timelabs.inc@gmail.com",
+    "schezan.m@gmail.com",
+})
+_gdrive_states = {}
+_gdrive_states_lock = threading.Lock()
 
 
 def hub_event(kind, detail, actor="?"):
@@ -73,18 +83,92 @@ def hub_event(kind, detail, actor="?"):
         print(f"[events] {e}", flush=True)
 MAX_CHUNK = 16 * 1024 * 1024          # per-request cap; client sends 6 MB
 MAX_FILE = 4 * 1024 * 1024 * 1024     # 4 GB per file is plenty for product video
+MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
+MAX_USER_INFLIGHT = 8 * 1024 * 1024 * 1024
+UPLOAD_TTL = 24 * 60 * 60
+# Drive imports stream to disk, but still need a hard end when Google omits or
+# lies about Content-Length. Exports currently use Google's multipart endpoint,
+# which requires a bounded in-memory body; keep that cap deliberately smaller.
+DRIVE_IMPORT_MAX_BYTES = 512 * 1024 * 1024
+DRIVE_EXPORT_MAX_BYTES = 128 * 1024 * 1024
+DRIVE_EXPORT_MAX_FILES = 200
+ZIP_MAX_BYTES = 2 * 1024 * 1024 * 1024
+ZIP_MAX_FILES = 20_000
+ZIP_RESERVE_OVERHEAD = 16 * 1024 * 1024
 NAME_RE = re.compile(r"^[^/\\\x00-\x1f]{1,200}$")
 
 for d in (ROOT, UPLOADS, THUMBS, TRASH, SHARES):
     os.makedirs(d, exist_ok=True)
 
+# No temporary Drive/ZIP job can survive a process restart. Recover its disk
+# immediately instead of leaving an invisible multi-gigabyte partial forever.
+for _temp_name in os.listdir(UPLOADS):
+    if ((_temp_name.startswith(".job-drive-") and _temp_name.endswith(".part"))
+            or (_temp_name.startswith(".job-zip-") and _temp_name.endswith(".zip"))):
+        try:
+            os.remove(os.path.join(UPLOADS, _temp_name))
+        except OSError:
+            pass
+
 _locks = {}
 _locks_guard = threading.Lock()
+_upload_catalog_lock = threading.Lock()
+# A uid lock protects one in-flight part. Every visible filesystem mutation
+# shares this second lock: otherwise upload, rename, move, delete, organize,
+# and Drive import can each observe the same destination as free and the later
+# POSIX rename can replace the earlier file.
+_fs_mutation_lock = threading.RLock()
+# Temporary jobs are separate from resumable uploads, but consume the same
+# disk. Reservations make every producer account for every other producer's
+# future bytes, rather than each independently believing the 20 GB reserve is
+# still free. One Drive and one ZIP job at a time also prevents double-clicks
+# from multiplying memory/disk pressure.
+_temp_reservations = {}
+_temp_reservations_lock = threading.Lock()
+_drive_transfer_slot = threading.BoundedSemaphore(1)
+_zip_transfer_slot = threading.BoundedSemaphore(1)
+_search_index_slot = threading.BoundedSemaphore(1)
+_search_index_lock = threading.Lock()
+# A gallery can ask for every uncached preview at once. Each iPhone HEIC decode
+# expands to tens of megabytes, so letting ThreadingHTTPServer decode the whole
+# gallery concurrently can exhaust the host. Two workers keep the UI moving
+# while bounding decode memory. Striped locks also collapse duplicate requests
+# for the same cache key without growing a lock dictionary forever.
+_thumb_generate_slot = threading.BoundedSemaphore(2)
+_thumb_key_locks = tuple(threading.Lock() for _ in range(64))
 
 
 def _lock_for(uid):
     with _locks_guard:
         return _locks.setdefault(uid, threading.Lock())
+
+
+def _temp_reserved_bytes():
+    with _temp_reservations_lock:
+        return sum(_temp_reservations.values())
+
+
+def _reserve_temp_bytes(key, size, upload_reserved):
+    """Reserve `size` bytes while `_upload_catalog_lock` is held.
+
+    The caller supplies resumable uploads' still-unwritten bytes from the
+    catalog it just read. Keeping the lock order catalog -> reservations makes
+    a new normal upload and a new temp job impossible to admit against the
+    same free bytes concurrently.
+    """
+    size = max(0, int(size))
+    with _temp_reservations_lock:
+        already = sum(_temp_reservations.values())
+        free = shutil.disk_usage(ROOT).free
+        if free - int(upload_reserved) - already - size < MIN_FREE_BYTES:
+            return False
+        _temp_reservations[key] = size
+        return True
+
+
+def _release_temp_bytes(key):
+    with _temp_reservations_lock:
+        _temp_reservations.pop(key, None)
 
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".avif"}
@@ -200,12 +284,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _user(self):
         return (self.headers.get("X-User-Email") or "?").strip().lower()
 
+    def _drop_ok(self):
+        email = self._user()
+        if not email or email == "?":
+            return False
+        import access_store
+        return access_store.can_use(email, "drop")
+
+    def _admin_ok(self):
+        email = self._user()
+        return bool(email and email in DRIVE_ADMIN_EMAILS)
+
     # ------------------------------------------------------------- GET
     def do_GET(self):
         path, _, query = self.path.partition("?")
         params = dict(urllib.parse.parse_qsl(query))
         if path.startswith("/s/"):
             self._share_get(path, params)
+            return
+        if not self._drop_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        if path.startswith("/gdrive/") and not self._admin_ok():
+            self._json(403, {"error": "Drive connection is available to admins only"})
             return
         if path == "/list":
             self._list(params.get("path", ""))
@@ -269,13 +370,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
         key = hashlib.sha1(f"{rel}|{st.st_size}|{int(st.st_mtime)}|{px}".encode()).hexdigest()
         dst = os.path.join(THUMBS, key + ".jpg")
         if not os.path.exists(dst):
-            try:
-                ok = make_thumb(src, dst, px)
-            except Exception:
-                ok = False
-            if not ok:
-                self._json(415, {"error": "no thumbnail for this type"})
-                return
+            key_lock = _thumb_key_locks[int(key[:8], 16) % len(_thumb_key_locks)]
+            with key_lock:
+                # Another request for this key may have filled the cache while
+                # this thread waited. Publish new entries atomically so no
+                # response can observe a half-written JPEG.
+                if not os.path.exists(dst):
+                    tmp = f"{dst}.{os.getpid()}.{threading.get_ident()}.tmp.jpg"
+                    try:
+                        with _thumb_generate_slot:
+                            ok = make_thumb(src, tmp, px)
+                        if ok:
+                            os.replace(tmp, dst)
+                    except Exception:
+                        ok = False
+                    finally:
+                        try:
+                            os.remove(tmp)
+                        except FileNotFoundError:
+                            pass
+                    if not ok:
+                        self._json(415, {"error": "no thumbnail for this type"})
+                        return
         with open(dst, "rb") as f:
             data = f.read()
         self.send_response(200)
@@ -288,6 +404,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ------------------------------------------------------------- POST/PUT
     def do_POST(self):
         path = self.path.split("?")[0]
+        if not self._drop_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
+        if path.startswith("/gdrive/") and not self._admin_ok():
+            self._json(403, {"error": "Drive connection is available to admins only"})
+            return
         if path == "/organize/scan":
             self._organize_scan()
         elif path == "/organize/apply":
@@ -316,11 +438,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._upload_init()
         elif path == "/upload/finish":
             self._upload_finish()
+        elif path == "/upload/cancel":
+            self._upload_cancel()
         else:
             self._json(404, {"error": "not found"})
 
     def do_PUT(self):
         path, _, query = self.path.partition("?")
+        if not self._drop_ok():
+            self._json(403, {"error": "not available for this account"})
+            return
         if path == "/upload/chunk":
             self._upload_chunk(dict(urllib.parse.parse_qsl(query)))
         else:
@@ -334,7 +461,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "bad folder name"})
             return
         try:
-            os.makedirs(os.path.join(d, name), exist_ok=False)
+            with _fs_mutation_lock:
+                os.makedirs(os.path.join(d, name), exist_ok=False)
         except FileExistsError:
             self._json(409, {"error": "already exists"})
             return
@@ -349,15 +477,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if d is None or not old or not new:
             self._json(400, {"error": "bad name"})
             return
-        src = os.path.join(d, old)
-        if not os.path.exists(src):
-            self._json(404, {"error": "not found"})
-            return
-        dst = os.path.join(d, new)
-        if os.path.exists(dst):
-            self._json(409, {"error": "a file with that name exists"})
-            return
-        os.rename(src, dst)
+        with _fs_mutation_lock:
+            src = os.path.join(d, old)
+            if not os.path.exists(src):
+                self._json(404, {"error": "not found"})
+                return
+            dst = os.path.join(d, new)
+            if os.path.exists(dst):
+                self._json(409, {"error": "a file with that name exists"})
+                return
+            os.rename(src, dst)
         print(f"[drop] {self._user()} rename {old} -> {new}", flush=True)
         self._json(200, {"ok": True})
 
@@ -372,33 +501,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if src_d is None or dst_d is None or not isinstance(names, list) or not names:
             self._json(400, {"error": "bad request"})
             return
-        if not os.path.isdir(dst_d):
-            self._json(404, {"error": "no such folder"})
-            return
-        if os.path.realpath(src_d) == os.path.realpath(dst_d):
-            self._json(400, {"error": "that is already where they are"})
-            return
         moved, skipped = [], []
-        for raw in names[:500]:
-            fn = safe_name(str(raw))
-            if not fn:
-                continue
-            s = os.path.join(src_d, fn)
-            if not os.path.exists(s):
-                skipped.append(fn)
-                continue
-            # Moving a folder into itself would delete the tree it's walking.
-            if os.path.isdir(s) and os.path.realpath(dst_d).startswith(os.path.realpath(s) + os.sep):
-                skipped.append(fn)
-                continue
-            dest = unique_path(dst_d, fn)
-            shutil.move(s, dest)
-            moved.append(os.path.basename(dest))
+        with _fs_mutation_lock:
+            if not os.path.isdir(dst_d):
+                self._json(404, {"error": "no such folder"})
+                return
+            if os.path.realpath(src_d) == os.path.realpath(dst_d):
+                self._json(400, {"error": "that is already where they are"})
+                return
+            for raw in names[:500]:
+                fn = safe_name(str(raw))
+                if not fn:
+                    continue
+                s = os.path.join(src_d, fn)
+                if not os.path.exists(s):
+                    skipped.append(fn)
+                    continue
+                # Moving a folder into itself would delete the tree it's walking.
+                if (os.path.isdir(s)
+                        and os.path.realpath(dst_d).startswith(
+                            os.path.realpath(s) + os.sep)):
+                    skipped.append(fn)
+                    continue
+                dest = unique_path(dst_d, fn)
+                shutil.move(s, dest)
+                moved.append(os.path.basename(dest))
         print(f"[drop] {self._user()} moved {len(moved)} -> {dst_d}", flush=True)
         self._json(200, {"ok": True, "moved": len(moved), "names": moved,
                          "skipped": skipped})
 
     def _undo_organize(self):
+        with _fs_mutation_lock:
+            return self._undo_organize_locked()
+
+    def _undo_organize_locked(self):
         """Put the last Organize run back: original names, original folder,
         and remove the folders it made if they're now empty."""
         try:
@@ -440,20 +576,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "bad request"})
             return
         done = []
-        for raw in names[:100]:
-            name = safe_name(str(raw))
-            if not name:
-                continue
-            src = os.path.join(d, name)
-            if not os.path.exists(src):
-                continue
-            # unique_path, not a bare timestamp: deleting a whole selection
-            # puts every file in the same second, and two folders holding the
-            # same filename would otherwise have the second delete overwrite
-            # the first one's only copy in the trash.
-            dst = unique_path(TRASH, f"{int(time.time())}-{name}")
-            shutil.move(src, dst)
-            done.append(name)
+        with _fs_mutation_lock:
+            for raw in names[:100]:
+                name = safe_name(str(raw))
+                if not name:
+                    continue
+                src = os.path.join(d, name)
+                if not os.path.exists(src):
+                    continue
+                # unique_path, not a bare timestamp: deleting a whole selection
+                # puts every file in the same second, and two folders holding the
+                # same filename would otherwise have the second delete overwrite
+                # the first one's only copy in the trash.
+                dst = unique_path(TRASH, f"{int(time.time())}-{name}")
+                shutil.move(src, dst)
+                done.append(name)
         print(f"[drop] {self._user()} trashed {done}", flush=True)
         hub_event("delete", ", ".join(done), self._user())
         self._json(200, {"ok": True, "deleted": done})
@@ -531,8 +668,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                   "parts or watches (Seiko-mod business). Reply ONLY with JSON: a list of "
                   f"short 2-4 word folder names, one per image, same order. Images:\n{listing}")
         try:
-            r = subprocess.run(["hermes", "-t", "vision", "-z", prompt],
-                               capture_output=True, text=True, timeout=90)
+            r = subprocess.run(
+                ["hermes", "--ignore-rules", "-t", "vision", "-z", prompt],
+                capture_output=True, text=True, timeout=90)
             m = re.search(r"\[.*\]", r.stdout, re.S)
             names = json.loads(m.group(0)) if m else []
             for (g, _), nm in zip(samples, names):
@@ -637,6 +775,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          "ungrouped": len(names) - sum(len(g["files"]) for g in groups)})
 
     def _organize_apply(self):
+        with _fs_mutation_lock:
+            return self._organize_apply_locked()
+
+    def _organize_apply_locked(self):
         p = self._body_json(cap=256 * 1024)
         rel = (p or {}).get("path", "")
         d = safe_rel(rel)
@@ -700,33 +842,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return None, None
 
     def _gdrive_access(self):
-        """A valid access token, refreshing via the stored refresh token."""
-        try:
-            tok = json.load(open(GDRIVE_TOKEN))
-        except (OSError, json.JSONDecodeError):
-            return None
-        if tok.get("exp", 0) > time.time() + 60:
-            return tok.get("access_token")
-        cid, csec = self._gclient()
-        if not cid or not tok.get("refresh_token"):
-            return None
-        body = urllib.parse.urlencode({
-            "client_id": cid, "client_secret": csec,
-            "refresh_token": tok["refresh_token"], "grant_type": "refresh_token",
-        }).encode()
-        req = urllib.request.Request("https://oauth2.googleapis.com/token", data=body)
-        try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                fresh = json.loads(r.read())
-        except Exception as e:
-            print(f"[gdrive] refresh failed: {e}", flush=True)
-            return None
-        tok["access_token"] = fresh["access_token"]
-        tok["exp"] = time.time() + fresh.get("expires_in", 3500)
-        with open(GDRIVE_TOKEN, "w") as f:
-            json.dump(tok, f)
-        os.chmod(GDRIVE_TOKEN, 0o600)
-        return tok["access_token"]
+        """A valid token from the one atomic cross-process credential store."""
+        import google_token_store
+        return google_token_store.access_token("[gdrive]")
+
+    @staticmethod
+    def _write_gdrive_token(tok):
+        import google_token_store
+        google_token_store.write_token(tok)
 
     def _gdrive_status(self):
         cid, _ = self._gclient()
@@ -738,6 +861,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not cid:
             self._json(500, {"error": "oauth client not configured on server"})
             return
+        state = secrets.token_urlsafe(32)
+        now = time.time()
+        with _gdrive_states_lock:
+            for old, record in list(_gdrive_states.items()):
+                if record["expires"] <= now:
+                    _gdrive_states.pop(old, None)
+            _gdrive_states[state] = {
+                "email": self._user(), "expires": now + GDRIVE_STATE_TTL,
+            }
         url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode({
             "client_id": cid,
             "redirect_uri": GDRIVE_REDIRECT,
@@ -749,6 +881,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                       "https://www.googleapis.com/auth/spreadsheets"),
             "access_type": "offline",
             "prompt": "consent",
+            "state": state,
         })
         self.send_response(302)
         self.send_header("Location", url)
@@ -757,6 +890,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _gdrive_callback(self, params):
         code = params.get("code")
+        state = params.get("state") or ""
+        with _gdrive_states_lock:
+            state_record = _gdrive_states.pop(state, None)
+        if (not state_record or state_record["expires"] <= time.time()
+                or state_record["email"] != self._user()):
+            self._html(400, "<h2>Drive connect expired</h2>"
+                            "<p>Return to Drop and start the connection again.</p>")
+            return
         cid, csec = self._gclient()
         if not code or not cid:
             self._html(400, "<h2>Drive connect failed — no code returned</h2>")
@@ -770,12 +911,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=20) as r:
                 tok = json.loads(r.read())
         except urllib.error.HTTPError as e:
-            self._html(400, f"<h2>Drive connect failed</h2><p>{e.read().decode()[:300]}</p>")
+            detail = html.escape(e.read().decode(errors="replace")[:300])
+            self._html(400, f"<h2>Drive connect failed</h2><p>{detail}</p>")
             return
         tok["exp"] = time.time() + tok.get("expires_in", 3500)
-        with open(GDRIVE_TOKEN, "w") as f:
-            json.dump(tok, f)
-        os.chmod(GDRIVE_TOKEN, 0o600)
+        self._write_gdrive_token(tok)
         print(f"[gdrive] connected by {self._user()}", flush=True)
         self.send_response(302)
         self.send_header("Location", "/drop/")
@@ -844,8 +984,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not fid or not name or dest is None:
             self._json(400, {"error": "bad import request"})
             return
+        if not _drive_transfer_slot.acquire(blocking=False):
+            self._json(429, {
+                "error": "Another Google Drive transfer is already running. "
+                         "Wait for it to finish, then retry."})
+            return
         access = self._gdrive_access()
         if not access:
+            _drive_transfer_slot.release()
             self._json(401, {"error": "not connected"})
             return
         user = self._user()
@@ -861,19 +1007,53 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             url = f"https://www.googleapis.com/drive/v3/files/{fid}?alt=media"
         name = safe_name(name) or "import"
+        token = secrets.token_hex(16)
+        job_key = "drive-import-" + token
+        tmp = os.path.join(UPLOADS, ".job-drive-" + token + ".part")
+        with _upload_catalog_lock:
+            catalog = self._upload_catalog()
+            upload_reserved = sum(max(0, int(meta.get("size", 0)) - have)
+                                  for _, meta, have in catalog)
+            admitted = _reserve_temp_bytes(
+                job_key, DRIVE_IMPORT_MAX_BYTES, upload_reserved)
+        if not admitted:
+            _drive_transfer_slot.release()
+            self._json(507, {
+                "error": "Not enough safe disk space for a Drive import. "
+                         "Free space or finish existing uploads first."})
+            return
 
         def worker():
-            tmp = os.path.join(UPLOADS, "gdrive-" + fid + ".part")
             req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access}"})
             try:
-                with urllib.request.urlopen(req, timeout=600) as r, open(tmp, "wb") as f:
-                    while True:
-                        chunk = r.read(1024 * 512)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                final = unique_path(dest, name)
-                shutil.move(tmp, final)
+                received = 0
+                with urllib.request.urlopen(req, timeout=600) as r:
+                    advertised = r.headers.get("Content-Length")
+                    try:
+                        advertised = int(advertised) if advertised is not None else None
+                    except (TypeError, ValueError):
+                        advertised = None
+                    if advertised is not None and advertised > DRIVE_IMPORT_MAX_BYTES:
+                        raise ValueError(
+                            "Drive import exceeds the 512 MB transfer limit")
+                    with open(tmp, "xb") as f:
+                        while True:
+                            chunk = r.read(1024 * 512)
+                            if not chunk:
+                                break
+                            if received + len(chunk) > DRIVE_IMPORT_MAX_BYTES:
+                                raise ValueError(
+                                    "Drive import exceeds the 512 MB transfer limit")
+                            if shutil.disk_usage(ROOT).free - len(chunk) < MIN_FREE_BYTES:
+                                raise OSError(
+                                    "Drive import stopped to protect the system disk reserve")
+                            f.write(chunk)
+                            received += len(chunk)
+                with _fs_mutation_lock:
+                    if not os.path.isdir(dest):
+                        raise FileNotFoundError("destination folder no longer exists")
+                    final = unique_path(dest, name)
+                    shutil.move(tmp, final)
                 os.chmod(final, 0o644)
                 print(f"[gdrive] {user} imported {name}", flush=True)
                 hub_event("gdrive_import", name, user)
@@ -883,8 +1063,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     os.remove(tmp)
                 except OSError:
                     pass
+            finally:
+                _release_temp_bytes(job_key)
+                _drive_transfer_slot.release()
 
-        threading.Thread(target=worker, daemon=True).start()
+        try:
+            threading.Thread(target=worker, daemon=True).start()
+        except Exception:
+            _release_temp_bytes(job_key)
+            _drive_transfer_slot.release()
+            self._json(500, {"error": "Could not start the Drive import"})
+            return
         self._json(200, {"ok": True, "importing": name})
 
     # ------------------------------------------------------------- shares
@@ -927,18 +1116,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     @classmethod
     def _sidx_load(cls):
-        try:
-            with open(cls.SEARCH_INDEX) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return {}
+        with _search_index_lock:
+            try:
+                with open(cls.SEARCH_INDEX) as f:
+                    return json.load(f)
+            except (OSError, json.JSONDecodeError):
+                return {}
 
     @classmethod
     def _sidx_save(cls, idx):
-        tmp = cls.SEARCH_INDEX + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(idx, f)
-        os.replace(tmp, cls.SEARCH_INDEX)
+        with _search_index_lock:
+            tmp = cls.SEARCH_INDEX + f".{os.getpid()}-{threading.get_ident()}.tmp"
+            try:
+                with open(tmp, "x") as f:
+                    json.dump(idx, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, cls.SEARCH_INDEX)
+            finally:
+                try:
+                    os.remove(tmp)
+                except FileNotFoundError:
+                    pass
 
     @staticmethod
     def _walk_files():
@@ -1023,6 +1222,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          "exact": len(exact)})
 
     def _search_index(self):
+        if not _search_index_slot.acquire(blocking=False):
+            self._json(409, {
+                "error": "Photo indexing is already running. Wait for it to finish."})
+            return
+        try:
+            return self._search_index_locked()
+        finally:
+            _search_index_slot.release()
+
+    def _search_index_locked(self):
         """Describe a batch of not-yet-indexed photos with Claude vision and
         cache the result. Batched and bounded so the request stays responsive;
         the UI calls it repeatedly until unindexed hits zero."""
@@ -1071,10 +1280,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             for model, provider in (("claude-sonnet-4-6", "anthropic"), (None, None)):
                 try:
-                    cmd = ["hermes"]
+                    cmd = ["hermes", "--ignore-rules"]
                     if model:
                         cmd += ["-m", model, "--provider", provider]
-                    cmd += ["-t", "vision,files", "-z", prompt]
+                    cmd += ["-t", "vision", "-z", prompt]
                     r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                     reply = (r.stdout or "").strip()
                     if reply:
@@ -1152,16 +1361,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, info)
 
     # ------------------------------------------------------- Drive export
-    def _gdrive_upload(self, access, name, fp, parent=None):
+    def _gdrive_upload(self, access, name, fp, parent=None,
+                       max_bytes=DRIVE_EXPORT_MAX_BYTES):
         import mimetypes
         mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
         meta = {"name": name}
         if parent:
             meta["parents"] = [parent]
+        max_bytes = max(0, min(int(max_bytes), DRIVE_EXPORT_MAX_BYTES))
         try:
-            data = open(fp, "rb").read()
+            if os.path.getsize(fp) > max_bytes:
+                if max_bytes < DRIVE_EXPORT_MAX_BYTES:
+                    return None, (
+                        "The file changed while the Drive export was being prepared. "
+                        "Retry after file changes are complete.")
+                return None, (
+                    "Drive export is limited to 128 MB per transfer. "
+                    "Use Google Drive directly for larger files.")
+            with open(fp, "rb") as f:
+                data = f.read(max_bytes + 1)
         except OSError as e:
             return None, str(e)
+        if len(data) > max_bytes:
+            return None, (
+                "The file changed while the Drive export was being prepared. "
+                "Retry after file changes are complete.")
         boundary = "labs" + secrets.token_hex(12)
         body = (
             f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode()
@@ -1218,35 +1442,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if d is None or not name or not os.path.exists(os.path.join(d, name)):
             self._json(404, {"error": "no such file or folder"})
             return
-        access = self._gdrive_access()
-        if not access:
-            self._json(401, {"error": "Google Drive isn't connected — tap the cloud to connect it."})
-            return
         fp = os.path.join(d, name)
-        if os.path.isdir(fp):
-            fid, err = self._gdrive_mkfolder(access, name)
-            if err:
-                self._json(502, {"error": err})
+        try:
+            if os.path.isdir(fp):
+                export_files = []
+                for e in sorted(os.scandir(fp), key=lambda x: x.name.lower()):
+                    if e.is_file() and not e.name.startswith("."):
+                        export_files.append((e.name, e.path, e.stat().st_size))
+            else:
+                export_files = [(name, fp, os.path.getsize(fp))]
+        except OSError:
+            self._json(409, {
+                "error": "The selected file or folder changed. Refresh Drop and retry."})
+            return
+        total = sum(size for _, _, size in export_files)
+        if total > DRIVE_EXPORT_MAX_BYTES:
+            self._json(413, {
+                "error": "Drive export is limited to 128 MB per transfer. "
+                         "Use Google Drive directly for larger files or folders."})
+            return
+        if len(export_files) > DRIVE_EXPORT_MAX_FILES:
+            self._json(413, {
+                "error": "Drive export is limited to 200 files at a time. "
+                         "Split this folder into smaller batches."})
+            return
+        if not _drive_transfer_slot.acquire(blocking=False):
+            self._json(429, {
+                "error": "Another Google Drive transfer is already running. "
+                         "Wait for it to finish, then retry."})
+            return
+        try:
+            access = self._gdrive_access()
+            if not access:
+                self._json(401, {
+                    "error": "Google Drive isn't connected — tap the cloud to connect it."})
                 return
-            n = 0
-            for e in sorted(os.scandir(fp), key=lambda x: x.name.lower()):
-                if e.is_file() and not e.name.startswith("."):
-                    _, err = self._gdrive_upload(access, e.name, e.path, parent=fid)
+            if os.path.isdir(fp):
+                fid, err = self._gdrive_mkfolder(access, name)
+                if err:
+                    self._json(502, {"error": err})
+                    return
+                n = 0
+                for child_name, child_path, child_size in export_files:
+                    _, err = self._gdrive_upload(
+                        access, child_name, child_path, parent=fid,
+                        max_bytes=child_size)
                     if err:
                         self._json(502, {"error": err})
                         return
                     n += 1
-            hub_event("gdrive_export", f"{name} folder ({n} files) to Drive", self._user())
-            self._json(200, {"ok": True, "count": n,
-                             "link": f"https://drive.google.com/drive/folders/{fid}"})
-        else:
-            gid, err = self._gdrive_upload(access, name, fp)
-            if err:
-                self._json(502, {"error": err})
-                return
-            hub_event("gdrive_export", f"{name} to Drive", self._user())
-            self._json(200, {"ok": True,
-                             "link": f"https://drive.google.com/file/d/{gid}/view"})
+                hub_event("gdrive_export", f"{name} folder ({n} files) to Drive",
+                          self._user())
+                self._json(200, {"ok": True, "count": n,
+                                 "link": f"https://drive.google.com/drive/folders/{fid}"})
+            else:
+                gid, err = self._gdrive_upload(
+                    access, name, fp, max_bytes=export_files[0][2])
+                if err:
+                    self._json(502, {"error": err})
+                    return
+                hub_event("gdrive_export", f"{name} to Drive", self._user())
+                self._json(200, {"ok": True,
+                                 "link": f"https://drive.google.com/file/d/{gid}/view"})
+        finally:
+            _drive_transfer_slot.release()
 
     def _share_create(self):
         p = self._body_json()
@@ -1375,6 +1634,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(page)))
         self.send_header("X-Robots-Tag", "noindex, nofollow")
+        self.send_header(
+            "Content-Security-Policy",
+            "sandbox allow-scripts allow-downloads; default-src 'self' data: blob:; "
+            "style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+            "img-src 'self' data:; media-src 'self'",
+        )
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(page)
 
@@ -1488,36 +1754,140 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if d is None or not os.path.isdir(d):
             self._json(404, {"error": "no such folder"})
             return
-        total, filelist = 0, []
-        for base, dirs, files in os.walk(d):
-            dirs[:] = [x for x in dirs if not x.startswith(".")]
-            for f in files:
-                if f.startswith("."):
-                    continue
-                fp = os.path.join(base, f)
-                try:
-                    total += os.path.getsize(fp)
-                except OSError:
-                    continue
-                filelist.append(fp)
-        if total > 4 * 1024 * 1024 * 1024:
-            self._json(413, {"error": "folder too large to zip (over 4 GB) — download files individually"})
+        if not _zip_transfer_slot.acquire(blocking=False):
+            self._json(429, {
+                "error": "Another folder download is already being prepared. "
+                         "Wait for it to finish, then retry."})
             return
-        tmp = tempfile.NamedTemporaryFile(dir=UPLOADS, suffix=".zip", delete=False)
+        job_key = None
+        tmp_name = None
         try:
-            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
-                for fp in filelist:
-                    z.write(fp, os.path.relpath(fp, d))
-            tmp.close()
-            size = os.path.getsize(tmp.name)
+            total, filelist = 0, []
+            for base, dirs, files in os.walk(d):
+                dirs[:] = [x for x in dirs if not x.startswith(".")]
+                for filename in files:
+                    if filename.startswith("."):
+                        continue
+                    fp = os.path.join(base, filename)
+                    try:
+                        planned_size = os.path.getsize(fp)
+                    except OSError:
+                        continue
+                    filelist.append((fp, planned_size))
+                    total += planned_size
+                    if len(filelist) > ZIP_MAX_FILES:
+                        self._json(413, {
+                            "error": "Folder download is limited to 20,000 files. "
+                                     "Split this folder into smaller batches."})
+                        return
+                    if total > ZIP_MAX_BYTES:
+                        self._json(413, {
+                            "error": "Folder download is limited to 2 GB. "
+                                     "Download large files individually."})
+                        return
+
+            # ZIP_STORED still needs local and central-directory headers. Long
+            # nested names can make that material, so reserve from the actual
+            # UTF-8 path lengths instead of assuming one flat fixed overhead.
+            header_bytes = sum(
+                512 + 2 * len(os.path.relpath(fp, d).encode(
+                    "utf-8", errors="surrogateescape"))
+                for fp, _ in filelist)
+            reserve_size = total + max(ZIP_RESERVE_OVERHEAD, header_bytes)
+            job_key = "zip-" + secrets.token_hex(16)
+            with _upload_catalog_lock:
+                catalog = self._upload_catalog()
+                upload_reserved = sum(
+                    max(0, int(meta.get("size", 0)) - have)
+                    for _, meta, have in catalog)
+                admitted = _reserve_temp_bytes(
+                    job_key, reserve_size, upload_reserved)
+            if not admitted:
+                self._json(507, {
+                    "error": "Not enough safe disk space to prepare this folder. "
+                             "Free space or finish existing uploads first."})
+                return
+
+            try:
+                tmp = tempfile.NamedTemporaryFile(
+                    dir=UPLOADS, prefix=".job-zip-", suffix=".zip", delete=False)
+                tmp_name = tmp.name
+                tmp.close()
+            except OSError:
+                self._json(507, {
+                    "error": "Could not create temporary space for this folder download."})
+                return
+
+            class FolderChanged(Exception):
+                pass
+
+            class DiskReserveThreatened(Exception):
+                pass
+
+            try:
+                with zipfile.ZipFile(
+                        tmp_name, "w", zipfile.ZIP_STORED, allowZip64=True) as archive:
+                    for fp, planned_size in filelist:
+                        try:
+                            info = zipfile.ZipInfo.from_file(
+                                fp, os.path.relpath(fp, d), strict_timestamps=False)
+                        except (OSError, ValueError) as exc:
+                            raise FolderChanged from exc
+                        if info.file_size != planned_size:
+                            raise FolderChanged
+                        try:
+                            source = open(fp, "rb")
+                        except OSError as exc:
+                            raise FolderChanged from exc
+                        with source:
+                            with archive.open(info, "w", force_zip64=True) as target:
+                                remaining = planned_size
+                                while remaining:
+                                    try:
+                                        chunk = source.read(min(1024 * 1024, remaining))
+                                    except OSError as exc:
+                                        raise FolderChanged from exc
+                                    if not chunk:
+                                        raise FolderChanged
+                                    if (shutil.disk_usage(ROOT).free - len(chunk)
+                                            < MIN_FREE_BYTES):
+                                        raise DiskReserveThreatened
+                                    try:
+                                        target.write(chunk)
+                                    except OSError as exc:
+                                        raise DiskReserveThreatened from exc
+                                    remaining -= len(chunk)
+                            try:
+                                grew = bool(source.read(1))
+                            except OSError as exc:
+                                raise FolderChanged from exc
+                            if grew:
+                                raise FolderChanged
+                size = os.path.getsize(tmp_name)
+                if size > reserve_size:
+                    raise DiskReserveThreatened
+            except FolderChanged:
+                self._json(409, {
+                    "error": "This folder changed while its download was being prepared. "
+                             "Wait for file changes to finish, then retry."})
+                return
+            except DiskReserveThreatened:
+                self._json(507, {
+                    "error": "Folder download stopped to protect the system disk reserve."})
+                return
+            except (OSError, ValueError, RuntimeError,
+                    zipfile.BadZipFile, zipfile.LargeZipFile):
+                self._json(500, {"error": "Could not prepare this folder download."})
+                return
+
             zipname = (os.path.basename(d) or "Drop") + ".zip"
             self.send_response(200)
             self.send_header("Content-Type", "application/zip")
             self.send_header("Content-Length", str(size))
             self.send_header("Content-Disposition",
-                             f'attachment; filename="{zipname}"')
+                             f'attachment; filename="{zipname.replace(chr(34), chr(39))}"')
             self.end_headers()
-            with open(tmp.name, "rb") as f:
+            with open(tmp_name, "rb") as f:
                 while True:
                     chunk = f.read(256 * 1024)
                     if not chunk:
@@ -1528,10 +1898,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         return
             hub_event("download_zip", f"{os.path.basename(d)} ({len(filelist)} files)", self._user())
         finally:
-            try:
-                os.remove(tmp.name)
-            except OSError:
-                pass
+            if tmp_name:
+                try:
+                    os.remove(tmp_name)
+                except OSError:
+                    pass
+            if job_key:
+                _release_temp_bytes(job_key)
+            _zip_transfer_slot.release()
 
     def _send_file(self, path, name):
         """Stream a file with single-range support (public share downloads/video)."""
@@ -1567,6 +1941,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(length))
         self.send_header("Accept-Ranges", "bytes")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "sandbox")
+        inline = ext in {
+            ".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".mov",
+            ".webm", ".mp3", ".m4a", ".wav",
+        }
+        if not inline:
+            quoted = urllib.parse.quote(os.path.basename(name))
+            self.send_header(
+                "Content-Disposition", f"attachment; filename*=UTF-8''{quoted}")
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.send_header("Cache-Control", "private, max-age=3600")
@@ -1585,6 +1969,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 remaining -= len(chunk)
 
     # ------------------------------------------------------------- uploads
+    @staticmethod
+    def _write_upload_meta(path, meta):
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(meta, f)
+        os.replace(tmp, path)
+
+    @staticmethod
+    def _upload_catalog():
+        """Remove expired parts and return valid (uid, meta, bytes_on_disk)."""
+        now, out = time.time(), []
+        for fn in os.listdir(UPLOADS):
+            if not fn.endswith(".json"):
+                continue
+            uid = fn[:-5]
+            meta_p = os.path.join(UPLOADS, fn)
+            part_p = os.path.join(UPLOADS, uid + ".part")
+            # Cleanup races with chunk/finish/cancel unless it participates in
+            # the same per-upload lock as those operations.
+            with _lock_for(uid):
+                try:
+                    with open(meta_p) as f:
+                        meta = json.load(f)
+                    touched = float(meta.get("updated") or meta.get("started") or 0)
+                    if now - touched > UPLOAD_TTL:
+                        for p in (meta_p, part_p):
+                            try:
+                                os.remove(p)
+                            except FileNotFoundError:
+                                pass
+                        continue
+                    out.append((uid, meta, os.path.getsize(part_p)))
+                except (OSError, ValueError, TypeError):
+                    continue
+        return out
+
     def _upload_init(self):
         p = self._body_json()
         d = safe_rel((p or {}).get("path", ""))
@@ -1598,21 +2018,48 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if d is None or not name or not (0 <= size <= MAX_FILE):
             self._json(400, {"error": "bad upload request"})
             return
-        rel = (p.get("path") or "").strip("/")
-        uid = hashlib.sha1(f"{rel}|{name}|{size}|{mtime}".encode()).hexdigest()[:24]
-        meta_p = os.path.join(UPLOADS, uid + ".json")
-        part_p = os.path.join(UPLOADS, uid + ".part")
-        with _lock_for(uid):
-            if not os.path.exists(meta_p):
-                with open(meta_p, "w") as f:
-                    json.dump({"rel": rel, "name": name, "size": size,
-                               "by": self._user(), "started": int(time.time())}, f)
+        rel, user = (p.get("path") or "").strip("/"), self._user()
+        with _upload_catalog_lock:
+            catalog = self._upload_catalog()
+            match = next((
+                row for row in catalog
+                if row[1].get("by") == user and row[1].get("rel") == rel
+                and row[1].get("name") == name and row[1].get("size") == size
+                and row[1].get("mtime", 0) == mtime
+            ), None)
+            if match:
+                uid, meta, offset = match
+            else:
+                reserved = sum(max(0, int(m.get("size", 0)) - have)
+                               for _, m, have in catalog)
+                user_reserved = sum(max(0, int(m.get("size", 0)) - have)
+                                    for _, m, have in catalog if m.get("by") == user)
+                free = shutil.disk_usage(ROOT).free
+                if (free - reserved - _temp_reserved_bytes() - size
+                        < MIN_FREE_BYTES):
+                    self._json(507, {
+                        "error": "Not enough safe disk space for this upload. "
+                                 "Free space or finish existing uploads first."})
+                    return
+                if user_reserved + size > MAX_USER_INFLIGHT:
+                    self._json(429, {
+                        "error": "Too much is already queued for this account. "
+                                 "Finish or cancel an upload, then retry."})
+                    return
+                uid = secrets.token_hex(16)
+                meta_p = os.path.join(UPLOADS, uid + ".json")
+                part_p = os.path.join(UPLOADS, uid + ".part")
+                meta = {
+                    "rel": rel, "name": name, "size": size, "mtime": mtime,
+                    "by": user, "started": int(time.time()), "updated": int(time.time()),
+                }
+                self._write_upload_meta(meta_p, meta)
                 open(part_p, "ab").close()
-            offset = os.path.getsize(part_p)
+                offset = 0
         self._json(200, {"id": uid, "offset": offset})
 
     def _upload_chunk(self, params):
-        uid = re.sub(r"[^a-f0-9]", "", params.get("id", ""))[:24]
+        uid = re.sub(r"[^a-f0-9]", "", params.get("id", ""))[:32]
         try:
             offset = int(params.get("offset", -1))
         except ValueError:
@@ -1626,9 +2073,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_CHUNK:
             self._json(400, {"error": "bad chunk size"})
             return
-        meta = json.load(open(meta_p))
         with _lock_for(uid):
-            have = os.path.getsize(part_p)
+            try:
+                with open(meta_p) as f:
+                    meta = json.load(f)
+                have = os.path.getsize(part_p)
+            except (OSError, ValueError, TypeError):
+                self.rfile.read(length)
+                self._json(404, {"error": "unknown upload — init first"})
+                return
+            if meta.get("by") != self._user():
+                self.rfile.read(length)
+                self._json(403, {"error": "this upload belongs to another account"})
+                return
             if offset != have:
                 # client out of sync (retry after drop) — tell it where we are
                 self.rfile.read(length)  # drain
@@ -1637,6 +2094,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if have + length > meta["size"]:
                 self.rfile.read(length)
                 self._json(400, {"error": "would exceed declared size"})
+                return
+            if (shutil.disk_usage(ROOT).free - _temp_reserved_bytes() - length
+                    < MIN_FREE_BYTES):
+                self.rfile.read(length)
+                self._json(507, {
+                    "error": "Upload paused to protect the system disk reserve."})
                 return
             remaining = length
             with open(part_p, "ab") as f:
@@ -1647,6 +2110,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     f.write(chunk)
                     remaining -= len(chunk)
             have = os.path.getsize(part_p)
+            meta["updated"] = int(time.time())
+            self._write_upload_meta(meta_p, meta)
         if remaining:
             self._json(400, {"error": "short read", "offset": have})
             return
@@ -1654,15 +2119,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _upload_finish(self):
         p = self._body_json()
-        uid = re.sub(r"[^a-f0-9]", "", str((p or {}).get("id", "")))[:24]
+        uid = re.sub(r"[^a-f0-9]", "", str((p or {}).get("id", "")))[:32]
         meta_p = os.path.join(UPLOADS, uid + ".json")
         part_p = os.path.join(UPLOADS, uid + ".part")
-        if not uid or not os.path.exists(meta_p):
+        if not uid:
             self._json(404, {"error": "unknown upload"})
             return
-        meta = json.load(open(meta_p))
         with _lock_for(uid):
-            have = os.path.getsize(part_p)
+            try:
+                with open(meta_p) as f:
+                    meta = json.load(f)
+                have = os.path.getsize(part_p)
+            except (OSError, ValueError, TypeError):
+                self._json(404, {"error": "unknown upload"})
+                return
+            if meta.get("by") != self._user():
+                self._json(403, {"error": "this upload belongs to another account"})
+                return
             if have != meta["size"]:
                 self._json(409, {"error": "incomplete", "offset": have,
                                  "expected": meta["size"]})
@@ -1672,14 +2145,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json(400, {"error": "bad destination"})
                 return
             os.makedirs(d, exist_ok=True)
-            dst = unique_path(d, meta["name"])
-            shutil.move(part_p, dst)
+            with _fs_mutation_lock:
+                dst = unique_path(d, meta["name"])
+                shutil.move(part_p, dst)
             os.chmod(dst, 0o644)
             os.remove(meta_p)
         print(f"[drop] {self._user()} uploaded {os.path.basename(dst)} "
               f"({meta['size']} B) -> {meta['rel'] or '/'}", flush=True)
         hub_event("upload", f"{os.path.basename(dst)} ({meta['size']//1000000} MB) into /{meta['rel']}", self._user())
         self._json(200, {"ok": True, "name": os.path.basename(dst)})
+
+    def _upload_cancel(self):
+        p = self._body_json()
+        uid = re.sub(r"[^a-f0-9]", "", str((p or {}).get("id", "")))[:32]
+        meta_p = os.path.join(UPLOADS, uid + ".json")
+        part_p = os.path.join(UPLOADS, uid + ".part")
+        if not uid:
+            self._json(200, {"ok": True, "already_gone": True})
+            return
+        with _lock_for(uid):
+            try:
+                with open(meta_p) as f:
+                    meta = json.load(f)
+            except (OSError, ValueError, TypeError):
+                self._json(200, {"ok": True, "already_gone": True})
+                return
+            if meta.get("by") != self._user():
+                self._json(403, {"error": "this upload belongs to another account"})
+                return
+            for path in (part_p, meta_p):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+        self._json(200, {"ok": True})
 
     def log_message(self, fmt, *args):
         pass

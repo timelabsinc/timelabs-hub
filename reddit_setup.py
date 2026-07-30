@@ -24,6 +24,7 @@ import reddit_clean
 
 DB = "/root/ops-dashboard/data/hermes.db"
 SUB = "IndiaWatchMods"
+HERMES_TOOLSET = "web"
 
 
 def existing():
@@ -85,7 +86,8 @@ def main():
         raise SystemExit(f"unknown piece: {kind}")
     prompt = CONTEXT.format(posts=existing()) + "\n" + PROMPTS[kind] + (
         "\n\nNever use an em dash or an en dash. Straight quotes only.")
-    r = subprocess.run(["hermes", "-z", prompt], capture_output=True,
+    base_cmd = ["hermes", "--ignore-rules", "-t", HERMES_TOOLSET, "-z"]
+    r = subprocess.run(base_cmd + [prompt], capture_output=True,
                        text=True, timeout=600)
     out = (r.stdout or "").strip()
     if r.returncode != 0 or not out:
@@ -95,7 +97,7 @@ def main():
     # one more pass only if the scrub could not fix it alone
     if reddit_clean.verify(text):
         r2 = subprocess.run(
-            ["hermes", "-z", prompt + "\n\nYour previous attempt contained: "
+            base_cmd + [prompt + "\n\nYour previous attempt contained: "
              + "; ".join(reddit_clean.verify(text))
              + ". Rewrite without those."],
             capture_output=True, text=True, timeout=600)

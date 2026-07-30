@@ -27,6 +27,8 @@ from hub_shell import (  # the Hub/Face "Meridian" shell + chart engine
     page, source_chip, _refund_pct, kpi_card, stat_pill, svg_revenue_chart,
     verdict_banner,
 )
+from order_metrics import SALE_ORDER_PREDICATE_O
+from markdown_render import md_to_html
 
 ENV_PATH = "/root/ops-dashboard/.env"
 OUT_PATH = "/var/www/ops/index.html"
@@ -245,7 +247,7 @@ def fetch_action_plan():
         return [], 0
 
 
-def fetch_logged_orders(limit=60):
+def fetch_logged_orders(limit=2000):
     """Orders logged into hermes.db — the order form and WhatsApp capture.
     `source` is stored on the row; when it's blank we infer it (a WhatsApp
     capture always carries a chat_id/sender_number, a form paste never does)."""
@@ -253,8 +255,10 @@ def fetch_logged_orders(limit=60):
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
-            "SELECT received_at, customer_name, product, price_inr, quantity, status, "
-            "source, sender_number, chat_id, id, shopify_order_id, shopify_name FROM orders "
+            "SELECT received_at, customer_name, product, "
+            "COALESCE(price_inr,0)*COALESCE(quantity,1) AS order_total, "
+            "quantity, status, source, sender_number, chat_id, id, shopify_order_id, "
+            "shopify_name, financial_status, COALESCE(is_stock,0) FROM orders "
             f"WHERE received_at >= date('now', '-{LOOKBACK_DAYS} days') "
             "ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
@@ -273,11 +277,16 @@ def fetch_logged_orders(limit=60):
                     # id is what lets shipment costs be looked up for exactly
                     # the orders on screen
                     "source": src, "ref": r[11] or "", "id": r[9],
-                    "shopify_id": r[10] or ""})
+                    "shopify_id": r[10] or "",
+                    "is_sale": (
+                        (r[5] or "").lower() != "cancelled"
+                        and (r[12] or "").lower() not in ("refunded", "voided")
+                        and not bool(r[13])
+                    )})
     return out
 
 
-def fetch_shopify_orders(limit=30):
+def fetch_shopify_orders(limit=250):
     """Live storefront orders. Needs read_orders (granted 2026-07-21); fails
     soft to [] so the dashboard still builds if Shopify is unreachable."""
     try:
@@ -310,11 +319,13 @@ def fetch_shopify_orders(limit=30):
                     "product": title, "amount": amt, "qty": qty,
                     "status": (n.get("displayFinancialStatus") or "").lower(),
                     "source": "website", "ref": n.get("name") or "",
-                    "shopify_id": n.get("id") or ""})
+                    "shopify_id": n.get("id") or "",
+                    "is_sale": (n.get("displayFinancialStatus") or "").lower()
+                               not in ("refunded", "voided")})
     return out
 
 
-def fetch_orders(limit=40):
+def fetch_orders(limit=None):
     """Every order, whatever door it came through, newest first."""
     logged = fetch_logged_orders()
     synced = {o.get("shopify_id") for o in logged if o.get("shopify_id")}
@@ -326,7 +337,7 @@ def fetch_orders(limit=40):
             if not o.get("shopify_id") or o.get("shopify_id") not in synced]
     merged = logged + live
     merged.sort(key=lambda o: o.get("when") or "", reverse=True)
-    return merged[:limit]
+    return merged[:limit] if limit is not None else merged
 
 
 SOURCE_LABEL = {"website": "Website", "form": "Order form",
@@ -370,8 +381,7 @@ def product_analytics(top=8):
             "SUM(oi.quantity) AS units, SUM(oi.line_total) AS revenue, "
             "COUNT(DISTINCT oi.order_id) AS orders "
             "FROM order_items oi JOIN orders o ON o.id = oi.order_id "
-            "WHERE o.status != 'cancelled' AND (o.financial_status IS NULL "
-            "OR o.financial_status NOT IN ('refunded','voided')) "
+            f"WHERE {SALE_ORDER_PREDICATE_O} "
             "GROUP BY 1 ORDER BY units DESC").fetchall()
         conn.close()
     except Exception as e:
@@ -445,26 +455,28 @@ def fetch_content(limit=6):
 
 
 def fetch_health():
-    """Live status of every service in the stack — a command center must show
-    whether the machine under it is actually running."""
-    import subprocess as sp
-    checks = [
-        ("Web server", ["systemctl", "is-active", "nginx"]),
-        ("Login service", ["systemctl", "is-active", "ops-auth"]),
-        ("Agent chat", ["systemctl", "is-active", "ops-agent-chat"]),
-        ("Daily refresh", ["systemctl", "is-active", "ops-dashboard.timer"]),
-        ("Hermes gateway", ["systemctl", "--user", "is-active", "hermes-gateway"]),
-        ("Hermes console", ["systemctl", "--user", "is-active", "hermes-dashboard"]),
-    ]
-    env = dict(os.environ, XDG_RUNTIME_DIR="/run/user/0")  # --user works from system services too
-    out = []
-    for label, cmd in checks:
-        try:
-            state = sp.run(cmd, capture_output=True, text=True, timeout=10, env=env).stdout.strip()
-        except Exception:
-            state = "unknown"
-        out.append((label, state == "active"))
-    return out
+    """The same side-effect-free checks used by the alerting timer."""
+    import healthcheck
+    labels = {
+        "service:nginx": "Web server",
+        "service:oauth2-proxy": "Google login",
+        "service:ops-agent-chat": "Command API",
+        "service:drop": "Drop API",
+        "service:ops-dashboard-refresh": "Refresh API",
+        "timer:ops-dashboard.timer": "Dashboard refresh",
+        "timer:ops-order-sync.timer": "Order sync",
+        "timer:labs-backup.timer": "Nightly backup",
+        "probe:agent API": "Agent probe",
+        "probe:drop API": "Drop probe",
+        "probe:drop anonymous denial": "Drop access gate",
+        "db:hermes.db": "Orders database",
+        "db:suppliers.db": "Ledger database",
+        "disk": "Disk reserve",
+        "backup": "Recent backup",
+    }
+    results = healthcheck.collect_results()
+    return [(labels.get(key, key.split(":", 1)[-1]), ok)
+            for key, (ok, _detail) in results.items()]
 
 
 # --------------------------------------------------------------------------- Analysis (LLM)
@@ -495,7 +507,13 @@ ANALYSIS_TIMEOUT = 150  # accuracy over speed — give the primary model room to
 
 
 def _run_hermes_oneshot(prompt, model, provider, timeout):
-    cmd = ["hermes", "-z", prompt, "-m", model, "--provider", provider]
+    # This prompt includes externally sourced analytics labels. It only needs
+    # to interpret the supplied snapshot; inheriting global rules/memory or a
+    # root-capable default toolset turns prompt injection into system access.
+    cmd = [
+        "hermes", "--ignore-rules", "-t", "web", "-z", prompt,
+        "-m", model, "--provider", provider,
+    ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"hermes -z exit {result.returncode}: {result.stderr[-500:]}")
@@ -583,8 +601,6 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
     research_html = ""
     if research:
         created, source, report_md = research
-        sys.path.insert(0, "/root/ops-dashboard")
-        from agent_chat_server import md_to_html
         research_html = (
             '<section><h2>Competition research</h2><div class="panel">'
             f'<div class="research-bar"><span class="f-meta">run {research_count} · '
@@ -608,7 +624,8 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
             by_src[o["source"]] = by_src.get(o["source"], 0) + 1
         mix = " · ".join(f'{source_label(s)}: <b>{n}</b>'
                          for s, n in sorted(by_src.items(), key=lambda kv: -kv[1]))
-        total_rev = sum(o["amount"] for o in orders)
+        sale_orders = [o for o in orders if o.get("is_sale")]
+        total_rev = sum(o["amount"] for o in sale_orders)
         rows = "".join(
             f'<tr><td class="num">{html.escape(o["when"])}</td>'
             f'<td>{order_source_pill(o["source"])}</td>'
@@ -618,7 +635,7 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
             f'<td class="n num">{fmt_inr(o["amount"]) if o["amount"] else "—"}</td>'
             f'<td class="n num">{o["qty"]}</td>'
             f'<td>{html.escape(o["status"] or "new")}</td></tr>'
-            for o in orders
+            for o in orders[:40]
         )
         top, slow = product_analytics()
         max_units = max((v["units"] for _, v in top), default=1) or 1
@@ -638,27 +655,29 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
         # Headline numbers for exactly the orders shown below — the owner asked
         # for totals that follow the current range rather than a fixed all-time
         # figure, so these move with LOOKBACK_DAYS and say so.
-        total_cost = shipment_cost_for(orders)
+        total_cost = shipment_cost_for(sale_orders)
         cost_bit = (f'<div class="okpi"><b>{fmt_inr(total_cost)}</b>'
                     f'<span>Shipping cost</span></div>' if total_cost else '')
         orders_html = (
             '<section><h2>Orders — every source</h2><div class="panel">'
             '<div class="okpis">'
-            f'<div class="okpi"><b>{len(orders)}</b><span>Orders</span></div>'
-            f'<div class="okpi"><b>{fmt_inr(total_rev)}</b><span>Order value</span></div>'
+            f'<div class="okpi"><b>{len(sale_orders)}</b><span>Sales orders</span></div>'
+            f'<div class="okpi"><b>{fmt_inr(total_rev)}</b><span>Gross order value</span></div>'
             f'{cost_bit}'
-            f'<div class="okpi"><b>{fmt_inr(total_rev / len(orders)) if orders else "—"}</b>'
-            f'<span>Average</span></div>'
+            f'<div class="okpi"><b>{fmt_inr(total_rev / len(sale_orders)) if sale_orders else "—"}</b>'
+            f'<span>Sales AOV</span></div>'
             '</div>'
             f'<p class="f-note" style="margin-top:10px">{mix} &nbsp;·&nbsp; '
-            f'last {LOOKBACK_DAYS} days</p></div>'
+            f'{len(orders)} operational record{"s" if len(orders) != 1 else ""} · '
+            f'last {LOOKBACK_DAYS} days · table shows latest {min(40, len(orders))}</p></div>'
             '<div class="panel tscroll" style="margin-top:10px">'
             '<table><thead><tr><th>When</th><th>Source</th><th>Customer</th><th>Product</th>'
             '<th class="n">Value</th><th class="n">Qty</th><th>Status</th></tr></thead>'
             f'<tbody>{rows}</tbody></table></div></section>'
             '<section><h2>What&#8217;s selling</h2><div class="panel">'
             f'{sell_rows}{slow_html}'
-            '<p class="f-note">Units across every channel — storefront, order form and WhatsApp combined.</p>'
+            '<p class="f-note">Merchandise units and line revenue across live sales; '
+            'stock, cancelled, refunded and voided orders are excluded.</p>'
             '</div></section>'
         )
     else:
@@ -785,9 +804,10 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
     kpi_html = ""
     if shopify.get("connected"):
         gross = shopify.get("gross_sales", shopify.get("total_sales", 0))
-        kpi_html += kpi_card("Orders", str(shopify["order_count"]), f"{win}-day trailing",
+        kpi_html += kpi_card("Shopify orders", str(shopify["order_count"]), f"{win}-day trailing",
                              raw=shopify["order_count"])
-        kpi_html += kpi_card("Gross sales", fmt_inr(gross), f"AOV {fmt_inr(shopify['aov'])}",
+        kpi_html += kpi_card("Shopify gross sales", fmt_inr(gross),
+                             f"Shopify AOV {fmt_inr(shopify['aov'])}",
                              spark_vals=sales_vals, raw=round(gross), prefix="₹")
         if shopify.get("net_sales") is not None:
             kpi_html += kpi_card("Net sales", fmt_inr(shopify["net_sales"]),
@@ -826,7 +846,8 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
         chart = svg_revenue_chart(sales_daily, shopify["sales_daily_span"])
         if chart:
             revenue_chart_html = (
-                '<section><h2>Daily sales — last 90 days</h2><div class="panel">'
+                f'<section><h2>Daily sales — last {shopify["sales_daily_span"]} days</h2>'
+                '<div class="panel">'
                 + chart +
                 '<div class="chart-legend"><span class="lg-sale"><i></i>sale day</span>'
                 '<span class="lg-refund"><i></i>refund day</span></div>'
@@ -895,6 +916,7 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
 
 
 def main():
+    build_failures = []
     shopify = {"connected": False}
     ga4 = {"connected": False}
     meta = {"connected": False}
@@ -946,13 +968,14 @@ def main():
     with open(tmp_path, "w") as f:
         f.write(html_out)
     os.replace(tmp_path, OUT_PATH)
-    os.system(f"chown www-data:www-data {OUT_PATH}")
+    subprocess.run(["chown", "www-data:www-data", OUT_PATH], check=True)
     print(f"wrote {OUT_PATH} (shopify={shopify.get('connected')}, ga4={ga4.get('connected')}, meta={meta.get('connected')})")
     try:
         import ledger
         ledger.build()
     except Exception as e:
         print(f"[ledger] {e}", file=sys.stderr)
+        build_failures.append(f"ledger: {e}")
     # Drop is a hand-written SPA, so its page is a file in the repo rather
     # than something a generator renders. Publishing it was a manual copy
     # that only ever worked because someone remembered — the same shape as
@@ -975,10 +998,11 @@ def main():
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(src_html)
             os.replace(tmp, drop_dst)
-            os.system(f"chown www-data:www-data {drop_dst}")
+            subprocess.run(["chown", "www-data:www-data", drop_dst], check=True)
             print(f"published {drop_dst} from www/drop-index.html")
     except Exception as e:
         print(f"[drop] publish failed: {e}", file=sys.stderr)
+        build_failures.append(f"drop publish: {e}")
 
     # drop_chrome doesn't render a page — it re-syncs Drop's header/nav from
     # hub_shell so the hand-written SPA can't drift out of step with the rest.
@@ -991,6 +1015,7 @@ def main():
             __import__(mod).build()
         except Exception as e:
             print(f"[{mod}] {e}", file=sys.stderr)
+            build_failures.append(f"{mod}: {e}")
 
     # This list is hand-maintained, and it has already drifted once: access,
     # architecture and blog_uploader silently fell out of it and went ~17
@@ -1015,6 +1040,9 @@ def main():
     if missed:
         print(f"[refresh] WARNING: generator(s) not in the refresh loop, so their "
               f"pages will go stale: {', '.join(sorted(missed))}", file=sys.stderr)
+        build_failures.append("unregistered generators: " + ", ".join(sorted(missed)))
+    if build_failures:
+        raise RuntimeError("refresh incomplete — " + " | ".join(build_failures))
 
 
 if __name__ == "__main__":

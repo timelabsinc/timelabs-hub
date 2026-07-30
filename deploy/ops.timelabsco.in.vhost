@@ -39,7 +39,13 @@ server {
 
     # bare domain -> Hub (nobody should need to know to type /ops)
     location = / {
-        return 302 /ops;
+        auth_request /oauth2/auth;
+        error_page 401 = @oauth2_signin;
+        auth_request_set $root_email $upstream_http_x_auth_request_email;
+        proxy_pass http://127.0.0.1:8901/access/home;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-User-Email $root_email;
     }
 
     location / {
@@ -62,8 +68,10 @@ server {
     # the single-page UI (directory alias + index — an alias to a file here
     # makes nginx append the index name to it and 500)
     location /drop/ {
-        auth_request /oauth2/auth;
+        auth_request /labs-access-gate;
         error_page 401 = @oauth2_signin;
+        error_page 403 = @labs_home_redirect;
+        auth_request_set $labs_home $upstream_http_x_labs_home;
         alias /var/www/drop/;
         index index.html;
         add_header Cache-Control "no-cache" always;
@@ -71,9 +79,11 @@ server {
 
     # chunked upload / listing / thumbnail API -> drop_server.py
     location /drop/api/ {
-        auth_request /oauth2/auth;
+        auth_request /labs-access-gate;
         error_page 401 = @oauth2_signin;
-        auth_request_set $email $upstream_http_x_auth_request_email;
+        error_page 403 = @labs_home_redirect;
+        auth_request_set $email $upstream_http_x_labs_email;
+        auth_request_set $labs_home $upstream_http_x_labs_home;
         proxy_set_header X-User-Email $email;
 
         proxy_pass http://127.0.0.1:8903/;
@@ -92,10 +102,27 @@ server {
 
     # downloads + video streaming straight from disk (nginx handles Range)
     location /drop/files/ {
-        auth_request /oauth2/auth;
+        auth_request /labs-access-gate;
         error_page 401 = @oauth2_signin;
+        error_page 403 = @labs_home_redirect;
+        auth_request_set $labs_home $upstream_http_x_labs_home;
         alias /srv/timelabs-drop/;
+        disable_symlinks on;
         add_header Cache-Control "private, max-age=3600" always;
+        types {
+            image/jpeg jpg jpeg;
+            image/png png;
+            image/webp webp;
+            image/gif gif;
+            video/mp4 mp4;
+            video/quicktime mov;
+            video/webm webm;
+            audio/mpeg mp3;
+            audio/mp4 m4a;
+            audio/wav wav;
+        }
+        default_type application/octet-stream;
+        add_header X-Content-Type-Options nosniff always;
     }
 
     # --- old password gate: kept, unused, for rollback ---
@@ -134,14 +161,48 @@ server {
         proxy_pass_request_body off;
     }
 
+    # OAuth plus the Labs role/path check. nginx cannot nest auth_request
+    # subrequests, so the loopback gate validates the oauth2-proxy cookie and
+    # then applies the role/path policy in one request.
+    location = /labs-access-gate {
+        internal;
+        proxy_pass http://127.0.0.1:8901/access/gate;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Scheme $scheme;
+        proxy_set_header X-Original-URI $request_uri;
+    }
+
     location @oauth2_signin {
         return 302 /oauth2/start?rd=$request_uri;
     }
 
+    location @labs_home_redirect {
+        return 302 $labs_home;
+    }
+
     location /ops {
         alias /var/www/ops;
-        auth_request /oauth2/auth;
+        auth_request /labs-access-gate;
         error_page 401 = @oauth2_signin;
+        error_page 403 = @labs_home_redirect;
+        # Compatibility for the generated rollback map in labs-access.conf.
+        # The live gate below no longer consumes it, but declaring the source
+        # variable keeps both this vhost and the retained rollback config valid.
+        auth_request_set $labs_email $upstream_http_x_labs_email;
+        auth_request_set $labs_home $upstream_http_x_labs_home;
+    }
+
+    location /intake/ {
+        auth_request /labs-access-gate;
+        error_page 401 = @oauth2_signin;
+        error_page 403 = @labs_home_redirect;
+        auth_request_set $labs_home $upstream_http_x_labs_home;
+        alias /var/www/intake/;
+        index index.html;
     }
 
     location /ops/agent/api/ {
@@ -156,8 +217,10 @@ server {
     }
 
     location /ops/refresh {
-        auth_request /oauth2/auth;
+        auth_request /labs-access-gate;
         error_page 401 = @oauth2_signin;
+        error_page 403 = @labs_home_redirect;
+        auth_request_set $labs_home $upstream_http_x_labs_home;
         proxy_pass http://127.0.0.1:8877/refresh;
         proxy_read_timeout 270s;
         proxy_set_header Host $host;

@@ -147,6 +147,11 @@ CSS = """
 .rd-draft{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
   padding:15px 16px;margin-bottom:11px;box-shadow:var(--shadow);}
 .rd-draft.ready{border-color:var(--accent);}
+.rd-dphotos{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;}
+.rd-dphotos a{display:block;width:68px;height:68px;border:1px solid var(--border);
+  border-radius:8px;overflow:hidden;background:var(--card-2);}
+.rd-dphotos img{width:100%;height:100%;object-fit:cover;display:block;}
+.rd-dphotos-note{font-size:11.5px;color:var(--muted);align-self:center;max-width:180px;}
 .rd-dhead{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px;}
 .rd-dstat{font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.05em;
   padding:3px 8px;border-radius:999px;}
@@ -304,7 +309,7 @@ function draw(){
       b.disabled=true; b.textContent='Drafting…';
       jpost('/reddit/reply/create',{thread_id:+b.dataset.reply,note:note})
         .then(function(){
-          toast('Drafting a reply, you will get a message');
+          toast('Reply queued — progress stays in the Compose tab');
           document.querySelector('.rd-tabs button[data-rt="compose"]').click();
         })
         .catch(function(e){ toast(e.message); b.disabled=false; b.textContent='Draft a reply'; });
@@ -360,7 +365,7 @@ $('rd-sync').onclick=async function(){
 load();
 
 /* ---------------- our subreddit: composer ---------------- */
-var SHOTS=[], DRAFTS=[], pollT=null;
+var SHOTS=[], DRAFTS=[], pollT=null, DRAFT_EDITS={};
 
 document.querySelectorAll('.rd-tabs button').forEach(function(t){
   t.onclick=function(){
@@ -409,7 +414,13 @@ $('c-file').onchange=async function(){
       var d=await r.json();
       if(!r.ok)throw new Error(d.error||'upload failed');
       rec.path=d.path;
-    }catch(e){ toast(e.message); }
+    }catch(e){
+      var at=SHOTS.indexOf(rec);
+      if(at>=0)SHOTS.splice(at,1);
+      try{URL.revokeObjectURL(rec.url);}catch(ignore){}
+      drawShots();
+      toast(e.message);
+    }
   }
 };
 
@@ -500,7 +511,7 @@ $('c-go').onclick=async function(){
   $('c-go').disabled=true; $('c-go').textContent='Starting…';
   try{
     await jpost('/reddit/post/create',{kind:$('c-kind').value,brief:brief,photos:paths});
-    toast("Drafting — you will get a message when it is ready");
+    toast("Draft queued — progress stays here if you leave and return");
     $('c-brief').value=''; SHOTS=[]; drawShots();
     loadDrafts();
   }catch(e){ toast(e.message); }
@@ -522,22 +533,29 @@ function draftCard(p){
   var running=p.status==='queued'||p.status==='running';
   var stat=running?'running':p.status;
   var label=running?(p.stage?('pass: '+p.stage):'queued'):p.status;
-  var passes=p.passes||{};
-  var order=['research','draft','audit','humanise','verify'];
+  var passes=p.passes||{}, edit=DRAFT_EDITS[p.id]||{};
+  var shownTitle=Object.prototype.hasOwnProperty.call(edit,'title')?edit.title:(p.title||'');
+  var shownBody=Object.prototype.hasOwnProperty.call(edit,'body')?edit.body:(p.body||'');
+  var photoStrip=(p.photos||[]).length
+    ? '<div class="rd-dphotos">'+p.photos.map(function(url,i){
+        return '<a href="'+esc(url)+'&download=1" title="Download photo '+(i+1)+'">'+
+          '<img src="'+esc(url)+'" loading="lazy" alt="Draft photo '+(i+1)+'"></a>';
+      }).join('')+
+      '<span class="rd-dphotos-note">Download these, then attach them in Reddit.</span></div>'
+    : '';
+  var order=['image_observations','research','draft','audit','humanise','verify'];
   var plist=order.filter(function(k){return passes[k];}).map(function(k){
     return '<div class="rd-pass"><b>'+k+'</b>'+esc(passes[k])+'</div>';
   }).join('');
   /* Opens Reddit's own composer with the text already in it. No API needed,
      which matters because write access is still waiting on approval — and
      photos have to be attached by hand there anyway. */
-  var url='https://www.reddit.com/r/'+encodeURIComponent(SUBREDDIT)+'/submit?title='+
-    encodeURIComponent(p.title||'')+'&text='+encodeURIComponent(p.body||'');
   return '<div class="rd-draft'+(p.status==='ready'?' ready':'')+'" data-p="'+p.id+'">'+
     '<div class="rd-dhead">'+
       '<span class="rd-dstat '+stat+'">'+esc(label)+'</span>'+
       '<span class="rd-meta">'+esc(p.kind||'')+(p.photos&&p.photos.length?' · '+p.photos.length+' photo(s)':'')+'</span>'+
       '<span class="rd-dwhen">'+agoTxt(p.created_at)+'</span>'+
-    '</div>'+
+    '</div>'+photoStrip+
     (p.status==='needs_input'&&p.question
       ? '<div class="rd-ask"><p>'+esc(p.question)+'</p>'+
         '<textarea data-ans="'+p.id+'" placeholder="Answer it and the run picks up from here"></textarea>'+
@@ -545,13 +563,16 @@ function draftCard(p){
     : running
       ? '<div class="rd-empty" style="padding:14px 0">Working through the passes…</div>'
       : p.status==='failed'
-        ? '<div class="rd-empty" style="padding:14px 0;text-align:left">'+esc(p.error||'failed')+'</div>'
-        : '<input class="rd-dtitle" value="'+esc(p.title||'')+'" data-t="'+p.id+'">'+
-          '<textarea class="rd-dbody" data-b="'+p.id+'">'+esc(p.body||'')+'</textarea>'+
+        ? '<div class="rd-empty" style="padding:14px 0;text-align:left">'+
+          esc(p.error||'failed')+' <button data-retry="'+p.id+'">Retry</button></div>'
+        : '<input class="rd-dtitle" value="'+esc(shownTitle)+'" data-t="'+p.id+
+          '" aria-label="Reddit draft title">'+
+          '<textarea class="rd-dbody" data-b="'+p.id+
+          '" aria-label="Reddit draft body">'+esc(shownBody)+'</textarea>'+
           (plist?'<details class="rd-passes"><summary>What each pass did</summary>'+plist+'</details>':'')+
           '<div class="rd-dact">'+
             (p.status!=='posted'
-              ? '<a class="go" href="'+url+'" target="_blank" rel="noopener" data-open="'+p.id+'">Open in Reddit</a>'+
+              ? '<a class="go" href="#" data-open="'+p.id+'">Open in Reddit</a>'+
                 '<button data-save="'+p.id+'">Save edits</button>'+
                 '<button data-posted="'+p.id+'">Mark posted</button>'
               : '<span class="rd-meta">Posted '+agoTxt(p.posted_at)+'</span>')+
@@ -574,7 +595,8 @@ function drawWeek(){
   var out='', today=new Date();
   for(var i=0;i<7;i++){
     var d=new Date(today.getFullYear(),today.getMonth(),today.getDate()+i);
-    var key=d.toISOString().slice(0,10);
+    var key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+
+      String(d.getDate()).padStart(2,'0');
     var list=byDay[key]||[];
     var names=list.map(function(p){return p.assigned_to||'unassigned';});
     out+='<div class="rd-day'+(i===0?' today':'')+'">'+
@@ -595,6 +617,18 @@ function drawDrafts(){
     return;
   }
   L.innerHTML=DRAFTS.map(draftCard).join('');
+  L.querySelectorAll('[data-t]').forEach(function(el){
+    el.oninput=function(){
+      var id=+el.dataset.t;
+      (DRAFT_EDITS[id]=DRAFT_EDITS[id]||{}).title=el.value;
+    };
+  });
+  L.querySelectorAll('[data-b]').forEach(function(el){
+    el.oninput=function(){
+      var id=+el.dataset.b;
+      (DRAFT_EDITS[id]=DRAFT_EDITS[id]||{}).body=el.value;
+    };
+  });
   L.querySelectorAll('[data-slot]').forEach(function(b){
     b.onclick=function(){
       var id=+b.dataset.slot;
@@ -616,12 +650,20 @@ function drawDrafts(){
         .catch(function(e){ toast(e.message); b.disabled=false; });
     };
   });
+  L.querySelectorAll('[data-retry]').forEach(function(b){
+    b.onclick=function(){
+      b.disabled=true;
+      jpost('/reddit/post/retry',{id:+b.dataset.retry})
+        .then(function(){ toast('Retry started'); loadDrafts(); })
+        .catch(function(e){ toast(e.message); b.disabled=false; });
+    };
+  });
   L.querySelectorAll('[data-save]').forEach(function(b){
     b.onclick=function(){
       var id=+b.dataset.save, c=b.closest('.rd-draft');
       jpost('/reddit/post/update',{id:id,
         title:c.querySelector('[data-t]').value, body:c.querySelector('[data-b]').value})
-        .then(function(){ toast('Saved'); loadDrafts(); })
+        .then(function(){ delete DRAFT_EDITS[id]; toast('Saved'); loadDrafts(); })
         .catch(function(e){ toast(e.message); });
     };
   });
@@ -643,11 +685,24 @@ function drawDrafts(){
   /* Save whatever is on screen before handing it to Reddit, so an edit made
      and then immediately opened isn't silently left behind. */
   L.querySelectorAll('[data-open]').forEach(function(a){
-    a.onclick=function(){
+    a.onclick=function(e){
+      e.preventDefault();
       var id=+a.dataset.open, c=a.closest('.rd-draft');
-      jpost('/reddit/post/update',{id:id,
-        title:c.querySelector('[data-t]').value, body:c.querySelector('[data-b]').value})
-        .catch(function(){});
+      var title=c.querySelector('[data-t]').value;
+      var body=c.querySelector('[data-b]').value;
+      var win=window.open('about:blank','_blank');
+      if(win)win.opener=null;
+      jpost('/reddit/post/update',{id:id,title:title,body:body})
+        .then(function(){
+          delete DRAFT_EDITS[id];
+          var url='https://www.reddit.com/r/'+encodeURIComponent(SUBREDDIT)+
+            '/submit?title='+encodeURIComponent(title)+'&text='+encodeURIComponent(body);
+          if(win)win.location.replace(url);else location.href=url;
+        })
+        .catch(function(err){
+          if(win)win.close();
+          toast('Save failed — Reddit was not opened: '+err.message);
+        });
     };
   });
 }
@@ -717,6 +772,9 @@ function drawReplies(){
           '<button data-rsend="'+r.id+'">Answer and continue</button></div>'
       : running
         ? '<div class="rd-empty" style="padding:12px 0">Working&hellip;</div>'
+        : r.status==='failed'
+          ? '<div class="rd-empty" style="padding:12px 0;text-align:left">'+
+            esc(r.error||'failed')+' <button data-rretry="'+r.id+'">Retry</button></div>'
         : '<textarea class="rd-rbody" data-rt="'+r.id+'">'+esc(r.draft_text||'')+'</textarea>'+
           '<div class="rd-dact">'+
             '<a class="go" href="'+esc(r.permalink||'#')+'" target="_blank" rel="noopener">Open the thread</a>'+
@@ -756,6 +814,14 @@ function drawReplies(){
       b.disabled=true;
       jpost('/reddit/reply/update',{id:id,answer:v})
         .then(function(){ toast('Picking up where it stopped'); loadDrafts(); })
+        .catch(function(e){ toast(e.message); b.disabled=false; });
+    };
+  });
+  L.querySelectorAll('[data-rretry]').forEach(function(b){
+    b.onclick=function(){
+      b.disabled=true;
+      jpost('/reddit/reply/update',{id:+b.dataset.rretry,retry:true})
+        .then(function(){ toast('Retry started'); loadDrafts(); })
         .catch(function(e){ toast(e.message); b.disabled=false; });
     };
   });
@@ -836,7 +902,8 @@ def build():
         <button class="rd-go" id="c-go">Draft it</button>
         <p class="rd-empty" style="padding:10px 0 0;text-align:left">
           Five passes on Hermes &mdash; research, draft, audit, humanise, verify.
-          Takes a minute or two; you&rsquo;ll get a message when it&rsquo;s ready.</p>
+          It runs in the background and survives a service restart. Progress and the
+          finished draft stay in this queue; private owner alerts are sent when configured.</p>
       </div>
       <details class="rd-setup" id="setup">
         <summary>Set the subreddit up: rules, sidebar, flair</summary>

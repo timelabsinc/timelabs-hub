@@ -28,6 +28,7 @@ import reddit_clean
 
 DB = "/root/ops-dashboard/data/hermes.db"
 HERMES_TIMEOUT = 420
+HERMES_TOOLSET = "web"
 
 
 def db():
@@ -37,8 +38,11 @@ def db():
 
 
 def hermes(prompt):
-    r = subprocess.run(["hermes", "-z", prompt], capture_output=True,
-                       text=True, timeout=HERMES_TIMEOUT)
+    # Thread text and operator notes are untrusted prompt input. A reply draft
+    # needs public-web research at most, never owner memory or terminal access.
+    r = subprocess.run(
+        ["hermes", "--ignore-rules", "-t", HERMES_TOOLSET, "-z", prompt],
+        capture_output=True, text=True, timeout=HERMES_TIMEOUT)
     out = (r.stdout or "").strip()
     if r.returncode != 0 or not out:
         raise RuntimeError((r.stderr or out or "hermes gave nothing back")[:300])
