@@ -3426,7 +3426,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from order_form import STATUSES
         import order_stages
         cur_status = before["status"] or order_stages.DEFAULT_STAGE
-        paid_locked = (before["financial_status"] or "").strip().lower() == "paid"
+        # financial_status='paid' is Shopify's own checkout signal, not a fact
+        # about our build — a storefront order is typically "paid" within
+        # seconds of being placed, long before it's even been looked at, let
+        # alone sent to the supplier. Applying the same receipt-freeze rule
+        # to it as to a manually-logged order (where "paid" IS a meaningful
+        # late milestone) locked every real Shopify order from birth. Money
+        # fields don't need this protection either way: price_inr and
+        # financial_status are already re-synced from Shopify on every pass
+        # regardless of commitment, so a local edit to them would be
+        # overwritten on the next sync whether or not this lock exists.
+        # Website orders are governed purely by build_locked instead, same as
+        # everything else about them.
+        is_website = bool(before["shopify_order_id"])
+        paid_locked = (not is_website
+                      and (before["financial_status"] or "").strip().lower() == "paid")
         build_locked = order_stages.is_committed(
             cur_status, before["supplier_visible"], before["shipment_id"], before["bill_id"])
         build_fields = {
