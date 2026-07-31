@@ -3864,11 +3864,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         transcribed customer conversation) get neither path — they stay
         exactly as permanent as before.
 
-        Eligibility is identical either way: untouched Pending, never sent to
-        the supplier, no shipment/bill/tracking, no history beyond its own
-        creation. The derived customer is repaired afterwards — recomputed
-        from what's left, and removed entirely if nothing remains — so
-        neither path can leave a phantom buyer with inflated lifetime spend."""
+        Eligibility is nearly identical either way: untouched Pending, never
+        sent to the supplier, no shipment/bill/tracking, no STAFF history
+        beyond its own creation. The one deliberate difference: neither the
+        Shopify "paid" checkout signal nor the sync's own routine
+        reconciliation events count against a website order, since hiding it
+        destroys nothing (Shopify's own record is the real permanent one
+        either way) — counting them made this path unusable, since almost
+        every real order is paid and reconciled within minutes of existing.
+        The derived customer is repaired afterwards — recomputed from what's
+        left, and removed entirely if nothing remains — so neither path can
+        leave a phantom buyer with inflated lifetime spend."""
         actor = self._order_user()
         if not self._has_tool("orders"):
             self._json(403, {"error": "not available for this account"})
@@ -3895,7 +3901,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._json(404, {"error": "no such order"})
             return
-        if (row["financial_status"] or "").strip().lower() == "paid":
+        is_website = bool(row["shopify_order_id"])
+        # Paid blocks a TRUE hard delete outright — that destroys the row,
+        # its items and its history, and a paid order is a real financial
+        # record. It does not need to block hiding a website order: nothing
+        # is destroyed (row, items, financial_status, the Shopify link all
+        # survive; /orders/unhide reverses it), and financial_status='paid'
+        # is Shopify's own checkout signal — a storefront order is normally
+        # "paid" within seconds of being placed, so leaving this unscoped
+        # meant almost no real website order could ever be removed from the
+        # working queue, paid or not.
+        if not is_website and (row["financial_status"] or "").strip().lower() == "paid":
             conn.close()
             self._json(409, {
                 "error": "This order is marked Paid and cannot be deleted."})
@@ -3920,7 +3936,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "error": "Messaging-captured orders are a transcript of what a customer "
                          "actually sent and are permanent records. Cancel the order instead."})
             return
-        is_website = bool(row["shopify_order_id"])
         if not is_website and (row["source"] or "").strip().lower() not in (
                 "test", "mistake", "draft"):
             conn.close()
@@ -3928,9 +3943,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "error": "Only a record explicitly marked Test, Mistake, or Draft can be "
                          "hard-deleted. Cancel this order to preserve its audit history."})
             return
+        # shopify_sync/shopify_conflict are the timer talking to itself, not a
+        # person doing anything — routine financial reconciliation fires on
+        # nearly every real order, so counting it here would have made this
+        # check as unconditionally blocking as the paid check above just was.
+        # (shopify_conflict specifically can only be logged once a build is
+        # committed, which the supplier_visible/shipment/bill checks above
+        # already gate on their own — excluding it from this count for a
+        # website order can never let an actually-committed one slip through.)
+        # Genuine staff actions (edited, note, cost, billed, tracking...)
+        # still count for every order type.
+        ignored_kinds = ("shopify_sync", "shopify_conflict") if is_website else ()
+        marks = ",".join("?" for _ in ignored_kinds)
         extra_events = conn.execute(
-            "SELECT COUNT(*) FROM order_events WHERE order_id=? AND kind!='created'",
-            (oid,)).fetchone()[0]
+            f"SELECT COUNT(*) FROM order_events WHERE order_id=? AND kind!='created'"
+            f"{f' AND kind NOT IN ({marks})' if ignored_kinds else ''}",
+            (oid, *ignored_kinds)).fetchone()[0]
         bill_links = conn.execute(
             "SELECT COUNT(*) FROM supplier_bill_items WHERE order_id=?", (oid,)).fetchone()[0]
         if extra_events or bill_links:

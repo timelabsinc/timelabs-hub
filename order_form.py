@@ -813,12 +813,15 @@ function specOf(o){
 var orderRows={};
 var editPhotos=[], editPhotoRemove=[], editPhotoAdds=[];
 function isPaidOrder(o){return String((o&&o.financial_status)||'').toLowerCase()==='paid';}
-/* Deleting a paid order stays blocked regardless of origin — real money
-   changed hands. But financial_status='paid' is Shopify's own checkout
-   signal, not a fact about our build: a storefront order is typically
-   "paid" within seconds of being placed. Locking every EDIT the same way
-   locked every real Shopify order, permanently, from birth. Matches the
-   server's own split in _handle_orders_update. */
+/* financial_status='paid' is Shopify's own checkout signal, not a fact about
+   our build — a storefront order is typically "paid" within seconds of
+   being placed. Locking edit/delete the same way a manually-logged order's
+   real payment milestone does meant almost no real website order could ever
+   be touched. For a website order, "delete" is a non-destructive hide
+   anyway (row/items/history survive, reversible via unhide) — a paid
+   order's actual permanent record is Shopify's own, untouched either way.
+   Matches the server's identical split in _handle_orders_update and
+   _handle_orders_delete. */
 function isEditLocked(o){return !(o&&o.shopify_order_id)&&isPaidOrder(o);}
 function paymentLabel(o){
   var s=String((o&&o.financial_status)||'').toLowerCase();
@@ -931,7 +934,7 @@ async function loadOrders(){
         var st=String(o.status||'pending'), spec=specOf(o), sent=!!Number(o.supplier_visible);
         var cancelled=st==='cancelled', effectiveSent=sent&&!cancelled;
         var canRemove=effectiveSent&&st==='pending'&&!o.shipment_id&&!o.bill_id;
-        var paid=isPaidOrder(o), editLocked=isEditLocked(o);
+        var editLocked=isEditLocked(o);   // same paid-unless-website rule the server applies to both edit and delete
         return '<tr'+(o.shopify_order_id?' data-shopify="1"':'')+'>'+
           '<td data-l="Order" class="o-num">#'+orderNo(o)+
             (o.ref_code?'<div class="o-sub">was '+esc(o.ref_code)+'</div>':'')+'</td>'+
@@ -966,7 +969,7 @@ async function loadOrders(){
               (editLocked?' disabled title="Paid orders are locked"':' title="Edit order #'+orderNo(o)+'"')+
               '>Edit</button>'+
             '<button class="rowdel" data-del="'+o.id+'" data-no="'+orderNo(o)+'"'+
-              (paid?' disabled title="Paid orders cannot be deleted" aria-label="Paid orders cannot be deleted"':
+              (editLocked?' disabled title="Paid orders cannot be deleted" aria-label="Paid orders cannot be deleted"':
                 (o.shopify_order_id
                   ?' title="Remove order #'+orderNo(o)+'" aria-label="Remove order '+orderNo(o)+'"'
                   :' title="Delete order #'+orderNo(o)+'" aria-label="Delete order '+orderNo(o)+'"'))+
