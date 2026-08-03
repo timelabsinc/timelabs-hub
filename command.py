@@ -40,7 +40,7 @@ html,body{height:100%;overflow:hidden}
 .rail-foot{padding:10px;border-top:1px solid var(--border)}
 .fallback{display:block;text-align:center;color:var(--muted);font-size:11px;text-decoration:none;padding:7px}
 .fallback:hover{color:var(--accent)}
-.workspace{min-width:0;display:flex;flex-direction:column;background:var(--bg);margin:0}
+.workspace{min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;background:var(--bg);margin:0}
 .work-head{height:56px;flex:none;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--border);
   background:color-mix(in srgb,var(--bg) 88%,transparent)}
 .work-title{min-width:0;flex:1}.work-title b{font-size:14px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

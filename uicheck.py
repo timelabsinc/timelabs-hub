@@ -311,6 +311,30 @@ def cancelled(page):
     return hits
 
 
+def command_containment(page="/var/www/ops/command.html"):
+    """Keep long conversations inside the viewport instead of moving compose.
+
+    A flex column used as a CSS-grid child defaults to min-height:auto. Once an
+    old conversation was taller than the viewport, that intrinsic minimum made
+    .workspace grow to the full transcript height and pushed the composer off
+    screen. JavaScript parsing and class-coverage checks both pass in that
+    broken state, so guard the two containment rules the layout depends on.
+    """
+    html = open(page, encoding="utf-8", errors="replace").read()
+    css = " ".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.S))
+    required = {
+        ".workspace": {"min-height": "0", "overflow": "hidden"},
+        ".thread": {"min-height": "0", "overflow": "auto"},
+    }
+    issues = []
+    for selector, props in required.items():
+        for prop, want in props.items():
+            got = _last_px(css, PHONE, lambda s: s == selector, prop)
+            if got not in ({"0", "0px"} if want == "0" else {want}):
+                issues.append(f"{selector} needs {prop}:{want} (found {got or 'nothing'})")
+    return issues
+
+
 def main():
     pages = (sorted(glob.glob("/var/www/ops/*.html"))
              + ["/var/www/drop/index.html", "/var/www/intake/index.html"])
@@ -347,7 +371,14 @@ def main():
     print("  ✓ nothing cancelled" if not warn
           else f"  {warn} to eyeball (warning, not a failure)")
 
-    return 1 if (total or missing) else 0
+    print("\n═══ COMMAND STAYS INSIDE THE VIEWPORT ═══")
+    containment = command_containment()
+    for issue in containment:
+        print(f"  ✗ command.html  {issue}")
+    print("  ✓ long conversations keep the composer visible" if not containment
+          else f"  {len(containment)} broken containment rule(s)")
+
+    return 1 if (total or missing or containment) else 0
 
 
 if __name__ == "__main__":
