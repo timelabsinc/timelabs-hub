@@ -4386,7 +4386,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "case_style, dial_colour, dial_style, case_colour, movement, "
                 "watch_size, local_photos, tracking_code, ref_code, "
                 "supplier_cost, supplier_cost_ccy, bill_id FROM orders "
-                "WHERE supplier_visible=1 "
+                "WHERE supplier_visible=1 AND COALESCE(local_hidden,0)=0 "
                 "ORDER BY id DESC").fetchall()
             events = {}
             safe_event_kinds = (
