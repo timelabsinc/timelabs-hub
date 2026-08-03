@@ -398,6 +398,23 @@ def touch_target_contract():
     return issues
 
 
+def home_action_contract(page="/var/www/ops/index.html"):
+    """Home must remain an action surface, not regress to passive metrics."""
+    html = open(page, encoding="utf-8", errors="replace").read()
+    css = " ".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.S))
+    issues = []
+    required = ('id="action-center"', 'class="action-grid"',
+                'href="/ops/order-form.html"', 'href="/drop/"',
+                'href="/ops/command.html"')
+    for marker in required:
+        if marker not in html:
+            issues.append(f"missing {marker}")
+    got = _last_px(css, PHONE, lambda s: s == ".action-grid", "display")
+    if got != "grid":
+        issues.append(f".action-grid needs display:grid (found {got or 'nothing'})")
+    return issues
+
+
 def main():
     pages = (sorted(glob.glob("/var/www/ops/*.html"))
              + ["/var/www/drop/index.html", "/var/www/intake/index.html"])
@@ -464,7 +481,14 @@ def main():
     print("  ✓ compact actions have a touch-safe hit area" if not touch_targets
           else f"  {len(touch_targets)} undersized touch target(s)")
 
-    return 1 if (total or missing or containment or drop_chrome or role_nav or touch_targets) else 0
+    print("\n═══ HOME STARTS WITH ACTIONS ═══")
+    home_actions = home_action_contract()
+    for issue in home_actions:
+        print(f"  ✗ index.html             {issue}")
+    print("  ✓ operational exceptions lead to the owning tool" if not home_actions
+          else f"  {len(home_actions)} broken Home action rule(s)")
+
+    return 1 if (total or missing or containment or drop_chrome or role_nav or touch_targets or home_actions) else 0
 
 
 if __name__ == "__main__":

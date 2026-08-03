@@ -380,6 +380,38 @@ HUB_STYLE = r"""
   .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
   .empty{color:var(--muted);font-size:13.5px;}
   .f-note{color:var(--muted);font-size:12px;margin:12px 0 0;}
+
+  /* Home action layer: turn existing order, plan and health facts into the
+     small set of places where a person can act next. */
+  .action-center{margin-bottom:22px;}
+  .action-head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:10px;}
+  .action-head h2{font-size:15px;margin:0 0 2px;}
+  .action-head p{margin:0;color:var(--muted);font-size:12.5px;}
+  .action-total{flex:none;font-size:11.5px;font-weight:700;color:var(--muted);background:var(--card-2);
+    border:1px solid var(--border);border-radius:999px;padding:4px 9px;}
+  .action-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr));gap:9px;}
+  .action-card{display:flex;align-items:center;gap:11px;min-width:0;min-height:76px;padding:12px 13px;
+    color:var(--body);background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+    box-shadow:var(--shadow);text-decoration:none;transition:border-color .15s,transform .15s,box-shadow .15s;}
+  .action-card:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:var(--shadow-lg);text-decoration:none;}
+  .action-card:active{transform:scale(.985);}
+  .action-count{display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:9px;
+    background:var(--accent-bg);color:var(--accent);font-size:15px;font-weight:800;}
+  .action-card.action-bad .action-count{background:var(--bad-bg);color:var(--bad);}
+  .action-card.action-warn{border-color:color-mix(in srgb,var(--accent) 32%,var(--border));}
+  .action-copy{min-width:0;flex:1;}
+  .action-copy b{display:block;color:var(--ink);font-size:13.5px;line-height:1.3;}
+  .action-copy small{display:block;color:var(--muted);font-size:11.5px;line-height:1.4;margin-top:3px;}
+  .action-go{flex:none;color:var(--muted);font-size:16px;}
+  .action-clear{display:flex;align-items:center;gap:10px;grid-column:1/-1;padding:14px 16px;background:var(--good-bg);
+    border:1px solid transparent;border-radius:var(--r);}
+  .action-clear-dot{width:9px;height:9px;border-radius:50%;background:var(--good);}
+  .action-clear b{display:block;color:var(--ink);font-size:13.5px;}
+  .action-clear small{display:block;color:var(--muted);font-size:11.5px;margin-top:1px;}
+  .action-quick{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px;}
+  .action-quick a{font-size:11.5px;font-weight:650;color:var(--muted);background:var(--card);
+    border:1px solid var(--border);border-radius:999px;padding:6px 10px;text-decoration:none;}
+  .action-quick a:hover{color:var(--ink);border-color:var(--border-2);text-decoration:none;}
   .srcrow{display:grid;grid-template-columns:minmax(84px,124px) 1fr 54px;align-items:center;gap:10px;margin:8px 0;}
   .s-name{font-size:13px;color:var(--body);}
   .s-track{background:var(--card-2);border-radius:5px;height:10px;overflow:hidden;}
@@ -460,9 +492,10 @@ HUB_STYLE = r"""
   #keypanel{position:fixed;left:0;right:0;bottom:0;z-index:75;background:var(--card);
     border:1px solid var(--border);border-bottom:none;border-radius:16px 16px 0 0;
     padding:16px 20px calc(22px + env(safe-area-inset-bottom,0));
-    transform:translateY(105%);transition:transform .28s var(--ease);max-height:80vh;overflow-y:auto;
+    transform:translateY(105%);opacity:0;pointer-events:none;
+    transition:transform .28s var(--ease),opacity .18s;max-height:80vh;overflow-y:auto;
     box-shadow:var(--shadow-lg);}
-  #keypanel.open{transform:none;}
+  #keypanel.open{transform:none;opacity:1;pointer-events:auto;}
   .key-grip{width:36px;height:4px;border-radius:2px;background:var(--border-2);margin:0 auto 14px;}
   .key-title{font-size:17px;font-weight:700;margin:0 0 2px;letter-spacing:-.01em;}
   .key-sub{color:var(--muted);font-size:13px;margin:0 0 14px;}
@@ -1088,7 +1121,7 @@ def verdict_banner(analysis):
 def page(*, generated_at, lookback_days, source_status_html, kpi_html, verdict_html,
          funnel_html, channel_html, campaign_html, overview_orders_html, orders_html,
          plan_html, research_html, content_html, findings_html, health_html,
-         stats_html="", revenue_chart_html="", drop_ready=False):
+         stats_html="", revenue_chart_html="", attention_html="", drop_ready=False):
     """Assemble the full Hub/Face HTML from data fragments built by generate.py."""
     def rb(days, label):
         active = ' class="active"' if lookback_days == days else ""
@@ -1114,7 +1147,7 @@ def page(*, generated_at, lookback_days, source_status_html, kpi_html, verdict_h
   <main>
     <div class="page-head">
       <h1 class="page-title">Home</h1>
-      <p class="page-sub">The state of the business, at a glance.</p>
+      <p class="page-sub">What needs attention, what changed, and where to act next.</p>
       <div class="head-controls">
         <div class="seg">{rb(7, "7d")}{rb(30, "30d")}{rb(90, "90d")}</div>
         <span class="refreshed num">refreshed {generated_at}</span>
@@ -1135,6 +1168,7 @@ def page(*, generated_at, lookback_days, source_status_html, kpi_html, verdict_h
     </nav>
 
     <div class="tabpanel" id="tab-overview">
+      {attention_html}
       {verdict_html}
       <section>
         <div class="kpis">{kpi_html}</div>

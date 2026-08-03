@@ -341,6 +341,41 @@ def fetch_orders(limit=None):
     return merged[:limit] if limit is not None else merged
 
 
+def fetch_order_attention():
+    """Small operational counts for Home's action layer.
+
+    Home already had the underlying orders, but a person had to open several
+    tabs and infer what needed doing. Keep this query deliberately narrow and
+    read-only: it summarizes the canonical local order log without changing
+    any workflow state or guessing which orders should reach the supplier.
+    """
+    import sqlite3
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute(
+            "SELECT "
+            "SUM(CASE WHEN status='pending' AND COALESCE(supplier_visible,0)=0 "
+            "              AND COALESCE(is_stock,0)=0 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN status='pending' AND COALESCE(supplier_visible,0)=1 "
+            "              THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN status='shipped' AND COALESCE(supplier_visible,0)=1 "
+            "              AND COALESCE(tracking_code,'')='' THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN status='received' AND COALESCE(supplier_visible,0)=1 "
+            "              THEN 1 ELSE 0 END) "
+            "FROM orders WHERE COALESCE(local_hidden,0)=0"
+        ).fetchone()
+        conn.close()
+        return {
+            "review": int(row[0] or 0),
+            "supplier_waiting": int(row[1] or 0),
+            "tracking": int(row[2] or 0),
+            "received": int(row[3] or 0),
+        }
+    except Exception as e:
+        print(f"[home-attention] {e}", file=sys.stderr)
+        return {"review": 0, "supplier_waiting": 0, "tracking": 0, "received": 0}
+
+
 SOURCE_LABEL = {"website": "Website", "form": "Order form",
                 "whatsapp": "WhatsApp", "instagram": "Instagram"}
 
@@ -617,6 +652,59 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
     health_html = "".join(
         f'<span class="chiplet {"ok" if ok else "bad"}">{html.escape(label)}</span>'
         for label, ok in health
+    )
+    attention = fetch_order_attention()
+    blocked = sum(1 for item in plan if item[5] == "blocked")
+    unhealthy = sum(1 for _label, ok in health if not ok)
+
+    def attention_card(count, title, note, href, tone=""):
+        if not count:
+            return ""
+        cls = f" action-{tone}" if tone else ""
+        return (
+            f'<a class="action-card{cls}" href="{href}">'
+            f'<span class="action-count num">{count}</span>'
+            f'<span class="action-copy"><b>{html.escape(title)}</b>'
+            f'<small>{html.escape(note)}</small></span>'
+            '<span class="action-go" aria-hidden="true">&#8594;</span></a>'
+        )
+
+    attention_cards = "".join((
+        attention_card(attention["review"], "Orders awaiting review",
+                       "Check the details, then decide whether each build goes to the supplier.",
+                       "/ops/order-form.html"),
+        attention_card(attention["supplier_waiting"], "Builds awaiting acknowledgement",
+                       "These have been shared but have not moved beyond Pending.",
+                       "/ops/supplier.html", "warn"),
+        attention_card(attention["tracking"], "Shipped builds missing tracking",
+                       "Add the shipment reference so arrival can be followed.",
+                       "/ops/supplier.html", "warn"),
+        attention_card(attention["received"], "Received builds to finish",
+                       "Review received builds and move completed orders forward.",
+                       "/ops/supplier.html"),
+        attention_card(blocked, "Blocked plan items",
+                       "Open the plan to resolve what the work is waiting on.",
+                       "#plan", "warn"),
+        attention_card(unhealthy, "System checks need attention",
+                       "Open System Map for the failing dependency and safest next action.",
+                       "/ops/architecture.html", "bad"),
+    ))
+    attention_total = sum(attention.values()) + blocked + unhealthy
+    if not attention_cards:
+        attention_cards = (
+            '<div class="action-clear"><span class="action-clear-dot"></span>'
+            '<span><b>All clear</b><small>No open operational exceptions were found.</small></span></div>'
+        )
+    attention_html = (
+        '<section id="action-center" class="action-center">'
+        '<div class="action-head"><div><h2>Needs attention</h2>'
+        '<p>Start here, then move into the tool that owns the work.</p></div>'
+        f'<span class="action-total num">{attention_total} open</span></div>'
+        f'<div class="action-grid">{attention_cards}</div>'
+        '<div class="action-quick" aria-label="Quick actions">'
+        '<a href="/ops/order-form.html">Log an order</a>'
+        '<a href="/drop/">Upload to Drop</a>'
+        '<a href="/ops/command.html">Ask Labs</a></div></section>'
     )
     orders_html = ""
     if orders:
@@ -912,6 +1000,7 @@ def render(shopify, ga4, meta, generated_at, analysis, findings, plan, plan_done
         health_html=health_html,
         stats_html=stats_html,
         revenue_chart_html=revenue_chart_html + drop_html,
+        attention_html=attention_html,
         drop_ready=True,
     )
 
