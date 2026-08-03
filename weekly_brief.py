@@ -41,7 +41,8 @@ def gather():
         "SELECT COUNT(*) FROM orders WHERE received_at >= date('now','-14 day') "
         "AND received_at < date('now','-7 day')").fetchone()[0]
     f["value_7d"] = conn.execute(
-        "SELECT COALESCE(SUM(price_inr),0) FROM orders "
+        "SELECT COALESCE(SUM(COALESCE(sale_total_paise/100.0, "
+        "COALESCE(price_inr,0)*COALESCE(quantity,1))),0) FROM orders "
         "WHERE received_at >= date('now','-7 day')").fetchone()[0]
 
     f["selling"] = [dict(r) for r in conn.execute(

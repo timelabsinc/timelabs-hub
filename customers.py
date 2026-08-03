@@ -76,7 +76,8 @@ def _tags(orders_count, total_spent):
 
 def upsert_from_order(conn, order):
     """order: dict with customer_name/phone/email/address/pincode/city/state/
-    price_inr/quantity/status/source. Returns the customer row as a dict."""
+    price_inr/quantity/sale_total_paise/status/source. Returns the customer
+    row as a dict."""
     ensure_schema(conn)
     ckey = key_for(order.get("customer_phone"), order.get("customer_email"),
                    order.get("customer_name"))
@@ -93,7 +94,8 @@ def upsert_from_order(conn, order):
         where, params = "LOWER(customer_name)=?", ((order.get("customer_name") or "").strip().lower(),)
 
     agg = conn.execute(
-        f"SELECT COUNT(*) n, COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) spent, "
+        f"SELECT COUNT(*) n, COALESCE(SUM(COALESCE(sale_total_paise/100.0, "
+        f"COALESCE(price_inr,0)*COALESCE(quantity,1))),0) spent, "
         f"MIN(received_at) first_at, MAX(received_at) last_at FROM orders "
         f"WHERE {LIVE_ORDER_PREDICATE} AND {where}", params).fetchone()
 
@@ -155,7 +157,8 @@ def recount(conn, ckey):
     else:
         where, params = "LOWER(customer_name)=?", (val,)
     agg = conn.execute(
-        f"SELECT COUNT(*) n, COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) spent, "
+        f"SELECT COUNT(*) n, COALESCE(SUM(COALESCE(sale_total_paise/100.0, "
+        f"COALESCE(price_inr,0)*COALESCE(quantity,1))),0) spent, "
         f"MIN(received_at) first_at, MAX(received_at) last_at FROM orders "
         f"WHERE {LIVE_ORDER_PREDICATE} AND {where}", params).fetchone()
     n = agg["n"] or 0

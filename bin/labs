@@ -40,6 +40,12 @@ import sys
 
 sys.path.insert(0, "/root/ops-dashboard")
 
+from order_metrics import (
+    ALLOCATED_ITEM_REVENUE_SQL,
+    ORDER_ITEM_TOTALS_JOIN,
+    SALE_ORDER_PREDICATE_O,
+)
+
 HDB = "/root/ops-dashboard/data/hermes.db"
 SDB = "/root/ops-dashboard/data/suppliers.db"
 
@@ -124,13 +130,15 @@ def cmd_orders(args):
         conn = sqlite3.connect(HDB)
         conn.row_factory = sqlite3.Row
         for r in conn.execute(
-                "SELECT received_at, customer_name, product, price_inr, quantity, status, "
+                "SELECT received_at, customer_name, product, quantity, status, "
+                "COALESCE(sale_total_paise/100.0, "
+                "COALESCE(price_inr,0)*COALESCE(quantity,1)) AS order_total, "
                 "source, sender_number FROM orders ORDER BY id DESC LIMIT ?", (args.limit,)):
             logged.append({
                 "source": (r["source"] or ("whatsapp" if r["sender_number"] else "form")),
                 "when": (r["received_at"] or "")[:16], "customer": r["customer_name"],
                 "items": [f'{r["product"]} x{r["quantity"] or 1}'],
-                "amount": r["price_inr"], "status": r["status"]})
+                "amount": r["order_total"], "status": r["status"]})
         conn.close()
     except Exception as e:
         logged = [{"error": str(e)}]
@@ -150,10 +158,11 @@ def cmd_sales(args):
     rows = conn.execute(
         "SELECT COALESCE(NULLIF(oi.canonical_product,''), oi.product) AS product, "
         "SUM(oi.quantity) AS units, COUNT(DISTINCT oi.order_id) AS orders, "
-        "ROUND(SUM(oi.line_total), 2) AS revenue, MAX(o.received_at) AS last_sold "
+        f"ROUND(SUM({ALLOCATED_ITEM_REVENUE_SQL}), 2) AS revenue, "
+        "MAX(o.received_at) AS last_sold "
         "FROM order_items oi JOIN orders o ON o.id = oi.order_id "
-        "WHERE o.status != 'cancelled' AND (o.financial_status IS NULL "
-        "OR o.financial_status NOT IN ('refunded','voided')) "
+        + ORDER_ITEM_TOTALS_JOIN +
+        f"WHERE {SALE_ORDER_PREDICATE_O} "
         f"AND o.received_at >= datetime('now', '-{int(args.days)} days') "
         "GROUP BY 1 ORDER BY units DESC LIMIT ?", (args.top,)).fetchall()
     conn.close()

@@ -337,11 +337,13 @@ OF_CSS = r"""
     cursor:pointer;margin-top:3px;}
   .checkline input{width:16px;height:16px;accent-color:var(--accent);}
   .pay-dialog{width:min(560px,100%);}
-  .pay-order-total{display:flex;align-items:baseline;justify-content:space-between;
-    padding:12px 14px;border:1px solid var(--border);background:var(--card-2);
+  .pay-sale-total{padding:13px 14px;border:1px solid var(--border);background:var(--card-2);
     border-radius:var(--r-s);margin-bottom:12px;}
-  .pay-order-total span{font-size:12px;color:var(--muted);}
-  .pay-order-total b{font-size:20px;color:var(--ink);font-variant-numeric:tabular-nums;}
+  .pay-sale-total .of-field{margin:0;}
+  .pay-total-help{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    margin-top:7px;color:var(--muted);font-size:11.5px;line-height:1.4;}
+  .pay-total-reset{border:none;background:none;color:var(--accent);font:inherit;font-weight:700;
+    white-space:nowrap;padding:2px 0;cursor:pointer;}
   .pay-stage{border:1px solid var(--border);border-radius:var(--r-s);padding:13px;
     margin-top:10px;background:var(--card);}
   .pay-stage-head{font-size:13px;font-weight:750;color:var(--ink);margin-bottom:9px;}
@@ -856,6 +858,7 @@ function specOf(o){
     .map(function(k){return o[k];}).filter(Boolean).join(' · ');
 }
 var orderRows={}, CAN_MANAGE_PAYMENTS=false, paymentOpenRevision='';
+var paymentOpenCalculatedTotal=null, paymentOpenOriginalTotal=null;
 var editPhotos=[], editPhotoRemove=[], editPhotoAdds=[];
 var editPhotoContext='order', editUploadsPending=0;
 function isPaidOrder(o){return String((o&&o.financial_status)||'').toLowerCase()==='paid';}
@@ -890,9 +893,13 @@ function receiptPaise(o,kind){return Number(receiptOf(o,kind).amount_paise||0);}
 function hasCustomerReceipts(o){
   return !!(o&&o.customer_payment_recorded)||receiptPaise(o,'advance')+receiptPaise(o,'balance')>0;
 }
-function orderTotalPaise(o){
+function orderCalculatedTotalPaise(o){
   if(!o||o.price_inr===null||o.price_inr===undefined||o.price_inr==='')return null;
   return Math.round(Number(o.price_inr)*Number(o.quantity||1)*100);
+}
+function orderTotalPaise(o){
+  if(o&&o.sale_total_paise!==null&&o.sale_total_paise!==undefined)return Number(o.sale_total_paise);
+  return orderCalculatedTotalPaise(o);
 }
 function paiseMoney(n){return money(Number(n||0)/100);}
 function paymentCell(o){
@@ -1081,8 +1088,26 @@ function paymentValue(paise){
   if(!paise)return '';
   return (Number(paise)/100).toFixed(2).replace(/\.00$/,'');
 }
+function totalPaymentValue(paise){
+  if(paise===null||paise===undefined)return '';
+  return (Number(paise)/100).toFixed(2).replace(/\.00$/,'');
+}
+function optionalPaymentInputPaise(id){
+  var raw=$(id).value.trim();if(!raw)return null;
+  var n=Number(raw);return Number.isFinite(n)&&n>=0?Math.round(n*100):NaN;
+}
+function syncPaymentTotalHelp(){
+  var entered=optionalPaymentInputPaise('p-total'), calculated=paymentOpenCalculatedTotal;
+  if(calculated===null){
+    $('p-total-help').textContent='Final selling amount for this order';
+    $('p-total-reset').hidden=true;return;
+  }
+  $('p-total-help').textContent='Calculated from order price × quantity: '+paiseMoney(calculated);
+  $('p-total-reset').hidden=Number.isFinite(entered)&&entered===calculated;
+}
 function syncPaymentPreview(){
-  var total=Number($('p-total').dataset.paise||0), hasTotal=$('p-total').dataset.known==='1';
+  var total=optionalPaymentInputPaise('p-total');
+  var hasTotal=total!==null&&Number.isFinite(total);
   var advance=paymentInputPaise('p-advance'), balance=paymentInputPaise('p-balance');
   var received=(Number.isFinite(advance)?advance:0)+(Number.isFinite(balance)?balance:0);
   $('p-received').textContent=paiseMoney(received);
@@ -1101,29 +1126,37 @@ function openPayment(id){
      the newer token to older form values and defeat the server-side lock. */
   paymentOpenRevision=o.customer_payment_rev||'';
   var advance=receiptOf(o,'advance'), balance=receiptOf(o,'balance'), total=orderTotalPaise(o);
+  paymentOpenCalculatedTotal=orderCalculatedTotalPaise(o);
+  paymentOpenOriginalTotal=total;
   $('p-id').value=o.id;$('p-title').textContent='Payment · order #'+orderNo(o);
+  $('p-total').value=totalPaymentValue(total);
   $('p-advance').value=paymentValue(advance.amount_paise);
   $('p-advance-account').value=advance.account||'';
   $('p-balance').value=paymentValue(balance.amount_paise);
   $('p-balance-account').value=balance.account||'';
-  $('p-total').dataset.known=total===null?'0':'1';
-  $('p-total').dataset.paise=total===null?'0':String(total);
-  $('p-total').textContent=total===null?'Not set':paiseMoney(total);
   var fs=String(o.financial_status||'').trim(), isShopify=!!o.shopify_order_id;
   $('p-due-label').textContent=isShopify?'Unallocated to account':'Balance due';
   $('p-shopify').textContent=isShopify&&fs
     ?'Shopify checkout status: '+paymentLabel(o)+'. Account allocation is recorded separately here.'
     :'No Shopify checkout status. This is the local customer receipt record.';
-  syncPaymentPreview();
+  syncPaymentTotalHelp();syncPaymentPreview();
   $('payment-edit').hidden=false;document.body.style.overflow='hidden';
-  setTimeout(function(){$('p-advance').focus();},0);
+  setTimeout(function(){$('p-total').focus();},0);
 }
 function closePayment(){
-  $('payment-edit').hidden=true;document.body.style.overflow='';paymentOpenRevision='';
+  $('payment-edit').hidden=true;document.body.style.overflow='';
+  paymentOpenRevision='';paymentOpenCalculatedTotal=null;paymentOpenOriginalTotal=null;
 }
 async function savePayment(){
-  var id=+$('p-id').value, advance=paymentInputPaise('p-advance');
+  var id=+$('p-id').value, total=optionalPaymentInputPaise('p-total');
+  var advance=paymentInputPaise('p-advance');
   var balance=paymentInputPaise('p-balance'), btn=$('p-save');
+  if(total!==null&&!Number.isFinite(total)){
+    toast('Enter a valid total sale amount');return;
+  }
+  if(total===null&&paymentOpenOriginalTotal!==null){
+    toast('Enter the total sale amount or use the calculated total');return;
+  }
   if(!Number.isFinite(advance)||!Number.isFinite(balance)){
     toast('Enter valid payment amounts');return;
   }
@@ -1131,14 +1164,16 @@ async function savePayment(){
   if(balance&&!$('p-balance-account').value){toast('Select the remaining payment account');return;}
   btn.disabled=true;btn.textContent='Saving…';
   try{
-    await jpost('/orders/customer-payment',{
-      id:id,advance_amount:$('p-advance').value||0,
+    var d=await jpost('/orders/customer-payment',{
+      id:id,sale_total_amount:$('p-total').value.trim(),
+      advance_amount:$('p-advance').value||0,
       advance_account:$('p-advance-account').value,
       balance_amount:$('p-balance').value||0,
       balance_account:$('p-balance-account').value,
       expected_revision:paymentOpenRevision
     });
-    closePayment();await loadOrders();toast('Payment updated');
+    closePayment();await loadOrders();
+    toast('Payment updated'+((d.warnings||[]).length?' · '+d.warnings[0]:''));
   }catch(e){
     if(e.data&&e.data.payment_rev){closePayment();await loadOrders();}
     toast(e.message);
@@ -1593,10 +1628,16 @@ $('p-cancel').onclick=closePayment;
 $('p-close').onclick=closePayment;
 $('p-save').onclick=savePayment;
 $('payment-edit').querySelector('.omask').onclick=closePayment;
+$('p-total').oninput=function(){syncPaymentTotalHelp();syncPaymentPreview();};
 ['p-advance','p-balance'].forEach(function(id){$(id).oninput=syncPaymentPreview;});
+$('p-total-reset').onclick=function(){
+  if(paymentOpenCalculatedTotal===null)return;
+  $('p-total').value=totalPaymentValue(paymentOpenCalculatedTotal);
+  syncPaymentTotalHelp();syncPaymentPreview();$('p-total').focus();
+};
 $('p-fill').onclick=function(){
-  var total=Number($('p-total').dataset.paise||0);
-  if($('p-total').dataset.known!=='1'){toast('Set the order price first');return;}
+  var total=optionalPaymentInputPaise('p-total');
+  if(total===null||!Number.isFinite(total)){toast('Enter the total sale amount first');return;}
   var advance=paymentInputPaise('p-advance');if(!Number.isFinite(advance))advance=0;
   $('p-balance').value=paymentValue(Math.max(total-advance,0));
   syncPaymentPreview();$('p-balance-account').focus();
@@ -1879,8 +1920,15 @@ def build():
       <button class="oedit-close" id="p-close" aria-label="Close">&times;</button>
     </div>
     <input type="hidden" id="p-id">
-    <div class="pay-order-total"><span>Order total (price &times; quantity)</span>
-      <b id="p-total" data-known="0" data-paise="0">Not set</b></div>
+    <div class="pay-sale-total">
+      <div class="of-field"><label for="p-total">Total sale amount</label>
+        <div class="price-wrap"><span>&#8377;</span>
+          <input id="p-total" class="pin" type="number" min="0" step="0.01"
+            inputmode="decimal" placeholder="0.00"></div>
+        <div class="pay-total-help"><span id="p-total-help">Final selling amount for this order</span>
+          <button type="button" class="pay-total-reset" id="p-total-reset" hidden>Use calculated total</button></div>
+      </div>
+    </div>
     <div class="pay-stage">
       <div class="pay-stage-head">Advance received</div>
       <div class="of-row">

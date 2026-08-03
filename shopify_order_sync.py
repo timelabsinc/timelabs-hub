@@ -245,6 +245,7 @@ def _ensure_sync_schema(conn):
             ("shopify_conflict_fingerprint", "TEXT"),
             ("shopify_build_override", "INTEGER DEFAULT 0"),
             ("photo_override", "INTEGER DEFAULT 0"),
+            ("sale_total_paise", "INTEGER"),
             ("local_hidden", "INTEGER DEFAULT 0")):
         if name not in columns:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {declaration}")
@@ -511,6 +512,11 @@ def _build_lines_changed(conn, order_id, lines):
 
 def _sheet_row(order_no, row, amount):
     import google_api
+    # Staff may record a final selling amount alongside receipts. Shopify's
+    # unit/financial data keeps syncing, but the order Sheet must preserve the
+    # deliberate local total instead of restoring the remote amount.
+    if "sale_total_paise" in row.keys() and row["sale_total_paise"] is not None:
+        amount = int(row["sale_total_paise"]) / 100.0
     notes = str(row["notes"] or "").strip()
     shopify_ref = str(row["shopify_name"] or "").strip()
     if shopify_ref and shopify_ref not in notes:

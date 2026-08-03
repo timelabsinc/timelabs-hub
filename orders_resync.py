@@ -80,6 +80,9 @@ def _order_row(d):
         links = [d["drive_link"]] if d.get("drive_link") else []
     qty = d.get("quantity") or 1
     price = d.get("price_inr")
+    sale_total = d.get("sale_total_paise")
+    line_total = (sale_total / 100.0 if sale_total is not None else
+                  (None if price is None else price * qty))
     return google_api.row_for(google_api.SHEET_HEADERS, {
         "Order #": d.get("order_no") or d["id"],
         "Logged": (d.get("received_at") or "")[:16],
@@ -101,7 +104,7 @@ def _order_row(d):
         "Size": d.get("watch_size") or "",
         "Qty": qty,
         "Price (INR)": "" if price is None else price,
-        "Line total (INR)": "" if price is None else price * qty,
+        "Line total (INR)": "" if line_total is None else line_total,
         "Notes": d.get("notes") or "",
         "Photos": "\n".join(links),
     })

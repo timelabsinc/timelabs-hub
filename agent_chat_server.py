@@ -31,7 +31,12 @@ import urllib.error
 import urllib.request
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from markdown_render import md_to_html
-from order_metrics import SALE_ORDER_PREDICATE, SALE_ORDER_PREDICATE_O
+from order_metrics import (
+    ALLOCATED_ITEM_REVENUE_SQL,
+    ORDER_ITEM_TOTALS_JOIN,
+    SALE_ORDER_PREDICATE,
+    SALE_ORDER_PREDICATE_O,
+)
 from shopify_oauth import canonical_hmac_message
 from shopify_scopes import REQUESTED_SCOPE_STRING, normalized_scopes
 
@@ -462,11 +467,25 @@ def _order_photo_revision(names):
     return hashlib.sha256(packed.encode()).hexdigest()[:16]
 
 
-def _customer_payment_revision(receipts, price_inr=None, quantity=1):
+def _effective_order_total_paise(price_inr=None, quantity=1,
+                                 sale_total_paise=None):
+    """Return the admin-recorded sale total, falling back to price × qty."""
+    if sale_total_paise is not None:
+        return int(sale_total_paise)
+    if price_inr is None:
+        return None
+    return int((Decimal(str(price_inr)) * int(quantity or 1) * 100)
+               .quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _customer_payment_revision(receipts, price_inr=None, quantity=1,
+                               sale_total_paise=None):
     """Optimistic-lock key for receipts and the total they are allocated to."""
     packed = [{
         "price_inr": None if price_inr is None else str(price_inr),
         "quantity": int(quantity or 1),
+        "sale_total_paise": (None if sale_total_paise is None
+                             else int(sale_total_paise)),
     }]
     for kind in ("advance", "balance"):
         receipt = (receipts or {}).get(kind)
@@ -536,6 +555,12 @@ def _ensure_orders_schema():
             # choice is authoritative.  Shopify sync must not interpret an
             # intentionally-empty list as "missing" and re-import it later.
             "photo_override": "INTEGER DEFAULT 0",
+            # Optional whole-order selling value recorded alongside customer
+            # receipts. It deliberately does not replace Shopify/unit pricing:
+            # when NULL, payment math continues to use price × quantity; when
+            # set, Shopify sync can refresh its own financials without erasing
+            # the amount staff explicitly agreed with the customer.
+            "sale_total_paise": "INTEGER",
             # The number a person sees — "#61". Kept apart from the DB id
             # (which photos, the sheet join and Shopify links all key off, so
             # it can't be renumbered) precisely so the visible number CAN be a
@@ -3332,7 +3357,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "price_inr, notes, status, drive_link, photo_links, local_photos, case_style, "
                 "dial_colour, dial_style, case_colour, movement, watch_size, shopify_name, "
                 "ref_code, is_stock, financial_status, supplier_visible, shipment_id, bill_id, "
-                "shopify_order_id "
+                "shopify_order_id, sale_total_paise "
                 "FROM orders WHERE COALESCE(local_hidden,0)=0 "
                 "ORDER BY id DESC LIMIT 100").fetchall()
             receipts = {}
@@ -3374,7 +3399,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 payment_rows = receipts.get(order["id"], {})
                 order["customer_payments"] = payment_rows
                 order["customer_payment_rev"] = _customer_payment_revision(
-                    payment_rows, order.get("price_inr"), order.get("quantity") or 1)
+                    payment_rows, order.get("price_inr"), order.get("quantity") or 1,
+                    order.get("sale_total_paise"))
             out.append(order)
         self._json(200, {"orders": out,
                          "can_manage_payments": can_manage_payments,
@@ -3410,7 +3436,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # which orders count.
     _LIVE_ITEMS_JOIN = (
         "FROM order_items oi JOIN orders o ON o.id = oi.order_id "
-        f"WHERE {SALE_ORDER_PREDICATE_O}")
+        + ORDER_ITEM_TOTALS_JOIN
+        + f"WHERE {SALE_ORDER_PREDICATE_O}")
 
     def _handle_orders_meta(self):
         """Sources, the what's-selling roll-up, and per-product analytics —
@@ -3440,7 +3467,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # in the same number quietly inflates how the week looks.
             totals = conn.execute(
                 "SELECT COUNT(*) n, "
-                "COALESCE(SUM(COALESCE(price_inr,0)*COALESCE(quantity,1)),0) revenue, "
+                "COALESCE(SUM(COALESCE(sale_total_paise/100.0, "
+                "COALESCE(price_inr,0)*COALESCE(quantity,1))),0) revenue, "
                 "SUM(CASE WHEN source='website' THEN 1 ELSE 0 END) website "
                 f"FROM orders WHERE {SALE_ORDER_PREDICATE}").fetchone()
             stock = conn.execute(
@@ -3452,7 +3480,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             top_products = [dict(r) for r in conn.execute(
                 "SELECT COALESCE(NULLIF(oi.canonical_product,''), oi.product) AS name, "
                 "SUM(oi.quantity) AS units, COUNT(DISTINCT oi.order_id) AS orders, "
-                "ROUND(SUM(oi.line_total), 2) AS revenue, MAX(o.received_at) AS last_sold "
+                f"ROUND(SUM({ALLOCATED_ITEM_REVENUE_SQL}), 2) AS revenue, "
+                "MAX(o.received_at) AS last_sold "
                 + self._LIVE_ITEMS_JOIN +
                 " GROUP BY 1 ORDER BY units DESC LIMIT 30")]
         except sqlite3.OperationalError as e:
@@ -3517,7 +3546,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "bill_id, customer_name, customer_phone, customer_email, address, city, "
             "state, pincode, product, quantity, price_inr, source, is_stock, notes, "
             "case_style, dial_colour, dial_style, case_colour, movement, watch_size, "
-            "tracking_code, shopify_order_id "
+            "tracking_code, shopify_order_id, sale_total_paise "
             "FROM orders WHERE id=?", (oid,)).fetchone()
         if not before:
             conn.close()
@@ -3817,10 +3846,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         access, before["order_no"], sheet_fields[key],
                         "" if value is None else value)
                 if item_fields.intersection(normalized):
+                    line_total_paise = _effective_order_total_paise(
+                        normalized.get("price_inr", before["price_inr"]),
+                        normalized.get("quantity", before["quantity"]) or 1,
+                        before["sale_total_paise"])
                     google_api.update_order_field(
                         access, before["order_no"], "Line total (INR)",
-                        (normalized.get("price_inr", before["price_inr"]) or 0)
-                        * (normalized.get("quantity", before["quantity"]) or 1))
+                        "" if line_total_paise is None else line_total_paise / 100.0)
         except Exception as e:
             warnings.append(f"Sheet not updated: {e}")
         hub_event("order_updated",
@@ -3874,6 +3906,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except ValueError as e:
             self._json(400, {"error": str(e)})
             return
+
+        raw_sale_total = p.get("sale_total_amount")
+        # Blank means "leave it alone". Clearing an override is explicit in
+        # the UI: its reset button submits the calculated price × quantity,
+        # which is canonicalized back to NULL below.
+        sale_total_supplied = (
+            "sale_total_amount" in p
+            and raw_sale_total is not None
+            and bool(str(raw_sale_total).strip()))
+        requested_sale_total = None
+        if sale_total_supplied:
+            try:
+                total = Decimal(str(raw_sale_total).strip())
+                if not total.is_finite() or total < 0:
+                    raise ValueError(
+                        "Total sale amount must be a non-negative number.")
+                rounded_total = total.quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP)
+            except InvalidOperation:
+                self._json(400, {"error": "Enter a valid total sale amount."})
+                return
+            except ValueError as e:
+                self._json(400, {"error": str(e)})
+                return
+            if total != rounded_total:
+                self._json(400, {
+                    "error": "Total sale amount can have at most two decimal places."})
+                return
+            if rounded_total > Decimal("100000000"):
+                self._json(400, {"error": "Total sale amount is too large."})
+                return
+            requested_sale_total = int(rounded_total * 100)
         allowed_accounts = {"SM", "MK", "TL", "TM"}
         accounts = {
             "advance": str(p.get("advance_account") or "").strip().upper(),
@@ -3893,7 +3957,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             conn.execute("BEGIN IMMEDIATE")
             order = conn.execute(
-                "SELECT order_no, price_inr, quantity FROM orders "
+                "SELECT * FROM orders "
                 "WHERE id=? AND COALESCE(local_hidden,0)=0", (oid,)).fetchone()
             if not order:
                 conn.rollback()
@@ -3914,7 +3978,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 for kind in ("advance", "balance") if amounts[kind]
             }
             current_revision = _customer_payment_revision(
-                before, order["price_inr"], order["quantity"] or 1)
+                before, order["price_inr"], order["quantity"] or 1,
+                order["sale_total_paise"])
             if expected_revision != current_revision:
                 conn.rollback()
                 conn.close()
@@ -3923,7 +3988,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "payment_rev": current_revision,
                 })
                 return
-            if before != after:
+            calculated_total = _effective_order_total_paise(
+                order["price_inr"], order["quantity"] or 1)
+            next_sale_total = order["sale_total_paise"]
+            if sale_total_supplied:
+                # Storing the fallback again would turn an unchanged value
+                # into an unnecessary override. Equality also powers the
+                # modal's "Use calculated total" reset action.
+                next_sale_total = (
+                    None if requested_sale_total == calculated_total
+                    else requested_sale_total)
+            total_changed = next_sale_total != order["sale_total_paise"]
+            receipt_changed = before != after
+            if total_changed:
+                conn.execute(
+                    "UPDATE orders SET sale_total_paise=? WHERE id=?",
+                    (next_sale_total, oid))
+            if receipt_changed:
                 for kind in ("advance", "balance"):
                     if amounts[kind]:
                         conn.execute(
@@ -3944,10 +4025,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         return "cleared"
                     rupees = Decimal(amounts[kind]) / Decimal(100)
                     return f"INR {rupees:.2f} to {accounts[kind]}"
-                order_event(
-                    conn, oid, "customer_receipt",
-                    f"advance {shown('advance')}; remaining {shown('balance')}",
-                    actor)
+            if total_changed or receipt_changed:
+                details = []
+                if total_changed:
+                    old_total = _effective_order_total_paise(
+                        order["price_inr"], order["quantity"] or 1,
+                        order["sale_total_paise"])
+                    new_total = _effective_order_total_paise(
+                        order["price_inr"], order["quantity"] or 1,
+                        next_sale_total)
+
+                    def total_shown(value):
+                        return ("not set" if value is None else
+                                f"INR {Decimal(value) / Decimal(100):.2f}")
+
+                    details.append(
+                        f"sale total {total_shown(old_total)} -> "
+                        f"{total_shown(new_total)}")
+                if receipt_changed:
+                    details.append(
+                        f"advance {shown('advance')}; remaining {shown('balance')}")
+                order_event(conn, oid, "customer_receipt", "; ".join(details), actor)
             conn.commit()
         except sqlite3.Error as e:
             if conn.in_transaction:
@@ -3959,14 +4057,49 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
 
         qty = order["quantity"] or 1
-        total_paise = None
-        if order["price_inr"] is not None:
-            total_paise = int((Decimal(str(order["price_inr"])) * qty * 100)
-                              .quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        total_paise = _effective_order_total_paise(
+            order["price_inr"], qty, next_sale_total)
         received_paise = amounts["advance"] + amounts["balance"]
-        if before != after:
+
+        # Customer lifetime value and the shared Sheet both describe what the
+        # customer paid for the order, so a deliberate sale-total override
+        # must reach them too. The local transaction above is authoritative;
+        # these mirrors are best-effort and never roll the receipt back.
+        warnings = []
+        if sale_total_supplied:
+            customer_row = None
+            try:
+                import customers as customers_mod
+                repair = db()
+                current = dict(repair.execute(
+                    "SELECT * FROM orders WHERE id=?", (oid,)).fetchone())
+                if (current.get("customer_name") or current.get("customer_phone")
+                        or current.get("customer_email")):
+                    customer_row = customers_mod.upsert_from_order(repair, current)
+                repair.close()
+            except Exception as e:
+                try:
+                    repair.close()
+                except Exception:
+                    pass
+                warnings.append(f"Customer totals not refreshed: {e}")
+                print(f"[customer-payment] customer repair skipped: {e}", flush=True)
+            try:
+                import google_api
+                access = google_api.access_token()
+                if access and order["order_no"] is not None:
+                    google_api.update_order_field(
+                        access, order["order_no"], "Line total (INR)",
+                        "" if total_paise is None else total_paise / 100.0)
+                    if customer_row:
+                        google_api.upsert_customer_row(
+                            access, customers_mod.HEADERS,
+                            customers_mod.sheet_row(customer_row))
+            except Exception as e:
+                warnings.append(f"Sheet not updated: {e}")
+        if total_changed or receipt_changed:
             hub_event("order_customer_payment",
-                      f"#{order['order_no'] or oid} customer receipt updated",
+                      f"#{order['order_no'] or oid} sale total or receipt updated",
                       actor, app="orders")
         self._json(200, {
             "ok": True, "id": oid,
@@ -3976,8 +4109,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                           if total_paise is not None else None),
             "overpaid_paise": (max(received_paise - total_paise, 0)
                                if total_paise is not None else 0),
+            "sale_total_paise": next_sale_total,
+            "warnings": warnings,
             "payment_rev": _customer_payment_revision(
-                after, order["price_inr"], order["quantity"] or 1),
+                after, order["price_inr"], order["quantity"] or 1,
+                next_sale_total),
         })
 
     def _handle_orders_bulk(self):

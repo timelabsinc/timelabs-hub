@@ -27,7 +27,11 @@ from hub_shell import (  # the Hub/Face "Meridian" shell + chart engine
     page, source_chip, _refund_pct, kpi_card, stat_pill, svg_revenue_chart,
     verdict_banner,
 )
-from order_metrics import SALE_ORDER_PREDICATE_O
+from order_metrics import (
+    ALLOCATED_ITEM_REVENUE_SQL,
+    ORDER_ITEM_TOTALS_JOIN,
+    SALE_ORDER_PREDICATE_O,
+)
 from markdown_render import md_to_html
 
 ENV_PATH = "/root/ops-dashboard/.env"
@@ -256,7 +260,8 @@ def fetch_logged_orders(limit=2000):
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
             "SELECT received_at, customer_name, product, "
-            "COALESCE(price_inr,0)*COALESCE(quantity,1) AS order_total, "
+            "COALESCE(sale_total_paise/100.0, "
+            "COALESCE(price_inr,0)*COALESCE(quantity,1)) AS order_total, "
             "quantity, status, source, sender_number, chat_id, id, shopify_order_id, "
             "shopify_name, financial_status, COALESCE(is_stock,0) FROM orders "
             f"WHERE received_at >= date('now', '-{LOOKBACK_DAYS} days') "
@@ -414,9 +419,10 @@ def product_analytics(top=8):
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
             "SELECT COALESCE(NULLIF(oi.canonical_product,''), oi.product) AS name, "
-            "SUM(oi.quantity) AS units, SUM(oi.line_total) AS revenue, "
+            f"SUM(oi.quantity) AS units, SUM({ALLOCATED_ITEM_REVENUE_SQL}) AS revenue, "
             "COUNT(DISTINCT oi.order_id) AS orders "
             "FROM order_items oi JOIN orders o ON o.id = oi.order_id "
+            + ORDER_ITEM_TOTALS_JOIN +
             f"WHERE {SALE_ORDER_PREDICATE_O} "
             "GROUP BY 1 ORDER BY units DESC").fetchall()
         conn.close()
