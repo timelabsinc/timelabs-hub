@@ -185,7 +185,7 @@ const API='/ops/agent/api', threadEl=document.getElementById('thread'), empty=do
 const input=document.getElementById('input'), sendBtn=document.getElementById('sendBtn');
 const statusEl=document.getElementById('agentStatus'), sessionsEl=document.getElementById('sessions');
 const attachEl=document.getElementById('attachments'), composeWrap=document.querySelector('.compose-wrap');
-let busy=false, attachments=[], lastMessageId=0, historyGen=0, sessionsGen=0, runToken=0;
+let busy=false, attachments=[], uploading=0, lastMessageId=0, historyGen=0, sessionsGen=0, runToken=0;
 function stored(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function remember(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 function setSessionInUrl(id, push){
@@ -236,7 +236,7 @@ function bubble(role,text){if(empty&&empty.parentNode)empty.remove();let m=docum
 function thinking(){let d=document.createElement('div');d.className='thinking';d.innerHTML='<span class="dots"><i></i><i></i><i></i></span><span>Hermes is working with live business context…</span>';threadEl.appendChild(d);threadEl.scrollTop=threadEl.scrollHeight;return d}
 function notice(text,bad){let n=document.createElement('div');n.className='notice'+(bad?' bad':'');n.textContent=text;threadEl.appendChild(n);threadEl.scrollTop=threadEl.scrollHeight;return n}
 async function api(path,opt){let r=await fetch(API+path,opt);let ct=r.headers.get('content-type')||'';
- if((r.status===401||r.status===403)&&ct.indexOf('application/json')<0){location.href='/oauth2/start?rd='+encodeURIComponent(location.pathname);throw new Error('Sign-in required')}
+ if((r.status===401||r.status===403)&&ct.indexOf('application/json')<0){location.href='/oauth2/start?rd='+encodeURIComponent(location.pathname+location.search);throw new Error('Sign-in required')}
  let d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||('Request failed ('+r.status+')'));return d}
 async function loadSessions(){
  let gen=++sessionsGen;
@@ -288,10 +288,10 @@ async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.
  finally{busy=false;sendBtn.disabled=false;statusEl.textContent='Ready';focusComposer()}
 }
 async function poll(runSid,wait,baseline,token){for(let n=0;n<500;n++){if(token!==runToken){wait.remove();return;}await new Promise(r=>setTimeout(r,6000));if(token!==runToken){wait.remove();return;}let d=await api('/history?session='+runSid),agents=d.messages.filter(m=>m.role==='agent'&&(Number(m.id)||0)>baseline);if(agents.length){wait.remove();if(runSid===sid){let reply=agents[agents.length-1];bubble('agent',reply.text);lastMessageId=Math.max(lastMessageId,Number(reply.id)||0)}else await loadSessions();return}}wait.remove();if(token===runToken&&runSid===sid)notice('The job is still running. Its result will remain in this conversation.',false)}
-async function upload(f){if(!f)return;if(attachments.length>=8){notice('Up to 8 photos per message.',true);return}
+async function upload(f){if(!f)return;if(attachments.length+uploading>=8){notice('Up to 8 photos per message.',true);return}
  if(f.size>32*1024*1024){notice((f.name||'This image')+' is larger than 32 MB.',true);return}
  if(!/\.(jpe?g|png|webp)$/i.test(f.name||'')){let ext=(f.type||'').includes('png')?'.png':(f.type||'').includes('webp')?'.webp':'.jpg';f=new File([f],'pasted-'+Date.now()+ext,{type:f.type||'image/jpeg'})}
-let form=new FormData();form.append('image',f);try{let d=await api('/upload',{method:'POST',body:form}),a={path:d.path,name:f.name,url:''};attachments.push(a);renderAttachments();let rd=new FileReader();rd.onload=e=>{a.url=e.target.result;renderAttachments()};rd.readAsDataURL(f)}catch(e){notice(e.message,true)}}
+let form=new FormData();form.append('image',f);uploading++;try{let d=await api('/upload',{method:'POST',body:form}),a={path:d.path,name:f.name,url:''};attachments.push(a);renderAttachments();let rd=new FileReader();rd.onload=e=>{a.url=e.target.result;renderAttachments()};rd.readAsDataURL(f)}catch(e){notice(e.message,true)}finally{uploading--}}
 function renderAttachments(){attachEl.innerHTML='';attachments.forEach((a,i)=>{let c=document.createElement('div');c.className='attachment';c.innerHTML=(a.url?'<img src="'+a.url+'" alt="">':'')+'<span>'+esc(a.name)+'</span><button type="button" aria-label="Remove">×</button>';c.querySelector('button').onclick=()=>{attachments.splice(i,1);renderAttachments()};attachEl.appendChild(c)})}
 async function loadEvents(){try{let d=await api('/events'),el=document.getElementById('events');el.innerHTML='';(d.events||[]).slice(0,8).forEach(x=>{let v=document.createElement('div');v.className='event';v.innerHTML='<b>'+esc((x.app||'Labs')+' · '+(x.kind||'activity').replace(/_/g,' '))+'</b><p>'+esc(x.detail||'')+'</p><time>'+esc((x.created_at||'').slice(0,16).replace('T',' '))+'</time>';el.appendChild(v)});if(!el.children.length)el.innerHTML='<div class="event"><p>No recent activity.</p></div>'}catch(e){}}
 function autosize(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,150)+'px'}
