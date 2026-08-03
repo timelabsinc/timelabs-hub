@@ -49,6 +49,11 @@ MOBILE_FIX = """<style id="labs-mobile-fix">
 @media (max-width:759px){
   .fab{bottom:calc(var(--nav-h,60px) + env(safe-area-inset-bottom,0px) + 18px) !important;}
 }
+@media (min-width:760px){
+  /* Desktop already has Upload in the header. Two equally prominent upload
+     actions made the page look unfinished and competed for attention. */
+  .fab{display:none;}
+}
 /* The header markup above is generated from hub_shell, but Drop carries its
    own stylesheet instead of HUB_STYLE, so any class the shared header relies
    on has to be defined here too. .top-actions and .who were never in Drop's
@@ -57,10 +62,19 @@ MOBILE_FIX = """<style id="labs-mobile-fix">
    loose above the nav. Syncing the markup without the CSS it depends on is
    the failure mode this whole file exists to prevent, so they live with the
    sync rather than in Drop's stylesheet where the next edit could miss them. */
-.topbar .top-actions{display:flex;align-items:center;gap:8px;margin-left:auto;
-  flex-wrap:nowrap;}
+.wrap{max-width:1020px;padding-left:20px;padding-right:20px;}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:18px 0 14px;}
+.brand{gap:10px;}
+.brand-name{letter-spacing:-.01em;}
+.topbar .top-actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:nowrap;}
 .topbar .who{font-size:12px;color:var(--muted);max-width:150px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
+.topbar .iconbtn{cursor:pointer;border:1px solid var(--border);background:var(--card);
+  color:var(--body);border-radius:var(--r-s);width:36px;height:36px;box-shadow:var(--shadow);}
+.topbar .iconbtn:hover{border-color:var(--border-2);background:var(--card);color:var(--ink);}
+.topbar .iconbtn:active{transform:scale(.94);}
+@media (min-width:760px){ .topbar{padding:20px 0 18px;} }
 @media (max-width:759px){ .topbar .who{display:none;} }
 </style>"""
 

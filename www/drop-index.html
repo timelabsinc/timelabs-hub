@@ -31,6 +31,7 @@
     }
   }
   *{box-sizing:border-box}
+  [hidden]{display:none !important}
   html{-webkit-text-size-adjust:100%}
   body{margin:0;background:var(--bg);color:var(--body);font-family:var(--sans);font-size:15px;
     line-height:1.5;-webkit-font-smoothing:antialiased;}
@@ -92,14 +93,15 @@
   .cat small{opacity:.65;font-weight:600;}
 
   /* folders */
-  .folders{display:flex;gap:8px;flex-wrap:wrap;padding-bottom:14px;}
+  .folders{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;padding-bottom:14px;}
   .folder{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--border);
-    border-radius:10px;padding:10px 14px;box-shadow:var(--shadow);transition:all .15s var(--ease);max-width:100%;}
+    border-radius:10px;padding:10px 14px;box-shadow:var(--shadow);transition:all .15s var(--ease);
+    min-width:0;width:100%;}
   .folder:hover{border-color:var(--border-2);}
   .folder:active{transform:scale(.97);}
   .folder{cursor:pointer;}
   .folder .ic{width:18px;height:18px;color:var(--accent);flex:0 0 auto;}
-  .folder b{font-size:13.5px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .folder b{flex:1;min-width:0;font-size:13.5px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .folder small{font-size:11.5px;color:var(--muted);flex:0 0 auto;}
   .fdots{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;
     color:var(--muted);flex:0 0 auto;margin-left:2px;}
@@ -1011,8 +1013,14 @@ $('viewDel').onclick = async () => {
   } catch(err){ toast(err.message); }
 };
 document.addEventListener('keydown', e => {
+  if(e.key === 'Escape'){
+    if($('view').classList.contains('on')) closeView();
+    else if($('menu').classList.contains('on')) hideMenu();
+    else if($('orgsheet').classList.contains('open')) orgClose();
+    else if($('gdsheet').classList.contains('open')) gdCloseSheet();
+    return;
+  }
   if(!$('view').classList.contains('on')) return;
-  if(e.key === 'Escape') closeView();
   if(e.key === 'ArrowLeft') openView(viewIdx - 1);
   if(e.key === 'ArrowRight') openView(viewIdx + 1);
 });
@@ -1536,11 +1544,22 @@ async function gdList(){
   }
 }
 
-/* admin chip for Key nav */
+/* Identity, admin controls, and the same role-filtered navigation as Labs OS. */
 (async () => {
   try {
-    const res = await fetch('/ops/agent/api/whoami');
-    if(res.ok){ const i = await res.json(); if(i.admin) document.body.classList.add('is-admin'); }
+    const res = await fetch('/ops/agent/api/access/me');
+    if(!res.ok) return;
+    const i = await res.json();
+    if(i.email) $('who').textContent = i.email;
+    if(i.admin) document.body.classList.add('is-admin');
+    const allowed = i.tools === '*' ? null : (i.tools || []);
+    const can = key => i.admin || allowed === null ||
+      (key === 'tools' ? i.role === 'full' || i.role === 'content' : allowed.includes(key));
+    document.querySelectorAll('.appitem[data-tool]').forEach(item => {
+      if(!can(item.dataset.tool)){
+        item.hidden = true; item.setAttribute('aria-hidden','true'); item.tabIndex = -1;
+      }
+    });
   } catch(e){}
 })();
 

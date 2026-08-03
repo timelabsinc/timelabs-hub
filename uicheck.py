@@ -335,6 +335,50 @@ def command_containment(page="/var/www/ops/command.html"):
     return issues
 
 
+def drop_chrome_contract(page="/var/www/drop/index.html"):
+    """Drop's SPA stylesheet must still honor the shared Labs chrome.
+
+    The header markup is regenerated from hub_shell, but Drop intentionally
+    keeps a separate application stylesheet. Checking only class coverage let
+    old widths, naked icon buttons, a duplicate desktop upload FAB and ragged
+    content-sized folder cards survive behind perfectly valid selectors.
+    """
+    html = open(page, encoding="utf-8", errors="replace").read()
+    css = " ".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.S))
+    checks = (
+        (PHONE, ".wrap", "max-width", {"1020px"}),
+        (PHONE, ".topbar", "justify-content", {"space-between"}),
+        (PHONE, ".topbar .iconbtn", "width", {"36px"}),
+        (PHONE, ".folders", "display", {"grid"}),
+        (1024, ".fab", "display", {"none"}),
+    )
+    issues = []
+    for width, selector, prop, want in checks:
+        got = _last_px(css, width, lambda s, selector=selector: s == selector, prop)
+        if got not in want:
+            issues.append(
+                f"{selector} needs {prop}:{'/'.join(sorted(want))} at {width}px "
+                f"(found {got or 'nothing'})")
+    if "/ops/agent/api/access/me" not in html:
+        issues.append("identity and role-filtered navigation are not wired to access/me")
+    return issues
+
+
+def role_navigation_contract(page):
+    """Role-filtered links must be hidden visually, not just semantically."""
+    html = open(page, encoding="utf-8", errors="replace").read()
+    if 'class="appitem' not in html:
+        return []
+    issues = []
+    if "/ops/agent/api/access/me" not in html:
+        issues.append("app navigation is not wired to access/me")
+    css = " ".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.S))
+    got = _last_px(css, PHONE, lambda s: s == "[hidden]", "display")
+    if got != "none !important":
+        issues.append(f"[hidden] needs display:none !important (found {got or 'nothing'})")
+    return issues
+
+
 def main():
     pages = (sorted(glob.glob("/var/www/ops/*.html"))
              + ["/var/www/drop/index.html", "/var/www/intake/index.html"])
@@ -378,7 +422,23 @@ def main():
     print("  ✓ long conversations keep the composer visible" if not containment
           else f"  {len(containment)} broken containment rule(s)")
 
-    return 1 if (total or missing or containment) else 0
+    print("\n═══ DROP USES THE CURRENT LABS CHROME ═══")
+    drop_chrome = drop_chrome_contract()
+    for issue in drop_chrome:
+        print(f"  ✗ drop/index.html  {issue}")
+    print("  ✓ header, folders and upload actions stay aligned" if not drop_chrome
+          else f"  {len(drop_chrome)} broken Drop chrome rule(s)")
+
+    print("\n═══ ROLE-FILTERED NAVIGATION IS REALLY HIDDEN ═══")
+    role_nav = 0
+    for page in pages:
+        for issue in role_navigation_contract(page):
+            role_nav += 1
+            print(f"  ✗ {os.path.basename(page):22} {issue}")
+    print("  ✓ hidden tools do not remain visible" if not role_nav
+          else f"  {role_nav} broken role-navigation rule(s)")
+
+    return 1 if (total or missing or containment or drop_chrome or role_nav) else 0
 
 
 if __name__ == "__main__":

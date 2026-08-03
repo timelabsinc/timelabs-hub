@@ -178,6 +178,7 @@ HUB_STYLE = r"""
     }
   }
   *{box-sizing:border-box}
+  [hidden]{display:none !important}
   html{-webkit-text-size-adjust:100%}
   body{margin:0;background:var(--bg);color:var(--body);font-family:var(--sans);line-height:1.55;
     font-size:15px;-webkit-font-smoothing:antialiased;overscroll-behavior-y:contain;}
