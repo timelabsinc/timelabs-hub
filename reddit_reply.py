@@ -25,6 +25,7 @@ import sys
 
 sys.path.insert(0, "/root/ops-dashboard")
 import reddit_clean
+import writing_quality
 
 DB = "/root/ops-dashboard/data/hermes.db"
 HERMES_TIMEOUT = 420
@@ -68,7 +69,9 @@ BUSINESS = (
     "You are not here to sell. Mentioning the brand at all is optional and "
     "usually wrong. If the honest answer is that somebody else's part is "
     "better, say so. A reply that helps and never mentions us is worth more "
-    "to this subreddit than one that does.\n")
+    "to this subreddit than one that does.\n\n"
+    "Apply this standard before drafting:\n" +
+    writing_quality.prompt_brief("reddit") + "\n")
 
 
 def only_reply(text):
@@ -159,7 +162,7 @@ def run(draft_id):
         set_stage(draft_id, "polish")
         best = hermes(
             context + "\nReply:\n" + best +
-            "\n\nThese give it away as machine-written and must go:\n- "
+            "\n\nThese fail the TimeLabs editorial check and must go:\n- "
             + "\n- ".join(problems) +
             "\n\nReturn only the corrected reply, same meaning, no dashes.")
 

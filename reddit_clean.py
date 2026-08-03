@@ -21,6 +21,8 @@ Two separate problems:
 import re
 import unicodedata
 
+import writing_quality
+
 # Invisible or non-typeable characters. Anything here is deleted outright.
 INVISIBLE = {
     "​": "",   # zero-width space
@@ -44,19 +46,11 @@ SUBSTITUTE = {
     "−": "-",   # minus sign
 }
 
-# Phrasing that reads as generated. Reported, never auto-replaced.
-TELLS = [
-    r"\bdelve\b", r"\bdelving\b", r"\btapestry\b", r"\btestament to\b",
-    r"\belevat(e|es|ing|ed)\b", r"\bseamless(ly)?\b", r"\brobust\b",
-    r"\bleverage\b", r"\bunlock(ing)?\b", r"\bempower(s|ing)?\b",
-    r"\bgame[- ]chang(er|ing)\b", r"\bnavigat(e|ing) the\b",
-    r"\bin today'?s (world|market|landscape)\b", r"\bit'?s worth noting\b",
-    r"\bthat said,", r"\bmoreover,", r"\bfurthermore,", r"\bin conclusion\b",
-    r"\bat the end of the day\b", r"\bwhen it comes to\b",
-    r"\bnot just .{1,40} but\b", r"\bisn'?t just .{1,40} it'?s\b",
-    r"\bwhether you'?re\b", r"\bdive into\b", r"\bcrafted\b",
-    r"\bmeticulous(ly)?\b", r"\bstands? as\b", r"\bboasts?\b",
-]
+# Kept as a public name because the Reddit pipeline and its tests already use
+# it. The shared standard now owns the rules, so Instagram/email/product tools
+# can use the same taxonomy without copying this module's Reddit punctuation
+# policy.
+TELLS = writing_quality.TELL_PATTERNS
 
 
 def strip_dashes(text):
@@ -155,6 +149,7 @@ def verify(text):
     t = tells(text)
     if t:
         problems.append("phrasing: " + ", ".join(t[:6]))
+    problems.extend(writing_quality.blocking_problems(text, "reddit"))
     return problems
 
 

@@ -10,6 +10,7 @@ Hermes is the single accountable CMO and coordinator. The visible specialist age
 - Marketing Strategy
 - Competitive Intelligence
 - Brand Voice
+- Human Writing Standard
 - Current Labs OS state and business memory
 - First-party sales, product, Instagram and operational data
 

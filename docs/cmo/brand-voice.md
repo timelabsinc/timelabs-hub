@@ -1,5 +1,10 @@
 # TimeLabs brand voice
 
+This document defines the brand character. The cross-channel drafting,
+evidence and editorial rules live in the
+[TimeLabs human-writing standard](../human-writing-standard.md). Both apply to
+every public or customer-facing draft.
+
 ## Character
 
 Confident, concrete, collector-aware and calm. The writing should feel like a knowledgeable independent maker explaining a good build—not a luxury conglomerate, a dropshipper or a hype account.

@@ -2,7 +2,7 @@
 """Builds a post for r/IndiaWatchMods from photos of a build, in passes.
 
 One generation gives you something that reads like a generation. This runs
-five, each with a job the others don't do, and keeps every pass so the draft
+seven passes, each with a job the others don't do, and keeps every pass so the draft
 can be inspected rather than trusted:
 
   1. research   — what actually gets engagement in watch-mod subs right now,
@@ -33,6 +33,7 @@ import time
 
 sys.path.insert(0, "/root/ops-dashboard")
 import reddit_clean
+import writing_quality
 
 DB = "/root/ops-dashboard/data/hermes.db"
 REDDIT_MEDIA = "/root/ops-dashboard/data/reddit-media"
@@ -234,7 +235,9 @@ def run(post_id):
         f"grows if the posts are worth reading on their own.\n\n"
         f"Post type: {kind}.\n"
         f"What the owner said about this build: {brief or '(nothing beyond the photos)'}\n"
-        f"{shots}\n")
+        f"{shots}\n\n"
+        "Apply this standard before drafting, not as a cosmetic rewrite at the end:\n"
+        f"{writing_quality.prompt_brief('reddit')}\n")
 
     # 1 — research
     set_stage(post_id, "research", status="running")
@@ -331,7 +334,7 @@ def run(post_id):
         instruction = (
             context + "\nPost:\n" + best +
             "\n\nEditor notes to work in:\n" + out["geo"] +
-            ("\n\nThese give it away as machine-written and must go:\n- "
+            ("\n\nThese fail the TimeLabs editorial check and must go:\n- "
              + "\n- ".join(problems) if problems else "") +
             "\n\nProduce the final version. Rules, all of them:\n"
             "no em dash or en dash anywhere, no bullet lists, no rhetorical "
@@ -364,8 +367,8 @@ def run(post_id):
         title, body = parse(out["draft"])
 
     # Final gate. Everything above is advisory; this is not. A draft that
-    # still carries a tell is held back rather than shown as ready, because
-    # the whole point is that nobody on Reddit can tell.
+    # still carries a tell is held back rather than shown as ready. This is an
+    # editorial quality gate, not an AI-authorship detector.
     title, _ = reddit_clean.clean(title)
     body, cleaned_notes = reddit_clean.clean(body)
     out["scrubber"] = "; ".join(cleaned_notes) or "nothing needed removing"
