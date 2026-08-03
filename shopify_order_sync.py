@@ -237,12 +237,14 @@ def _stable_customer(row):
 
 def _ensure_sync_schema(conn):
     """Keep the timer safe even if it runs before the agent service restarts."""
+    conn.execute("BEGIN IMMEDIATE")
     columns = {row[1] for row in conn.execute("PRAGMA table_info(orders)")}
     for name, declaration in (
             ("shopify_contact_fingerprint", "TEXT"),
             ("shopify_contact_override", "INTEGER DEFAULT 0"),
             ("shopify_conflict_fingerprint", "TEXT"),
             ("shopify_build_override", "INTEGER DEFAULT 0"),
+            ("photo_override", "INTEGER DEFAULT 0"),
             ("local_hidden", "INTEGER DEFAULT 0")):
         if name not in columns:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {declaration}")
@@ -287,24 +289,32 @@ def _shopify_image_url(url):
 def _store_images(conn, order_id, urls):
     """Download Shopify CDN images into the same protected store as form photos.
 
-    Files are written atomically and the database is updated only after at
-    least one complete, recognizable image is present.
+    A staff/supplier edit sets ``photo_override`` and is always authoritative,
+    including an intentionally empty list.  Downloads use unique staged names;
+    after the network work finishes, BEGIN IMMEDIATE + a fresh row read prevents
+    a concurrent manual upload from being overwritten by the sync.
     """
     if not urls:
         return []
     row = conn.execute(
-        "SELECT local_photos FROM orders WHERE id=?", (order_id,)).fetchone()
-    if row and row[0] not in (None, "", "[]"):
+        "SELECT local_photos, COALESCE(photo_override,0) FROM orders WHERE id=?",
+        (order_id,)).fetchone()
+
+    def current_photos(value):
         try:
-            current = json.loads(row[0])
-            if current:
-                return current
+            parsed = json.loads(value or "[]")
         except (TypeError, json.JSONDecodeError):
-            pass
+            return []
+        return [name for name in parsed if isinstance(name, str)] \
+            if isinstance(parsed, list) else []
+
+    current = current_photos(row[0]) if row else []
+    if not row or row[1] or current:
+        return current
 
     dest = os.path.join(ORDER_PHOTOS, str(order_id))
     os.makedirs(dest, exist_ok=True)
-    stored = []
+    staged = []
     for url in urls:
         if not _shopify_image_url(url):
             print(f"[shopify-sync] refused non-Shopify image URL for order {order_id}",
@@ -323,26 +333,70 @@ def _store_images(conn, order_id, urls):
             ext = _image_extension(data)
             if not ext:
                 raise ValueError("response is not a supported image")
-            name = f"{len(stored) + 1}{ext}"
-            final = os.path.join(dest, name)
-            tmp = final + ".tmp"
-            with open(tmp, "wb") as f:
+            token = secrets.token_hex(16)
+            name = f"shopify-{token}{ext}"
+            stage = os.path.join(dest, f".shopify-stage-{token}{ext}")
+            with open(stage, "xb") as f:
                 f.write(data)
-            os.replace(tmp, final)
-            stored.append(name)
+                f.flush()
+                os.fsync(f.fileno())
+            staged.append((stage, name))
         except Exception as e:
             print(f"[shopify-sync] image for order {order_id} skipped: {e}", flush=True)
-    if stored:
-        conn.execute(
-            "UPDATE orders SET has_image=1, local_photos=? WHERE id=?",
-            (json.dumps(stored), order_id))
-        conn.commit()
-    else:
+    if not staged:
         try:
             os.rmdir(dest)
         except OSError:
             pass
-    return stored
+        return []
+
+    published = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT local_photos, COALESCE(photo_override,0) FROM orders WHERE id=?",
+            (order_id,)).fetchone()
+        current = current_photos(row[0]) if row else []
+        if not row or row[1] or current:
+            conn.rollback()
+            return current
+        for stage, name in staged:
+            final = os.path.join(dest, name)
+            os.replace(stage, final)
+            published.append(final)
+        dir_fd = os.open(dest, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+        parent_fd = os.open(
+            ORDER_PHOTOS, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+        stored = [name for _stage, name in staged]
+        conn.execute(
+            "UPDATE orders SET has_image=1, local_photos=? "
+            "WHERE id=? AND COALESCE(photo_override,0)=0",
+            (json.dumps(stored), order_id))
+        conn.commit()
+        return stored
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        for final in published:
+            try:
+                os.remove(final)
+            except OSError:
+                pass
+        raise
+    finally:
+        for stage, _name in staged:
+            try:
+                os.remove(stage)
+            except FileNotFoundError:
+                pass
 
 
 def _fetch_updates(since):
@@ -367,9 +421,11 @@ def backfill_images(actor="shopify-image-backfill"):
         return {"updated": 0, "missing": 0, "failed": 0, "error": str(e)}
     by_id = {o.get("id"): o for o in remote if o.get("id")}
     conn = sqlite3.connect(DB, timeout=5)
+    _ensure_sync_schema(conn)
     rows = conn.execute(
         "SELECT id, shopify_order_id FROM orders "
         "WHERE shopify_order_id IS NOT NULL "
+        "AND COALESCE(photo_override,0)=0 "
         "AND COALESCE(NULLIF(local_photos,''),'[]')='[]' "
         "ORDER BY id").fetchall()
     updated = missing = failed = 0

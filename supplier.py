@@ -205,8 +205,8 @@ SUP_CSS = r"""
   .otop{display:flex;gap:12px;padding:13px;flex:1;}
   .oshot{width:74px;height:74px;border-radius:10px;flex:none;background:var(--card-2);
     border:1px solid var(--border);overflow:hidden;position:relative;cursor:zoom-in;
-    touch-action:manipulation;}
-  .oshot img{width:100%;height:100%;object-fit:cover;display:block;
+    touch-action:manipulation;padding:0;appearance:none;}
+  .oshot img{width:100%;height:100%;object-fit:contain;display:block;
     transition:transform .18s var(--ease);}
   .oshot:hover img{transform:scale(1.06);}
   .oshot .more{position:absolute;right:3px;bottom:3px;background:rgba(0,0,0,.68);color:#fff;
@@ -222,7 +222,7 @@ SUP_CSS = r"""
     border-radius:12px;overflow:hidden;box-shadow:0 18px 48px rgba(0,0,0,.42);
     border:1px solid rgba(255,255,255,.14);background:var(--card);}
   .peek.on{opacity:1;transform:none;}
-  .peek img{display:block;width:300px;height:300px;object-fit:cover;}
+  .peek img{display:block;width:300px;height:300px;object-fit:contain;}
   @media (prefers-reduced-motion:reduce){ .peek{transition:none;} }
   .omid{flex:1;min-width:0;}
   .onum{font-size:11.5px;font-weight:800;color:var(--accent);letter-spacing:.03em;}
@@ -233,8 +233,15 @@ SUP_CSS = r"""
   .ospec{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;}
   .ospec span{font-size:11.5px;color:var(--muted);background:var(--card-2);border-radius:6px;
     padding:2px 7px;}
-  .onote{font-size:12.5px;color:var(--muted);line-height:1.5;margin-top:7px;
-    padding-left:9px;border-left:2px solid var(--border-2);}
+  .noteflag{display:inline-flex;align-items:center;margin-left:7px;padding:2px 6px;
+    border-radius:999px;background:rgba(218,158,33,.18);color:var(--accent);border:1px solid rgba(218,158,33,.42);
+    font-size:9.5px;font-weight:850;letter-spacing:.07em;vertical-align:1px;}
+  .onote{font-size:12.5px;color:var(--ink);line-height:1.5;margin-top:9px;
+    padding:9px 10px;border:1px solid rgba(218,158,33,.46);border-radius:8px;
+    background:rgba(218,158,33,.13);box-shadow:inset 3px 0 0 #d29a28;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .onote b{display:block;color:var(--accent);font-size:10px;font-weight:850;
+    text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px;}
 
   /* tracking — a chip once set, a quiet "add" link until then */
   .ocost{display:flex;align-items:center;gap:7px;margin-top:8px;flex-wrap:wrap;}
@@ -446,6 +453,8 @@ SUP_CSS = r"""
   .lb-nav{display:flex;gap:8px;margin-top:14px;}
   .lb-nav button{min-width:var(--tap);min-height:38px;border-radius:var(--r-s);border:none;
     background:rgba(255,255,255,.16);color:#fff;font:inherit;font-size:14px;font-weight:650;cursor:pointer;}
+  .lb-nav button.remove{padding:0 12px;background:rgba(200,54,54,.72);}
+  .lb-nav button[disabled]{opacity:.45;cursor:wait;}
 
   /* multi-select + the bar that appears once anything is picked */
   .ocard.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-bg);}
@@ -649,28 +658,30 @@ function sortOrders(list){
   return c;
 }
 
+function supplierPhotoUrl(o,n){
+  return API+'/supplier/photo?id='+o.id+'&n='+n+'&v='+encodeURIComponent(o.photo_rev||'none');
+}
 function photoEl(o){
   if(!o.photos){
     return '<div class="oshot none"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg></div>';
   }
-  return '<div class="oshot" data-lb="'+o.id+'" data-n="'+o.photos+'">'+
-    '<img src="'+API+'/supplier/photo?id='+o.id+'&n=0" alt="Reference photo for order '+o.id+'" loading="lazy">'+
-    (o.photos>1?'<span class="more">+'+(o.photos-1)+'</span>':'')+'</div>';
+  return '<button type="button" class="oshot" data-lb="'+o.id+'" data-n="'+o.photos+'">'+
+    '<img src="'+supplierPhotoUrl(o,0)+'" alt="Reference photo for order '+o.id+'" loading="lazy">'+
+    (o.photos>1?'<span class="more">+'+(o.photos-1)+'</span>':'')+'</button>';
 }
 var photoOrderId=0;
 async function uploadSupplierPhoto(id,file){
   var fd=new FormData();fd.append('image',file,file.name||('photo-'+Date.now()+'.jpg'));
   var r=await fetch(API+'/upload',{method:'POST',body:fd}), d=await r.json();
   if(!r.ok)throw new Error(d.error||'Upload failed');
-  await jpost('/supplier/photos/update',{id:id,photo_paths:[d.path]});
+  var o=byId(id);
+  await jpost('/supplier/photos/update',{id:id,photo_paths:[d.path],
+    expected_revision:(o&&o.photo_rev)||''});
 }
-async function removeSupplierPhoto(o){
-  if(!o.photos){toast('This order has no images');return;}
-  var raw=prompt('Image number to remove (1–'+o.photos+'):',String(o.photos));
-  if(raw===null)return;
-  var n=parseInt(raw,10);
-  if(!(n>=1&&n<=o.photos)){toast('Enter a number from 1 to '+o.photos);return;}
-  await jpost('/supplier/photos/update',{id:o.id,remove:[n-1]});
+function chooseSupplierPhotoToRemove(o){
+  if(!o||!o.photos){toast('This order has no images');return;}
+  openLb(o.id,o.photos);
+  toast('Choose the image, then tap Remove image');
 }
 function specEl(o){
   var keys=['case_style','dial_colour','dial_style','case_colour','movement','watch_size'];
@@ -731,17 +742,18 @@ function cardEl(o){
      edge. Once moving, the section itself says where it is. */
   var attn=(o.status===PIPELINE[0]);
   var onum=o.order_no||o.id;
-  return '<article class="ocard'+(attn?' attn':'')+(selectMode&&!problem?' selectable':'')+
+  return '<article class="ocard'+(attn?' attn':'')+(o.notes?' has-note':'')+(selectMode&&!problem?' selectable':'')+
       (SEL[o.id]&&!problem?' sel':'')+'" data-id="'+o.id+'">'+
     (selectMode&&!problem?'<button class="osel'+(SEL[o.id]?' on':'')+'" data-sel="'+o.id+
       '" aria-label="Select order '+onum+'"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>':'')+
     '<div class="otop">'+photoEl(o)+
       '<div class="omid">'+
-        '<div class="onum">'+(o.ref_code?'ORDER '+esc(o.ref_code):'ORDER #'+onum)+'</div>'+
+        '<div class="onum">'+(o.ref_code?'ORDER '+esc(o.ref_code):'ORDER #'+onum)+
+          (o.notes?'<span class="noteflag">NOTE</span>':'')+'</div>'+
         '<h3 class="oprod">'+esc(o.product||'—')+
           (o.quantity>1?'<span class="oqty">x'+o.quantity+'</span>':'')+'</h3>'+
         specEl(o)+
-        (o.notes?'<div class="onote"><b>Note:</b> '+esc(o.notes)+'</div>':'')+
+        (o.notes?'<div class="onote"><b>Important note</b>'+esc(o.notes)+'</div>':'')+
         (problem?cancelledCostEl(o):costEl(o))+
       '</div>'+
     '</div>'+
@@ -952,8 +964,7 @@ function wire(){
   L.querySelectorAll('[data-photorm]').forEach(function(b){
     b.onclick=function(){
       var o=byId(+b.dataset.photorm);
-      removeSupplierPhoto(o).then(function(){toast('Image removed');load(true);})
-        .catch(function(e){toast(e.message);});
+      chooseSupplierPhotoToRemove(o);
     };
   });
   /* Inline edit, same pattern as tracking — typing a number in place beats
@@ -1013,6 +1024,7 @@ async function setStatus(id,to,btn){
   try{
     await jpost('/supplier/status',{id:id,status:to});
     toast('#'+id+' → '+to);
+    await load(true);
   }catch(e){
     o.status=was;
     if(o.timeline)o.timeline.pop();
@@ -1025,8 +1037,9 @@ async function setStatus(id,to,btn){
 var holdT=null, heldOpen=false;
 function byId(id){ return ORDERS.filter(function(x){return x.id===id;})[0]; }
 function showPeek(id,anchor){
-  var p=$('peek'), img=$('peek-img');
-  if(img.dataset.for!==String(id)){ img.src=API+'/supplier/photo?id='+id+'&n=0'; img.dataset.for=String(id); }
+  var p=$('peek'), img=$('peek-img'), o=byId(id);if(!o)return;
+  var key=id+':'+(o.photo_rev||'none');
+  if(img.dataset.for!==key){ img.src=supplierPhotoUrl(o,0); img.dataset.for=key; }
   p.classList.add('on');
   /* place it beside the thumb, then nudge back inside the viewport */
   var r=anchor.getBoundingClientRect(), w=300, h=300, m=10;
@@ -1111,10 +1124,13 @@ function closeSheet(){ $('sheet').classList.remove('on'); sheetFor=null; }
 $('sheet-bg').onclick=closeSheet;
 
 /* lightbox */
-var lbId=null, lbN=0, lbI=0;
-function openLb(id,n){ lbId=id;lbN=n;lbI=0;drawLb();$('lb').classList.add('on'); }
+var lbId=null, lbN=0, lbI=0, lbRev='';
+function openLb(id,n){
+  var o=byId(id);lbId=id;lbN=n;lbI=0;lbRev=(o&&o.photo_rev)||'none';
+  drawLb();$('lb').classList.add('on');
+}
 function drawLb(){
-  $('lb-img').src=API+'/supplier/photo?id='+lbId+'&n='+lbI;
+  $('lb-img').src=API+'/supplier/photo?id='+lbId+'&n='+lbI+'&v='+encodeURIComponent(lbRev);
   $('lb-count').textContent=(lbI+1)+' / '+lbN;
   $('lb-prev').style.visibility=lbN>1?'':'hidden';
   $('lb-next').style.visibility=lbN>1?'':'hidden';
@@ -1124,6 +1140,19 @@ $('lb-close').onclick=closeLb;
 $('lb').onclick=function(e){ if(e.target===$('lb'))closeLb(); };
 $('lb-prev').onclick=function(){ lbI=(lbI-1+lbN)%lbN; drawLb(); };
 $('lb-next').onclick=function(){ lbI=(lbI+1)%lbN; drawLb(); };
+$('lb-remove').onclick=async function(){
+  var b=this, o=byId(lbId);if(!o)return;
+  if(!confirm('Remove image '+(lbI+1)+' from order #'+(o.order_no||o.id)+'?'))return;
+  b.disabled=true;
+  try{
+    await jpost('/supplier/photos/update',{id:lbId,remove:[lbI],
+      expected_revision:lbRev});
+    closeLb();toast('Image removed');await load(true);
+  }catch(e){
+    closeLb();toast(e.message);await load(true);
+  }
+  b.disabled=false;
+};
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape'){ closeLb(); closeSheet(); }
   else if($('lb').classList.contains('on')){
@@ -1570,7 +1599,7 @@ $('supplier-photo-input').onchange=function(){
   var f=(this.files||[])[0];this.value='';
   if(!f||!photoOrderId)return;
   uploadSupplierPhoto(photoOrderId,f).then(function(){toast('Image added');load(true);})
-    .catch(function(e){toast(e.message);});
+    .catch(function(e){toast(e.message);load(true);});
 };
 $('fbtn').onclick=function(){
   var open=$('fpanel').classList.toggle('on');
@@ -1590,9 +1619,9 @@ $('q').addEventListener('input',function(){
 
 /* load + keep fresh: refetch when they come back to the tab, and slowly in
    the background, so an order added while it sat open still shows up */
-var loading=false;
+var loading=false, loadAgain=false;
 async function load(quiet){
-  if(loading)return;
+  if(loading){loadAgain=true;return;}
   loading=true;
   if(!quiet)$('sync').textContent='Loading…';
   try{
@@ -1604,6 +1633,16 @@ async function load(quiet){
     $('sync').textContent='Updated '+new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
     $('sync').classList.remove('err');
     render();
+    /* Keep an already-open gallery aligned with the same refreshed order.
+       Admin edits can otherwise leave it pointing at a removed index. */
+    if($('lb').classList.contains('on')){
+      var openOrder=byId(lbId);
+      if(!openOrder||!openOrder.photos)closeLb();
+      else if(openOrder.photo_rev!==lbRev||openOrder.photos!==lbN){
+        lbRev=openOrder.photo_rev||'none';lbN=openOrder.photos;
+        lbI=Math.min(lbI,lbN-1);drawLb();
+      }
+    }
     /* Arrears rides along with the queue load so the money strip is right
        on first paint, not a beat later. Failure is silent and non-fatal —
        a build queue that works without totals beats one that won't load. */
@@ -1614,18 +1653,21 @@ async function load(quiet){
     if(!ORDERS.length)$('list').innerHTML='<div class="sempty">'+esc(e.message)+'</div>';
   }
   loading=false;
+  if(loadAgain){loadAgain=false;load(true);}
 }
 /* The background refresh must never interrupt work in progress: rebuilding
    the list would drop a half-typed note or cost, and re-deriving selection
    mid-pick is worse. Skip the tick and catch the next one. */
 function busyEditing(){
   var a=document.activeElement;
-  if(a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'))return true;
+  /* The always-visible search box may stay focused for the whole session;
+     refreshing the card list does not touch it, so it must not freeze sync. */
+  if(a&&a.id!=='q'&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'))return true;
   return selectMode;
 }
 document.addEventListener('visibilitychange',function(){
   if(!document.hidden&&!busyEditing())load(true); });
-setInterval(function(){ if(!document.hidden&&!busyEditing())load(true); },90000);
+setInterval(function(){ if(!document.hidden&&!busyEditing())load(true); },30000);
 load();
 /* Arriving on a #batch-N link should open Batches, not the queue. */
 if(/^#batch-\d+$/.test(location.hash||'')){
@@ -1798,6 +1840,7 @@ def build():
     <button id="lb-prev" aria-label="Previous photo">&#8249;</button>
     <span id="lb-count" style="color:#fff;font-size:13px;align-self:center;padding:0 6px"></span>
     <button id="lb-next" aria-label="Next photo">&#8250;</button>
+    <button id="lb-remove" class="remove">Remove image</button>
   </div>
 </div>
 

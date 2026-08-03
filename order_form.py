@@ -155,7 +155,7 @@ OF_CSS = r"""
   .shots:empty{display:none;}
   .shot{position:relative;width:78px;height:78px;border-radius:10px;overflow:hidden;
     border:1px solid var(--border);background:var(--card-2);}
-  .shot img{width:100%;height:100%;object-fit:cover;display:block;}
+  .shot img{width:100%;height:100%;object-fit:contain;display:block;}
   .shot.up img{opacity:.45;}
   /* Only while .up (still uploading). drawShots now builds each tile once and
      keeps it, so the spinner element is always in the DOM — without this it
@@ -166,6 +166,8 @@ OF_CSS = r"""
   .shot .rm{position:absolute;top:3px;right:3px;width:22px;height:22px;border-radius:50%;
     border:none;background:rgba(0,0,0,.62);color:#fff;font-size:13px;cursor:pointer;
     display:flex;align-items:center;justify-content:center;line-height:1;}
+  .shot .primary{position:absolute;left:3px;bottom:3px;background:rgba(0,0,0,.7);color:#fff;
+    border-radius:4px;padding:2px 5px;font-size:9px;font-weight:750;}
   input[type=file]{display:none;}
 
   .btn{font-size:13.5px;font-weight:650;border-radius:var(--r-s);padding:10px 15px;cursor:pointer;
@@ -267,9 +269,9 @@ OF_CSS = r"""
   select.pill-select[disabled]{opacity:.5;cursor:wait;}
 
   /* photo thumbnails — real images now that photos live on our own disk */
-  a.thumb{position:relative;display:block;width:46px;height:46px;border-radius:7px;
+  a.thumb{position:relative;display:block;width:52px;height:52px;border-radius:7px;
     overflow:hidden;border:1px solid var(--border);background:var(--card-2);}
-  a.thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  a.thumb img{width:100%;height:100%;object-fit:contain;display:block;}
   /* Builds made without a buyer. The convention already existed by hand, with
      the customer typed as "Self"; this makes it a real field so stock stops
      being counted as sales. */
@@ -297,6 +299,23 @@ OF_CSS = r"""
     border-color:transparent;}
   @media(max-width:720px){ .rowedit,.rowdel{opacity:1;} }
 
+  /* Customer receipts are a separate money flow from Shopify checkout and
+     supplier bills.  Keep the summary compact in the table, but make the
+     whole cell an obvious admin action rather than a passive status pill. */
+  .paycell{display:block;min-width:142px;text-align:left;border:1px solid var(--border);
+    background:var(--card);color:var(--ink);border-radius:8px;padding:7px 9px;cursor:pointer;
+    font:inherit;line-height:1.25;transition:border-color .13s,background .13s;}
+  .paycell:hover{border-color:var(--accent);background:var(--accent-bg);}
+  .paycell .pamt{display:block;font-size:12.5px;font-weight:750;color:var(--ink);}
+  .paycell .pmeta{display:block;font-size:10.5px;color:var(--muted);margin-top:3px;}
+  .paycell .pdue{color:var(--accent);font-weight:700;}
+  .paycell .pover{color:var(--bad);font-weight:700;}
+  .paycell.unassigned{border-style:dashed;}
+  .pay-status{display:inline-block;margin-top:4px;font-size:10px;font-weight:750;
+    color:var(--muted);background:var(--card-2);border-radius:999px;padding:2px 6px;}
+  .pay-status.paid{color:var(--good);background:var(--good-bg);}
+  .pay-status.partpaid{color:var(--accent);background:var(--accent-bg);}
+
   /* order editor */
   .omodal{position:fixed;inset:0;z-index:120;display:flex;align-items:center;
     justify-content:center;padding:18px;}
@@ -317,6 +336,27 @@ OF_CSS = r"""
   .checkline{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--ink);
     cursor:pointer;margin-top:3px;}
   .checkline input{width:16px;height:16px;accent-color:var(--accent);}
+  .pay-dialog{width:min(560px,100%);}
+  .pay-order-total{display:flex;align-items:baseline;justify-content:space-between;
+    padding:12px 14px;border:1px solid var(--border);background:var(--card-2);
+    border-radius:var(--r-s);margin-bottom:12px;}
+  .pay-order-total span{font-size:12px;color:var(--muted);}
+  .pay-order-total b{font-size:20px;color:var(--ink);font-variant-numeric:tabular-nums;}
+  .pay-stage{border:1px solid var(--border);border-radius:var(--r-s);padding:13px;
+    margin-top:10px;background:var(--card);}
+  .pay-stage-head{font-size:13px;font-weight:750;color:var(--ink);margin-bottom:9px;}
+  .pay-stage .of-row{margin-bottom:0;align-items:flex-end;}
+  .pay-stage .of-field{margin-bottom:0;}
+  .pay-fill{border:none;background:none;color:var(--accent);font:inherit;font-size:12px;
+    font-weight:700;cursor:pointer;padding:6px 0 0;}
+  .pay-totals{margin-top:14px;padding:12px 14px;border-radius:var(--r-s);
+    background:var(--accent-bg);display:grid;gap:7px;}
+  .pay-totals div{display:flex;justify-content:space-between;gap:14px;font-size:12.5px;
+    color:var(--muted);}
+  .pay-totals b{color:var(--ink);font-variant-numeric:tabular-nums;}
+  .pay-totals .due b{color:var(--accent);font-size:15px;}
+  .pay-totals .over b{color:var(--bad);}
+  .pay-shopify{font-size:11.5px;color:var(--muted);line-height:1.45;margin:10px 2px 0;}
   @media(max-width:600px){
     .omodal{padding:0;align-items:flex-end;}
     .odialog{width:100%;max-height:94vh;border-radius:18px 18px 0 0;padding:17px 15px;}
@@ -327,7 +367,7 @@ OF_CSS = r"""
     border-radius:var(--r-s);background:var(--card);margin-bottom:9px;}
   .bthumb{width:64px;height:64px;border-radius:8px;flex:none;overflow:hidden;background:var(--card-2);
     border:1px solid var(--border);position:relative;}
-  .bthumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  .bthumb img{width:100%;height:100%;object-fit:contain;display:block;}
   .bthumb .up{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     font-size:10.5px;font-weight:650;color:var(--muted);background:rgba(0,0,0,.35);}
   .bmid{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px;}
@@ -791,12 +831,17 @@ function money(n){return (n===null||n===undefined||n==='')?'':('₹'+Number(n).t
 /* Photos live on our own disk now and stream through a role-checked endpoint,
    so we can show the actual thumbnail instead of a "View" link off to Drive.
    Drive links stay as the fallback for orders logged before that change. */
+function orderPhotoUrl(o,n){
+  return API+'/orders/photo?id='+o.id+'&n='+n+'&v='+encodeURIComponent(o.photo_rev||'none');
+}
 function photoCell(o){
   var local=[];
   try{local=o.local_photos?JSON.parse(o.local_photos):[];}catch(e){local=[];}
+  if(!Array.isArray(local))local=[];
   if(local.length){
-    return '<a class="thumb" href="'+API+'/orders/photo?id='+o.id+'&n=0" target="_blank" rel="noopener">'+
-      '<img src="'+API+'/orders/photo?id='+o.id+'&n=0" alt="" loading="lazy">'+
+    var src=orderPhotoUrl(o,0);
+    return '<a class="thumb" href="'+src+'" target="_blank" rel="noopener">'+
+      '<img src="'+src+'" alt="Order reference" loading="lazy">'+
       (local.length>1?'<span class="tn">+'+(local.length-1)+'</span>':'')+'</a>';
   }
   var links=[];
@@ -810,8 +855,9 @@ function specOf(o){
   return ['case_style','dial_colour','dial_style','case_colour','movement','watch_size']
     .map(function(k){return o[k];}).filter(Boolean).join(' · ');
 }
-var orderRows={};
+var orderRows={}, CAN_MANAGE_PAYMENTS=false, paymentOpenRevision='';
 var editPhotos=[], editPhotoRemove=[], editPhotoAdds=[];
+var editPhotoContext='order', editUploadsPending=0;
 function isPaidOrder(o){return String((o&&o.financial_status)||'').toLowerCase()==='paid';}
 /* financial_status='paid' is Shopify's own checkout signal, not a fact about
    our build — a storefront order is typically "paid" within seconds of
@@ -828,39 +874,102 @@ function paymentLabel(o){
   if(s==='paid')return 'Paid';
   if(s==='partially_paid')return 'Part paid';
   if(s==='refunded')return 'Refunded';
+  if(s==='partially_refunded')return 'Part refunded';
   if(s==='voided')return 'Voided';
-  return 'Unpaid';
+  if(s==='authorized')return 'Authorized';
+  if(s==='pending')return 'Pending';
+  if(!s)return 'Unpaid';
+  return s.replace(/_/g,' ').replace(/(^|\s)\S/g,function(c){return c.toUpperCase();});
 }
 function paymentClass(o){
   var s=String((o&&o.financial_status)||'').toLowerCase();
   return s==='paid'?'paid':(s==='partially_paid'?'partpaid':'');
 }
+function receiptOf(o,kind){return ((o&&o.customer_payments)||{})[kind]||{};}
+function receiptPaise(o,kind){return Number(receiptOf(o,kind).amount_paise||0);}
+function hasCustomerReceipts(o){
+  return !!(o&&o.customer_payment_recorded)||receiptPaise(o,'advance')+receiptPaise(o,'balance')>0;
+}
+function orderTotalPaise(o){
+  if(!o||o.price_inr===null||o.price_inr===undefined||o.price_inr==='')return null;
+  return Math.round(Number(o.price_inr)*Number(o.quantity||1)*100);
+}
+function paiseMoney(n){return money(Number(n||0)/100);}
+function paymentCell(o){
+  if(!CAN_MANAGE_PAYMENTS){
+    if(o.customer_payment_recorded)return '<span class="pill partpaid">Payment recorded</span>';
+    return '<span class="pill '+paymentClass(o)+'">'+esc(paymentLabel(o))+'</span>';
+  }
+  var advance=receiptPaise(o,'advance'), balance=receiptPaise(o,'balance');
+  var received=advance+balance, total=orderTotalPaise(o);
+  var due=total===null?null:Math.max(total-received,0);
+  var over=total===null?0:Math.max(received-total,0);
+  var accounts=[];
+  ['advance','balance'].forEach(function(k){
+    var r=receiptOf(o,k);if(r.amount_paise&&r.account&&accounts.indexOf(r.account)<0)accounts.push(r.account);
+  });
+  var isShopify=!!o.shopify_order_id;
+  var checkout=isShopify?String(o.financial_status||'').toLowerCase():'';
+  var main=received?paiseMoney(received)+' received':(checkout==='paid'?'Shopify paid':'Add payment');
+  var meta='';
+  if(over)meta='<span class="pover">'+paiseMoney(over)+' overpaid</span>';
+  else if(isShopify&&checkout!=='paid'&&!received)meta='No local allocation recorded';
+  else if(due!==null)meta='<span class="pdue">'+paiseMoney(due)+
+    (isShopify?' unallocated':' due')+'</span>';
+  else meta='Order total not set';
+  if(accounts.length)meta+=' · '+esc(accounts.join(' + '));
+  else if(checkout==='paid')meta+=' · account not assigned';
+  return '<button type="button" class="paycell'+(!accounts.length&&checkout==='paid'?' unassigned':'')+
+    '" data-pay="'+o.id+'"><span class="pamt">'+main+'</span><span class="pmeta">'+meta+'</span>'+
+    (isShopify&&checkout?'<span class="pay-status '+paymentClass(o)+'">Shopify '+
+      esc(paymentLabel(o))+'</span>':'')+'</button>';
+}
 function editVal(id,v){$(id).value=(v===null||v===undefined)?'':v;}
+function activePhotoOrderId(){return +(editPhotoContext==='manager'?$('pm-id').value:$('e-id').value);}
+function activePhotoHost(){return $(editPhotoContext==='manager'?'pm-shots':'e-shots');}
+function releaseEditPhotoUrls(){
+  editPhotos.forEach(function(p){if(p.url){try{URL.revokeObjectURL(p.url);}catch(e){}}});
+}
+function loadEditPhotos(o,context){
+  releaseEditPhotoUrls();editPhotoContext=context;
+  var local=[];try{local=JSON.parse(o.local_photos||'[]');}catch(e){}
+  if(!Array.isArray(local))local=[];
+  editPhotoRemove=[];editPhotoAdds=[];
+  editPhotos=local.map(function(_,i){return {key:'old-'+i,index:i,rev:o.photo_rev};});
+  drawEditPhotos();
+}
 function drawEditPhotos(){
-  var id=+$('e-id').value;
-  $('e-shots').innerHTML=editPhotos.map(function(p){
-    var src=p.url||(API+'/orders/photo?id='+id+'&n='+p.index);
+  var id=activePhotoOrderId(), host=activePhotoHost();
+  host.innerHTML=editPhotos.map(function(p,i){
+    var src=p.url||(API+'/orders/photo?id='+id+'&n='+p.index+'&v='+encodeURIComponent(p.rev||'none'));
     return '<div class="shot"><img src="'+src+'" alt="Order reference">'+
+      (i===0?'<span class="primary">Reference</span>':'')+
       '<button class="rm" type="button" data-eprm="'+p.key+
       '" aria-label="Remove photo">&times;</button></div>';
   }).join('');
-  $('e-shots').querySelectorAll('[data-eprm]').forEach(function(b){
+  host.querySelectorAll('[data-eprm]').forEach(function(b){
     b.onclick=function(){
       var key=b.dataset.eprm, p=editPhotos.filter(function(x){return x.key===key;})[0];
       if(p&&p.index!=null)editPhotoRemove.push(p.index);
       if(p&&p.path)editPhotoAdds=editPhotoAdds.filter(function(x){return x.path!==p.path;});
+      if(p&&p.url){try{URL.revokeObjectURL(p.url);}catch(e){}}
       editPhotos=editPhotos.filter(function(x){return x.key!==key;});
       drawEditPhotos();
     };
   });
 }
 async function addEditPhotos(files){
-  for(var i=0;i<files.length&&editPhotos.length<10;i++){
-    var f=files[i], fd=new FormData();fd.append('image',f,f.name||('photo-'+Date.now()+'.jpg'));
-    var r=await fetch(API+'/upload',{method:'POST',body:fd});
-    var d=await r.json();if(!r.ok)throw new Error(d.error||'Upload failed');
-    var rec={key:'new-'+Date.now()+'-'+i,path:d.path,url:URL.createObjectURL(f)};
-    editPhotoAdds.push(rec);editPhotos.push(rec);drawEditPhotos();
+  editUploadsPending++;
+  try{
+    for(var i=0;i<files.length&&editPhotos.length<10;i++){
+      var f=files[i], fd=new FormData();fd.append('image',f,f.name||('photo-'+Date.now()+'.jpg'));
+      var r=await fetch(API+'/upload',{method:'POST',body:fd});
+      var d=await r.json();if(!r.ok)throw new Error(d.error||'Upload failed');
+      var rec={key:'new-'+Date.now()+'-'+i,path:d.path,url:URL.createObjectURL(f)};
+      editPhotoAdds.push(rec);editPhotos.push(rec);drawEditPhotos();
+    }
+  }finally{
+    editUploadsPending--;
   }
 }
 function openOrderEdit(id){
@@ -878,51 +987,173 @@ function openOrderEdit(id){
   editVal('e-dial-colour',o.dial_colour);editVal('e-dial-style',o.dial_style);
   editVal('e-case-colour',o.case_colour);editVal('e-movement',o.movement);
   editVal('e-size',o.watch_size);$('e-stock').checked=!!Number(o.is_stock);
-  var local=[];try{local=JSON.parse(o.local_photos||'[]');}catch(e){}
-  editPhotoRemove=[];editPhotoAdds=[];
-  editPhotos=local.map(function(_,i){return {key:'old-'+i,index:i};});
-  drawEditPhotos();
+  loadEditPhotos(o,'order');
   $('order-edit').hidden=false;
   document.body.style.overflow='hidden';
   setTimeout(function(){$('e-cust').focus();},0);
 }
 function closeOrderEdit(){
+  if(editUploadsPending){toast('Wait for the image upload to finish');return;}
   $('order-edit').hidden=true;
   document.body.style.overflow='';
+  releaseEditPhotoUrls();editPhotos=[];
+}
+function openPhotoManager(id){
+  var o=orderRows[id];if(!o)return;
+  $('pm-id').value=o.id;$('pm-title').textContent='Images · order #'+orderNo(o);
+  loadEditPhotos(o,'manager');
+  $('photo-edit').hidden=false;document.body.style.overflow='hidden';
+}
+function closePhotoManager(){
+  if(editUploadsPending){toast('Wait for the image upload to finish');return;}
+  $('photo-edit').hidden=true;document.body.style.overflow='';
+  releaseEditPhotoUrls();editPhotos=[];
+}
+async function savePhotoManager(){
+  if(editUploadsPending){toast('An image is still uploading — one moment');return;}
+  var id=+$('pm-id').value, btn=$('pm-save');
+  if(!editPhotoRemove.length&&!editPhotoAdds.length){closePhotoManager();return;}
+  btn.disabled=true;btn.textContent='Saving…';
+  try{
+    await jpost('/orders/photos/update',{id:id,remove:editPhotoRemove,
+      photo_paths:editPhotoAdds.map(function(x){return x.path;}),
+      expected_revision:(orderRows[id]&&orderRows[id].photo_rev)||''});
+    closePhotoManager();await loadOrders();toast('Images updated');
+  }catch(e){
+    if(e.data&&Object.prototype.hasOwnProperty.call(e.data,'photo_rev')){
+      closePhotoManager();await loadOrders();
+    }
+    toast(e.message);
+  }
+  btn.disabled=false;btn.textContent='Save images';
+}
+function orderEditPatch(id){
+  var o=orderRows[id]||{}, body={id:id};
+  [
+    ['customer_name','e-cust'],['customer_phone','e-phone'],['customer_email','e-email'],
+    ['address','e-address'],['city','e-city'],['state','e-state'],['pincode','e-pin'],
+    ['source','e-source'],['product','e-product'],['notes','e-notes'],
+    ['case_style','e-case'],['dial_colour','e-dial-colour'],['dial_style','e-dial-style'],
+    ['case_colour','e-case-colour'],['movement','e-movement'],['watch_size','e-size']
+  ].forEach(function(pair){
+    var value=$(pair[1]).value.trim();
+    if(value!==String(o[pair[0]]==null?'':o[pair[0]]).trim())body[pair[0]]=value;
+  });
+  var qty=Number($('e-qty').value||1);
+  if(qty!==Number(o.quantity||1))body.quantity=$('e-qty').value;
+  var priceRaw=$('e-price').value.trim(), price=priceRaw===''?null:Number(priceRaw);
+  var oldPrice=(o.price_inr===null||o.price_inr===undefined||o.price_inr==='')?null:Number(o.price_inr);
+  if(price!==oldPrice)body.price_inr=priceRaw;
+  var stock=$('e-stock').checked;
+  if(stock!==!!Number(o.is_stock))body.is_stock=stock;
+  return body;
 }
 async function saveOrderEdit(){
   var id=+$('e-id').value, btn=$('e-save');
-  var body={
-    id:id,customer_name:$('e-cust').value,customer_phone:$('e-phone').value,
-    customer_email:$('e-email').value,address:$('e-address').value,
-    city:$('e-city').value,state:$('e-state').value,pincode:$('e-pin').value,
-    source:$('e-source').value,product:$('e-product').value,
-    quantity:$('e-qty').value,price_inr:$('e-price').value,notes:$('e-notes').value,
-    case_style:$('e-case').value,dial_colour:$('e-dial-colour').value,
-    dial_style:$('e-dial-style').value,case_colour:$('e-case-colour').value,
-    movement:$('e-movement').value,watch_size:$('e-size').value,
-    is_stock:$('e-stock').checked
-  };
-  if(!body.product.trim()){toast('A product is needed');$('e-product').focus();return;}
+  if(editUploadsPending){toast('An image is still uploading — one moment');return;}
+  if(!$('e-product').value.trim()){toast('A product is needed');$('e-product').focus();return;}
+  var body=orderEditPatch(id);
   btn.disabled=true;btn.textContent='Saving…';
   try{
-    var d=await jpost('/orders/update',body);
+    var d=Object.keys(body).length>1?await jpost('/orders/update',body):{warnings:[]};
     if(editPhotoRemove.length||editPhotoAdds.length){
       await jpost('/orders/photos/update',{id:id,remove:editPhotoRemove,
-        photo_paths:editPhotoAdds.map(function(x){return x.path;})});
+        photo_paths:editPhotoAdds.map(function(x){return x.path;}),
+        expected_revision:(orderRows[id]&&orderRows[id].photo_rev)||''});
     }
     closeOrderEdit();
     await loadOrders();
     loaded.customers=false;loaded.selling=false;
     toast('Order updated'+((d.warnings||[]).length?' · '+d.warnings[0]:''));
-  }catch(e){toast(e.message);}
+  }catch(e){
+    if(e.data&&Object.prototype.hasOwnProperty.call(e.data,'photo_rev')){
+      closeOrderEdit();await loadOrders();
+    }
+    toast(e.message);
+  }
   btn.disabled=false;btn.textContent='Save changes';
 }
+function paymentInputPaise(id){
+  var raw=$(id).value.trim();if(!raw)return 0;
+  var n=Number(raw);return Number.isFinite(n)&&n>=0?Math.round(n*100):NaN;
+}
+function paymentValue(paise){
+  if(!paise)return '';
+  return (Number(paise)/100).toFixed(2).replace(/\.00$/,'');
+}
+function syncPaymentPreview(){
+  var total=Number($('p-total').dataset.paise||0), hasTotal=$('p-total').dataset.known==='1';
+  var advance=paymentInputPaise('p-advance'), balance=paymentInputPaise('p-balance');
+  var received=(Number.isFinite(advance)?advance:0)+(Number.isFinite(balance)?balance:0);
+  $('p-received').textContent=paiseMoney(received);
+  var due=hasTotal?Math.max(total-received,0):0, over=hasTotal?Math.max(received-total,0):0;
+  $('p-due-row').hidden=!hasTotal||!!over;
+  $('p-over-row').hidden=!over;
+  $('p-due').textContent=paiseMoney(due);
+  $('p-over').textContent=paiseMoney(over);
+}
+function openPayment(id){
+  if(!CAN_MANAGE_PAYMENTS){toast('Admin access is required');return;}
+  var o=orderRows[id];if(!o)return;
+  /* Capture exactly the version used to populate these inputs. A list fetch
+     that began just before the modal opened may finish while staff are
+     typing; taking the token from orderRows again at Save would then attach
+     the newer token to older form values and defeat the server-side lock. */
+  paymentOpenRevision=o.customer_payment_rev||'';
+  var advance=receiptOf(o,'advance'), balance=receiptOf(o,'balance'), total=orderTotalPaise(o);
+  $('p-id').value=o.id;$('p-title').textContent='Payment · order #'+orderNo(o);
+  $('p-advance').value=paymentValue(advance.amount_paise);
+  $('p-advance-account').value=advance.account||'';
+  $('p-balance').value=paymentValue(balance.amount_paise);
+  $('p-balance-account').value=balance.account||'';
+  $('p-total').dataset.known=total===null?'0':'1';
+  $('p-total').dataset.paise=total===null?'0':String(total);
+  $('p-total').textContent=total===null?'Not set':paiseMoney(total);
+  var fs=String(o.financial_status||'').trim(), isShopify=!!o.shopify_order_id;
+  $('p-due-label').textContent=isShopify?'Unallocated to account':'Balance due';
+  $('p-shopify').textContent=isShopify&&fs
+    ?'Shopify checkout status: '+paymentLabel(o)+'. Account allocation is recorded separately here.'
+    :'No Shopify checkout status. This is the local customer receipt record.';
+  syncPaymentPreview();
+  $('payment-edit').hidden=false;document.body.style.overflow='hidden';
+  setTimeout(function(){$('p-advance').focus();},0);
+}
+function closePayment(){
+  $('payment-edit').hidden=true;document.body.style.overflow='';paymentOpenRevision='';
+}
+async function savePayment(){
+  var id=+$('p-id').value, advance=paymentInputPaise('p-advance');
+  var balance=paymentInputPaise('p-balance'), btn=$('p-save');
+  if(!Number.isFinite(advance)||!Number.isFinite(balance)){
+    toast('Enter valid payment amounts');return;
+  }
+  if(advance&&!$('p-advance-account').value){toast('Select the advance account');return;}
+  if(balance&&!$('p-balance-account').value){toast('Select the remaining payment account');return;}
+  btn.disabled=true;btn.textContent='Saving…';
+  try{
+    await jpost('/orders/customer-payment',{
+      id:id,advance_amount:$('p-advance').value||0,
+      advance_account:$('p-advance-account').value,
+      balance_amount:$('p-balance').value||0,
+      balance_account:$('p-balance-account').value,
+      expected_revision:paymentOpenRevision
+    });
+    closePayment();await loadOrders();toast('Payment updated');
+  }catch(e){
+    if(e.data&&e.data.payment_rev){closePayment();await loadOrders();}
+    toast(e.message);
+  }
+  btn.disabled=false;btn.textContent='Save payment';
+}
 function stClass(s){return String(s||'').replace(/[^a-z]/gi,'');}
+var ordersLoading=false, ordersReloadQueued=false;
 async function loadOrders(){
+  if(ordersLoading){ordersReloadQueued=true;return;}
+  ordersLoading=true;
   try{
     var d=await api('/orders/list');
     if(d.sheet_url){var a=$('sheet-link');a.href=d.sheet_url;a.style.display='';}
+    CAN_MANAGE_PAYMENTS=!!d.can_manage_payments;
     var rows=d.orders||[];
     orderRows={};rows.forEach(function(o){orderRows[o.id]=o;});
     if(!rows.length){$('list').innerHTML='<div class="empty">No orders yet — the first one you save shows up here.</div>';return;}
@@ -935,6 +1166,7 @@ async function loadOrders(){
         var cancelled=st==='cancelled', effectiveSent=sent&&!cancelled;
         var canRemove=effectiveSent&&st==='pending'&&!o.shipment_id&&!o.bill_id;
         var editLocked=isEditLocked(o);   // same paid-unless-website rule the server applies to both edit and delete
+        var receiptLocked=hasCustomerReceipts(o)&&!o.shopify_order_id;
         return '<tr'+(o.shopify_order_id?' data-shopify="1"':'')+'>'+
           '<td data-l="Order" class="o-num">#'+orderNo(o)+
             (o.ref_code?'<div class="o-sub">was '+esc(o.ref_code)+'</div>':'')+'</td>'+
@@ -947,8 +1179,7 @@ async function loadOrders(){
           '<td data-l="Photos">'+photoCell(o)+'</td>'+
           '<td data-l="Qty" class="o-num">'+(o.quantity||1)+'</td>'+
           '<td data-l="Price" class="o-num">'+esc(money(o.price_inr))+'</td>'+
-          '<td data-l="Payment"><span class="pill '+paymentClass(o)+'">'+
-            esc(paymentLabel(o))+'</span></td>'+
+          '<td data-l="Payment">'+paymentCell(o)+'</td>'+
           '<td data-l="Supplier"><button class="btn sm supplier-toggle'+(effectiveSent?' sent':'')+
             '" data-supplier="'+o.id+'" data-on="'+(sent?'1':'0')+'"'+
             (cancelled?' disabled title="Cancelled orders stay out of the supplier queue"':
@@ -965,11 +1196,12 @@ async function loadOrders(){
             (o.shopify_name?'<div class="o-sub">'+esc(o.shopify_name)+'</div>':'')+'</td>'+
           '<td data-l="Logged" class="o-when">'+esc(when(o.received_at))+'</td>'+
           '<td data-l="Actions"><div class="rowacts">'+
+            '<button class="rowedit" data-photo-manage="'+o.id+'" title="Manage order images">Images</button>'+
             '<button class="rowedit" data-edit="'+o.id+'"'+
               (editLocked?' disabled title="Paid orders are locked"':' title="Edit order #'+orderNo(o)+'"')+
               '>Edit</button>'+
             '<button class="rowdel" data-del="'+o.id+'" data-no="'+orderNo(o)+'"'+
-              (editLocked?' disabled title="Paid orders cannot be deleted" aria-label="Paid orders cannot be deleted"':
+              (editLocked||receiptLocked?' disabled title="Orders with recorded payment cannot be deleted" aria-label="Orders with recorded payment cannot be deleted"':
                 (o.shopify_order_id
                   ?' title="Remove order #'+orderNo(o)+'" aria-label="Remove order '+orderNo(o)+'"'
                   :' title="Delete order #'+orderNo(o)+'" aria-label="Delete order '+orderNo(o)+'"'))+
@@ -977,7 +1209,13 @@ async function loadOrders(){
         '</tr>';
       }).join('')+'</tbody></table>';
     $('list').querySelectorAll('.rowedit').forEach(function(b){
-      b.onclick=function(){if(!b.disabled)openOrderEdit(+b.dataset.edit);};
+      if(b.dataset.edit)b.onclick=function(){if(!b.disabled)openOrderEdit(+b.dataset.edit);};
+    });
+    $('list').querySelectorAll('[data-photo-manage]').forEach(function(b){
+      b.onclick=function(){openPhotoManager(+b.dataset.photoManage);};
+    });
+    $('list').querySelectorAll('[data-pay]').forEach(function(b){
+      b.onclick=function(){openPayment(+b.dataset.pay);};
     });
     $('list').querySelectorAll('.rowdel').forEach(function(b){
       b.onclick=async function(){
@@ -1021,6 +1259,7 @@ async function loadOrders(){
           sel.className='pill-select '+stClass(next);
           sel.dataset.was=next;
           toast('Order → '+stLabel(next));
+          await loadOrders();
         }catch(e){
           // A committed build refuses to move backward by default — that's
           // the point. resettable:true means nothing financial (shipment,
@@ -1035,6 +1274,7 @@ async function loadOrders(){
               sel.className='pill-select '+stClass(next);
               sel.dataset.was=next;
               toast('Order reset → '+stLabel(next));
+              await loadOrders();
               sel.disabled=false;
               return;
             }catch(e2){sel.value=was;toast(e2.message);sel.disabled=false;return;}
@@ -1057,6 +1297,10 @@ async function loadOrders(){
       };
     });
   }catch(e){$('list').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
+  finally{
+    ordersLoading=false;
+    if(ordersReloadQueued){ordersReloadQueued=false;loadOrders();}
+  }
 }
 
 /* ---------------- customers ---------------- */
@@ -1330,12 +1574,37 @@ $('e-close').onclick=closeOrderEdit;
 $('e-save').onclick=saveOrderEdit;
 $('e-add-photo').onclick=function(){$('e-photo-input').click();};
 $('e-photo-input').onchange=function(){
+  editPhotoContext='order';
   addEditPhotos(Array.from(this.files||[])).catch(function(e){toast(e.message);});
   this.value='';
 };
 $('order-edit').querySelector('.omask').onclick=closeOrderEdit;
+$('pm-cancel').onclick=closePhotoManager;
+$('pm-close').onclick=closePhotoManager;
+$('pm-save').onclick=savePhotoManager;
+$('pm-add-photo').onclick=function(){$('pm-photo-input').click();};
+$('pm-photo-input').onchange=function(){
+  editPhotoContext='manager';
+  addEditPhotos(Array.from(this.files||[])).catch(function(e){toast(e.message);});
+  this.value='';
+};
+$('photo-edit').querySelector('.omask').onclick=closePhotoManager;
+$('p-cancel').onclick=closePayment;
+$('p-close').onclick=closePayment;
+$('p-save').onclick=savePayment;
+$('payment-edit').querySelector('.omask').onclick=closePayment;
+['p-advance','p-balance'].forEach(function(id){$(id).oninput=syncPaymentPreview;});
+$('p-fill').onclick=function(){
+  var total=Number($('p-total').dataset.paise||0);
+  if($('p-total').dataset.known!=='1'){toast('Set the order price first');return;}
+  var advance=paymentInputPaise('p-advance');if(!Number.isFinite(advance))advance=0;
+  $('p-balance').value=paymentValue(Math.max(total-advance,0));
+  syncPaymentPreview();$('p-balance-account').focus();
+};
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape'&&!$('order-edit').hidden)closeOrderEdit();
+  if(e.key==='Escape'&&!$('photo-edit').hidden)closePhotoManager();
+  if(e.key==='Escape'&&!$('payment-edit').hidden)closePayment();
 });
 (async function(){
   drawShots();drawAttrs();
@@ -1354,6 +1623,14 @@ document.addEventListener('keydown',function(e){
     PRODUCTS=pd.products||[];
   }catch(e){}
 })();
+/* Keep supplier status and image changes visible without a manual reload,
+   but never rebuild the table underneath an open editor. */
+function refreshOrdersIfVisible(){
+  if(!document.hidden&&$('pane-orders').classList.contains('on')&&
+      $('order-edit').hidden&&$('photo-edit').hidden&&$('payment-edit').hidden)loadOrders();
+}
+document.addEventListener('visibilitychange',refreshOrdersIfVisible);
+setInterval(refreshOrdersIfVisible,30000);
 """
 
 
@@ -1565,6 +1842,81 @@ def build():
     <div class="oedit-actions">
       <button class="btn" id="e-cancel">Cancel</button>
       <button class="btn primary" id="e-save">Save changes</button>
+    </div>
+  </section>
+</div>
+
+<div id="photo-edit" class="omodal" hidden>
+  <div class="omask"></div>
+  <section class="odialog pay-dialog" role="dialog" aria-modal="true" aria-labelledby="pm-title">
+    <div class="oedit-head">
+      <div><h2 id="pm-title">Order images</h2>
+        <p>The first image is the supplier reference. Changes appear in the supplier queue automatically.</p></div>
+      <span class="sp"></span>
+      <button class="oedit-close" id="pm-close" aria-label="Close">&times;</button>
+    </div>
+    <input type="hidden" id="pm-id">
+    <div class="of-field"><label>Reference images</label>
+      <div class="shots" id="pm-shots"></div>
+      <button class="btn" type="button" id="pm-add-photo">+ Add image</button>
+      <input id="pm-photo-input" type="file" accept="image/jpeg,image/png,image/webp"
+        aria-label="Add reference images" multiple>
+    </div>
+    <div class="oedit-actions">
+      <button class="btn" id="pm-cancel">Cancel</button>
+      <button class="btn primary" id="pm-save">Save images</button>
+    </div>
+  </section>
+</div>
+
+<div id="payment-edit" class="omodal" hidden>
+  <div class="omask"></div>
+  <section class="odialog pay-dialog" role="dialog" aria-modal="true" aria-labelledby="p-title">
+    <div class="oedit-head">
+      <div><h2 id="p-title">Payment</h2>
+        <p>Record customer money received. Supplier bills remain separate.</p></div>
+      <span class="sp"></span>
+      <button class="oedit-close" id="p-close" aria-label="Close">&times;</button>
+    </div>
+    <input type="hidden" id="p-id">
+    <div class="pay-order-total"><span>Order total (price &times; quantity)</span>
+      <b id="p-total" data-known="0" data-paise="0">Not set</b></div>
+    <div class="pay-stage">
+      <div class="pay-stage-head">Advance received</div>
+      <div class="of-row">
+        <div class="of-field"><label for="p-advance">Amount</label>
+          <div class="price-wrap"><span>&#8377;</span>
+            <input id="p-advance" class="pin" type="number" min="0" step="0.01"></div></div>
+        <div class="of-field"><label for="p-advance-account">Received in account</label>
+          <select id="p-advance-account" class="pin">
+            <option value="">Select account</option><option>SM</option><option>MK</option>
+            <option>TL</option><option>TM</option>
+          </select></div>
+      </div>
+    </div>
+    <div class="pay-stage">
+      <div class="pay-stage-head">Remaining payment received</div>
+      <div class="of-row">
+        <div class="of-field"><label for="p-balance">Amount</label>
+          <div class="price-wrap"><span>&#8377;</span>
+            <input id="p-balance" class="pin" type="number" min="0" step="0.01"></div></div>
+        <div class="of-field"><label for="p-balance-account">Received in account</label>
+          <select id="p-balance-account" class="pin">
+            <option value="">Select account</option><option>SM</option><option>MK</option>
+            <option>TL</option><option>TM</option>
+          </select></div>
+      </div>
+      <button type="button" class="pay-fill" id="p-fill">Fill remaining amount</button>
+    </div>
+    <div class="pay-totals" aria-live="polite">
+      <div><span>Total received</span><b id="p-received">&#8377;0</b></div>
+      <div class="due" id="p-due-row"><span id="p-due-label">Balance due</span><b id="p-due">&#8377;0</b></div>
+      <div class="over" id="p-over-row" hidden><span>Overpaid</span><b id="p-over">&#8377;0</b></div>
+    </div>
+    <p class="pay-shopify" id="p-shopify"></p>
+    <div class="oedit-actions">
+      <button class="btn" id="p-cancel">Cancel</button>
+      <button class="btn primary" id="p-save">Save payment</button>
     </div>
   </section>
 </div>

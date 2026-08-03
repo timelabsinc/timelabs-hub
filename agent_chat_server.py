@@ -29,6 +29,7 @@ import time
 import urllib.parse
 import urllib.error
 import urllib.request
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from markdown_render import md_to_html
 from order_metrics import SALE_ORDER_PREDICATE, SALE_ORDER_PREDICATE_O
 from shopify_oauth import canonical_hmac_message
@@ -444,6 +445,38 @@ with UPLOAD_LOCK:
     _cleanup_uploads_locked()
 
 
+def _order_photo_revision(names):
+    """A non-secret cache key that changes whenever an order's photo list does.
+
+    Photo endpoints deliberately address an image by list index rather than by
+    its private filename.  That keeps filenames out of the supplier response,
+    but it also means ``n=0`` can point at a different file after an edit.  The
+    revision gives both UIs a fresh URL whenever that mapping changes.
+    """
+    if not isinstance(names, list):
+        names = []
+    safe = [os.path.basename(n) for n in names if isinstance(n, str)]
+    if not safe:
+        return ""
+    packed = json.dumps(safe, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(packed.encode()).hexdigest()[:16]
+
+
+def _customer_payment_revision(receipts, price_inr=None, quantity=1):
+    """Optimistic-lock key for receipts and the total they are allocated to."""
+    packed = [{
+        "price_inr": None if price_inr is None else str(price_inr),
+        "quantity": int(quantity or 1),
+    }]
+    for kind in ("advance", "balance"):
+        receipt = (receipts or {}).get(kind)
+        if not receipt:
+            continue
+        packed.append((kind, int(receipt["amount_paise"]), str(receipt["account"])))
+    raw = json.dumps(packed, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
 def _ensure_orders_schema():
     """orders predates the Order form (it was WhatsApp-capture only); the form
     adds the shipping fields staff paste in, plus Drive photo links."""
@@ -499,6 +532,10 @@ def _ensure_orders_schema():
             # as a mirror, which is also what lets the supplier queue show
             # them: the reference photo is the whole brief for a build.
             "local_photos": "TEXT",
+            # Once staff or the supplier changes the photo list, that local
+            # choice is authoritative.  Shopify sync must not interpret an
+            # intentionally-empty list as "missing" and re-import it later.
+            "photo_override": "INTEGER DEFAULT 0",
             # The number a person sees — "#61". Kept apart from the DB id
             # (which photos, the sheet join and Shopify links all key off, so
             # it can't be renumbered) precisely so the visible number CAN be a
@@ -508,6 +545,9 @@ def _ensure_orders_schema():
             "order_no": "INTEGER"}
     try:
         conn = sqlite3.connect(DB, timeout=5)
+        # Serialize the read-before-ALTER sequence with the independent
+        # Shopify timer, which self-ensures a subset of these columns too.
+        conn.execute("BEGIN IMMEDIATE")
         cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
         if cols:
             for name, typ in want.items():
@@ -522,6 +562,28 @@ def _ensure_orders_schema():
             conn.execute("UPDATE orders SET order_no=id WHERE order_no IS NULL")
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_order_no "
                          "ON orders(order_no)")
+            # Customer money received by us is neither Shopify's checkout
+            # status nor a supplier payment.  Store the two business stages
+            # as integer paise, with one current row per stage.  That avoids
+            # floating point drift and lets advance/final receipts land in
+            # different internal accounts without adding four loosely-bound
+            # columns to every order.
+            conn.execute("""CREATE TABLE IF NOT EXISTS order_customer_receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK(kind IN ('advance','balance')),
+                amount_paise INTEGER NOT NULL CHECK(amount_paise > 0),
+                account_code TEXT NOT NULL
+                    CHECK(account_code IN ('SM','MK','TL','TM')),
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                created_by TEXT,
+                updated_by TEXT,
+                UNIQUE(order_id, kind),
+                FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE RESTRICT
+            )""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_customer_receipts_order "
+                         "ON order_customer_receipts(order_id)")
             import order_numbers
             order_numbers.ensure(conn)
 
@@ -3261,6 +3323,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self._has_tool("orders"):
             self._json(403, {"error": "not available for this account"})
             return
+        can_manage_payments = bool(self._admin_email())
         conn = db()
         try:
             rows = conn.execute(
@@ -3272,6 +3335,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "shopify_order_id "
                 "FROM orders WHERE COALESCE(local_hidden,0)=0 "
                 "ORDER BY id DESC LIMIT 100").fetchall()
+            receipts = {}
+            receipt_totals = {}
+            if rows:
+                marks = ",".join("?" for _ in rows)
+                for receipt in conn.execute(
+                        "SELECT order_id, kind, amount_paise, account_code "
+                        f"FROM order_customer_receipts WHERE order_id IN ({marks})",
+                        tuple(r["id"] for r in rows)):
+                    receipt_totals[receipt["order_id"]] = (
+                        receipt_totals.get(receipt["order_id"], 0)
+                        + receipt["amount_paise"])
+                    if can_manage_payments:
+                        receipts.setdefault(receipt["order_id"], {})[receipt["kind"]] = {
+                            "amount_paise": receipt["amount_paise"],
+                            "account": receipt["account_code"],
+                        }
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
@@ -3279,7 +3358,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
         import google_api
         import order_stages
-        self._json(200, {"orders": [dict(r) for r in rows],
+        out = []
+        for row in rows:
+            order = dict(row)
+            try:
+                photo_names = json.loads(order.get("local_photos") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                photo_names = []
+            if not isinstance(photo_names, list):
+                photo_names = []
+            order["photo_rev"] = _order_photo_revision(photo_names)
+            order["customer_payment_recorded"] = bool(
+                receipt_totals.get(order["id"], 0))
+            if can_manage_payments:
+                payment_rows = receipts.get(order["id"], {})
+                order["customer_payments"] = payment_rows
+                order["customer_payment_rev"] = _customer_payment_revision(
+                    payment_rows, order.get("price_inr"), order.get("quantity") or 1)
+            out.append(order)
+        self._json(200, {"orders": out,
+                         "can_manage_payments": can_manage_payments,
                          "labels": order_stages.LABELS,
                          "sheet_url": google_api.sheet_url()})
 
@@ -3445,12 +3543,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                       and (before["financial_status"] or "").strip().lower() == "paid")
         build_locked = order_stages.is_committed(
             cur_status, before["supplier_visible"], before["shipment_id"], before["bill_id"])
+        has_customer_receipt = bool(conn.execute(
+            "SELECT 1 FROM order_customer_receipts WHERE order_id=? LIMIT 1",
+            (oid,)).fetchone())
+        receipt_locked = has_customer_receipt and not self._admin_email()
         build_fields = {
             "product", "case_style", "dial_colour", "dial_style", "case_colour",
             "movement", "watch_size", "quantity", "is_stock",
         }
-        blocked_fields = set(lockable) if paid_locked else (
-            build_fields if build_locked else set())
+        receipt_fields = set(lockable) - {"notes"}
+        blocked_fields = set(lockable) if paid_locked else set()
+        if not paid_locked and build_locked:
+            blocked_fields.update(build_fields)
+        if not paid_locked and receipt_locked:
+            blocked_fields.update(receipt_fields)
         blocked = [k for k in blocked_fields if k in p]
         if blocked:
             conn.close()
@@ -3458,6 +3564,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "error": (
                     "This order is marked Paid, so its receipt details are locked."
                     if paid_locked else
+                    "This order has a customer payment recorded. An admin must correct "
+                    "its receipt details; notes and tracking remain editable."
+                    if receipt_locked and any(k in receipt_fields for k in blocked) else
                     "This build is already ordered, shipped, or billed, so its build "
                     "specification and quantity are locked. Customer/contact details "
                     "and tracking can still be corrected."
@@ -3719,6 +3828,158 @@ class Handler(http.server.BaseHTTPRequestHandler):
                  actor, app="orders")
         self._json(200, {"ok": True, "id": oid, "warnings": warnings})
 
+    def _handle_order_customer_payment(self):
+        """Create, correct, or clear the two customer receipt stages.
+
+        This is intentionally admin-only.  The internal account allocation
+        does not belong in the broader Orders role, and it must never be
+        confused with either Shopify's ``financial_status`` or supplier
+        settlement events.  Zero clears a stage; positive amounts are stored
+        as integer paise with an explicit receiving account.
+        """
+        actor = self._admin_email()
+        if not actor:
+            self._json(403, {"error": "admin access is required"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+            oid = int(p.get("id"))
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+
+        def amount_paise(key):
+            raw = p.get(key)
+            if raw is None or str(raw).strip() == "":
+                return 0
+            try:
+                amount = Decimal(str(raw).strip())
+                if not amount.is_finite() or amount < 0:
+                    raise ValueError("Payment amounts must be non-negative numbers.")
+                rounded = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            except InvalidOperation:
+                raise ValueError("Enter a valid payment amount.")
+            if amount != rounded:
+                raise ValueError("Payment amounts can have at most two decimal places.")
+            if rounded > Decimal("100000000"):
+                raise ValueError("Payment amount is too large.")
+            return int(rounded * 100)
+
+        try:
+            amounts = {
+                "advance": amount_paise("advance_amount"),
+                "balance": amount_paise("balance_amount"),
+            }
+        except ValueError as e:
+            self._json(400, {"error": str(e)})
+            return
+        allowed_accounts = {"SM", "MK", "TL", "TM"}
+        accounts = {
+            "advance": str(p.get("advance_account") or "").strip().upper(),
+            "balance": str(p.get("balance_account") or "").strip().upper(),
+        }
+        expected_revision = str(p.get("expected_revision") or "").strip()
+        for kind in ("advance", "balance"):
+            if not amounts[kind]:
+                accounts[kind] = ""
+            elif accounts[kind] not in allowed_accounts:
+                label = "advance" if kind == "advance" else "remaining payment"
+                self._json(400, {
+                    "error": f"Select SM, MK, TL, or TM for the {label}."})
+                return
+
+        conn = db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            order = conn.execute(
+                "SELECT order_no, price_inr, quantity FROM orders "
+                "WHERE id=? AND COALESCE(local_hidden,0)=0", (oid,)).fetchone()
+            if not order:
+                conn.rollback()
+                conn.close()
+                self._json(404, {"error": "no such order"})
+                return
+            before = {
+                r["kind"]: {
+                    "amount_paise": r["amount_paise"],
+                    "account": r["account_code"],
+                }
+                for r in conn.execute(
+                    "SELECT kind, amount_paise, account_code "
+                    "FROM order_customer_receipts WHERE order_id=?", (oid,))
+            }
+            after = {
+                kind: {"amount_paise": amounts[kind], "account": accounts[kind]}
+                for kind in ("advance", "balance") if amounts[kind]
+            }
+            current_revision = _customer_payment_revision(
+                before, order["price_inr"], order["quantity"] or 1)
+            if expected_revision != current_revision:
+                conn.rollback()
+                conn.close()
+                self._json(409, {
+                    "error": "Payment changed in another view. Reopen it and try again.",
+                    "payment_rev": current_revision,
+                })
+                return
+            if before != after:
+                for kind in ("advance", "balance"):
+                    if amounts[kind]:
+                        conn.execute(
+                            "INSERT INTO order_customer_receipts "
+                            "(order_id, kind, amount_paise, account_code, created_by, updated_by) "
+                            "VALUES (?,?,?,?,?,?) "
+                            "ON CONFLICT(order_id, kind) DO UPDATE SET "
+                            "amount_paise=excluded.amount_paise, "
+                            "account_code=excluded.account_code, "
+                            "updated_at=datetime('now'), updated_by=excluded.updated_by",
+                            (oid, kind, amounts[kind], accounts[kind], actor, actor))
+                    else:
+                        conn.execute(
+                            "DELETE FROM order_customer_receipts "
+                            "WHERE order_id=? AND kind=?", (oid, kind))
+                def shown(kind):
+                    if not amounts[kind]:
+                        return "cleared"
+                    rupees = Decimal(amounts[kind]) / Decimal(100)
+                    return f"INR {rupees:.2f} to {accounts[kind]}"
+                order_event(
+                    conn, oid, "customer_receipt",
+                    f"advance {shown('advance')}; remaining {shown('balance')}",
+                    actor)
+            conn.commit()
+        except sqlite3.Error as e:
+            if conn.in_transaction:
+                conn.rollback()
+            conn.close()
+            print(f"[customer-payment] update failed for {oid}: {e}", flush=True)
+            self._json(500, {"error": "Payment was not changed. Try again."})
+            return
+        conn.close()
+
+        qty = order["quantity"] or 1
+        total_paise = None
+        if order["price_inr"] is not None:
+            total_paise = int((Decimal(str(order["price_inr"])) * qty * 100)
+                              .quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        received_paise = amounts["advance"] + amounts["balance"]
+        if before != after:
+            hub_event("order_customer_payment",
+                      f"#{order['order_no'] or oid} customer receipt updated",
+                      actor, app="orders")
+        self._json(200, {
+            "ok": True, "id": oid,
+            "received_paise": received_paise,
+            "total_paise": total_paise,
+            "due_paise": (max(total_paise - received_paise, 0)
+                          if total_paise is not None else None),
+            "overpaid_paise": (max(received_paise - total_paise, 0)
+                               if total_paise is not None else 0),
+            "payment_rev": _customer_payment_revision(
+                after, order["price_inr"], order["quantity"] or 1),
+        })
+
     def _handle_orders_bulk(self):
         """One build per screenshot. Send a batch of watch photos and each
         becomes its own order in the unified log — no customer yet, that gets
@@ -3955,7 +4216,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # website order can never let an actually-committed one slip through.)
         # Genuine staff actions (edited, note, cost, billed, tracking...)
         # still count for every order type.
-        ignored_kinds = ("shopify_sync", "shopify_conflict") if is_website else ()
+        ignored_kinds = (
+            "shopify_sync", "shopify_conflict", "customer_receipt"
+        ) if is_website else ()
         marks = ",".join("?" for _ in ignored_kinds)
         extra_events = conn.execute(
             f"SELECT COUNT(*) FROM order_events WHERE order_id=? AND kind!='created'"
@@ -3963,6 +4226,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             (oid, *ignored_kinds)).fetchone()[0]
         bill_links = conn.execute(
             "SELECT COUNT(*) FROM supplier_bill_items WHERE order_id=?", (oid,)).fetchone()[0]
+        receipt_links = conn.execute(
+            "SELECT COUNT(*) FROM order_customer_receipts WHERE order_id=?",
+            (oid,)).fetchone()[0]
+        if receipt_links and not is_website:
+            conn.close()
+            self._json(409, {
+                "error": "This order has customer payments recorded and is a permanent "
+                         "financial record. Cancel it instead."})
+            return
         if extra_events or bill_links:
             conn.close()
             self._json(409, {
@@ -4158,6 +4430,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             names = json.loads(row["local_photos"] or "[]")
         except (json.JSONDecodeError, TypeError):
             return []
+        if not isinstance(names, list):
+            return []
         return [n for n in names if isinstance(n, str)]
 
     def _serve_order_photo(self, query, supplier_only):
@@ -4184,6 +4458,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not os.path.isfile(path):
             self._json(404, {"error": "photo missing"})
             return
+        revision = _order_photo_revision(names)
+        etag = f'"order-photo-{oid}-{idx}-{revision}"'
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "private, no-cache, max-age=0, must-revalidate")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            return
         ext = os.path.splitext(path)[1].lower()
         ctype = {".png": "image/png", ".webp": "image/webp"}.get(ext, "image/jpeg")
         try:
@@ -4195,8 +4478,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        # Private: it's behind a role check, so no shared cache may keep it.
-        self.send_header("Cache-Control", "private, max-age=3600")
+        # Index-based URLs used to stay fresh for an hour even when removing
+        # photo zero shifted a different file into zero.  Revalidate every
+        # use; the filename-list ETag makes unchanged redraws a cheap 304.
+        # The UIs also append the revision, immediately bypassing any response
+        # cached under the old pre-fix URL.
+        self.send_header("Cache-Control", "private, no-cache, max-age=0, must-revalidate")
+        self.send_header("ETag", etag)
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(data)
 
@@ -4239,6 +4528,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not isinstance(remove, list):
             remove = []
         remove = {int(i) for i in remove if str(i).isdigit()}
+        expected_revision = str(p.get("expected_revision") or "").strip()
         actor = self._order_user()
         validated = []
         for candidate in incoming:
@@ -4263,13 +4553,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json(404, {"error": "no such order"})
                 return
             try:
+                stored_photos = json.loads(row["local_photos"] or "[]")
+                if not isinstance(stored_photos, list):
+                    stored_photos = []
                 current = [
                     os.path.basename(n)
-                    for n in json.loads(row["local_photos"] or "[]")
+                    for n in stored_photos
                     if isinstance(n, str)
                 ]
             except (json.JSONDecodeError, TypeError):
                 current = []
+            current_revision = _order_photo_revision(current)
+            # A removal is index-addressed.  Never apply an index selected
+            # against an older list: another browser may have added/removed a
+            # photo since the thumbnails were drawn, making that index point
+            # at the wrong image.  Updated clients send this for additions as
+            # well, so simultaneous photo managers get an explicit refresh.
+            if (remove and expected_revision != current_revision) or (
+                    expected_revision and expected_revision != current_revision):
+                conn.rollback()
+                conn.close()
+                self._json(409, {
+                    "error": "Images changed in another view. Refresh and try again.",
+                    "photo_rev": current_revision,
+                })
+                return
             os.makedirs(order_dir, mode=0o750, exist_ok=True)
             kept = []
             for idx, name in enumerate(current):
@@ -4302,7 +4610,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             _fsync_directory(order_dir)
             _fsync_directory(ORDER_PHOTOS)
             conn.execute(
-                "UPDATE orders SET local_photos=?, has_image=? WHERE id=?",
+                "UPDATE orders SET local_photos=?, has_image=?, photo_override=1 "
+                "WHERE id=?",
                 (json.dumps(kept), 1 if kept else 0, oid))
             order_event(
                 conn, oid, "photos",
@@ -4342,7 +4651,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     flush=True)
         for path in validated:
             _forget_upload(path, remove_data=True)
-        self._json(200, {"ok": True, "id": oid, "photos": len(kept)})
+        self._json(200, {"ok": True, "id": oid, "photos": len(kept),
+                         "photo_rev": _order_photo_revision(kept)})
 
     # --- Supplier build queue: what to build, never who for -----------------
     def _supplier_ok(self):
@@ -4417,10 +4727,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         for r in rows:
             d = dict(r)
             try:
-                n = len(json.loads(d.pop("local_photos") or "[]"))
+                photo_names = json.loads(d.pop("local_photos") or "[]")
             except (json.JSONDecodeError, TypeError):
-                n = 0
-            d["photos"] = n
+                photo_names = []
+            if not isinstance(photo_names, list):
+                photo_names = []
+            d["photos"] = len(photo_names)
+            d["photo_rev"] = _order_photo_revision(photo_names)
             d["timeline"] = events.get(d["id"], [])
             # Once the batch carrying this build has been acknowledged, its
             # cost is settled history and the UI shows it read-only.
@@ -7538,6 +7851,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_orders_parse()
         elif path == "/orders/update":
             self._handle_orders_update()
+        elif path == "/orders/customer-payment":
+            self._handle_order_customer_payment()
         elif path == "/orders/photos/update":
             self._handle_order_photos_update()
         elif path == "/orders/items/relabel":
