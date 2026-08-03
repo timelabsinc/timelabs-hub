@@ -30,6 +30,7 @@ POSTS = [
     {"date": "7 May 2026", "kind": "Carousel", "title": "Rosegold Rainbow", "views": 872, "reach": 406, "interactions": 18, "saves": 2, "shares": 1, "comments": 1, "likes": 14, "url": "https://www.instagram.com/p/DYDWiqGDM92/"},
 ]
 COMPETITORS = [
+    ("imodwatches / Time Slayer", "Instagram blocked; public seller footprint", "Singapore marketplace seller focused on Seiko-style/mod and homage pieces. Visible listings use VK63 quartz, sapphire, 40mm cases and custom-build language; prices observed around S$205–250. Marketplace is the observable acquisition channel.", "https://www.carousell.sg/p/mod-seiko-daytona-with-arabic-numeral-1450020261/"),
     ("Bangalore Watch Company", "@bangalorewatchco", "Modern India storyworlds: space, aviation, cricket; premium mechanical ownership narrative.", "https://www.bangalorewatchco.in/pages/about-us"),
     ("Jaipur Watch Company", "@jaipurwatchcompany", "Heritage, coins, bespoke craftsmanship and founder-led storytelling; materially larger public footprint.", "https://jaipur.watch/pages/the-brand"),
     ("Ajwain Watches", "@ajwainwatches", "India-first cultural/design drops and collector conversation; monitor trust and provenance language.", "https://www.instagram.com/ajwainwatches/"),
