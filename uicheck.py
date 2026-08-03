@@ -415,6 +415,18 @@ def home_action_contract(page="/var/www/ops/index.html"):
     return issues
 
 
+def drop_share_contract(page="/var/www/drop/index.html"):
+    """Externally reachable Drop links must stay visible and revocable."""
+    html = open(page, encoding="utf-8", errors="replace").read()
+    issues = []
+    required = ('id="sharesBtn"', 'id="sharesheet"', "api('/shares')",
+                'data-revoke', 'function sharesClose()')
+    for marker in required:
+        if marker not in html:
+            issues.append(f"missing {marker}")
+    return issues
+
+
 def main():
     pages = (sorted(glob.glob("/var/www/ops/*.html"))
              + ["/var/www/drop/index.html", "/var/www/intake/index.html"])
@@ -488,7 +500,15 @@ def main():
     print("  ✓ operational exceptions lead to the owning tool" if not home_actions
           else f"  {len(home_actions)} broken Home action rule(s)")
 
-    return 1 if (total or missing or containment or drop_chrome or role_nav or touch_targets or home_actions) else 0
+    print("\n═══ DROP SHARES STAY CONTROLLABLE ═══")
+    drop_shares = drop_share_contract()
+    for issue in drop_shares:
+        print(f"  ✗ drop/index.html        {issue}")
+    print("  ✓ active links can be reviewed and revoked" if not drop_shares
+          else f"  {len(drop_shares)} broken Drop sharing rule(s)")
+
+    return 1 if (total or missing or containment or drop_chrome or role_nav or touch_targets
+                 or home_actions or drop_shares) else 0
 
 
 if __name__ == "__main__":

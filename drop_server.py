@@ -310,6 +310,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/list":
             self._list(params.get("path", ""))
+        elif path == "/shares":
+            self._shares_list()
         elif path == "/share/info":
             self._share_info(params.get("path", ""), params.get("name", ""))
         elif path == "/search":
@@ -1107,6 +1109,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     out["token"] = tok          # back-compat: prefer the full link
                     out["url"] = entry["url"]
         self._json(200, out)
+
+    def _shares_list(self):
+        """Return every active link so Drop can make public access visible.
+
+        Share files remain the authority. Missing targets are included instead
+        of silently disappearing, because the useful action for a stale link
+        is to revoke it. The response intentionally omits creator identities.
+        """
+        shares = []
+        for tok, meta in self._share_all().items():
+            rel = str(meta.get("rel") or "").strip("/")
+            shares.append({
+                "token": tok,
+                "url": f"{PUBLIC_BASE}/s/{tok}",
+                "rel": rel,
+                "name": os.path.basename(rel) or "Drop",
+                "mode": "view" if meta.get("mode") == "view" else "full",
+                "is_dir": bool(meta.get("is_dir")),
+                "created": int(meta.get("created") or 0),
+                "exists": self._share_target(meta) is not None,
+            })
+        shares.sort(key=lambda item: (-item["created"], item["rel"].lower()))
+        self._json(200, {"shares": shares})
 
     # ------------------------------------------------------------- search
     # Text first (instant, free), AI second. The AI pass describes each photo
