@@ -185,7 +185,7 @@ const API='/ops/agent/api', threadEl=document.getElementById('thread'), empty=do
 const input=document.getElementById('input'), sendBtn=document.getElementById('sendBtn');
 const statusEl=document.getElementById('agentStatus'), sessionsEl=document.getElementById('sessions');
 const attachEl=document.getElementById('attachments'), composeWrap=document.querySelector('.compose-wrap');
-let busy=false, attachments=[], lastAgentCount=0, historyGen=0, sessionsGen=0, runToken=0;
+let busy=false, attachments=[], lastMessageId=0, historyGen=0, sessionsGen=0, runToken=0;
 function stored(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function remember(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 function setSessionInUrl(id, push){
@@ -266,7 +266,7 @@ async function loadSessions(){
   let cur=d.sessions.find(x=>x.id===sid);
   document.getElementById('threadTitle').textContent=cur?cur.title:'New command';
 }catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
-async function loadHistory(){let gen=++historyGen,target=sid;statusEl.textContent='Loading';try{let d=await api('/history?session='+target);if(gen!==historyGen||target!==sid)return;threadEl.innerHTML='';if(!d.messages.length){threadEl.appendChild(empty)}else d.messages.forEach(m=>bubble(m.role,m.text));lastAgentCount=d.messages.filter(m=>m.role==='agent').length
+async function loadHistory(){let gen=++historyGen,target=sid;statusEl.textContent='Loading';try{let d=await api('/history?session='+target);if(gen!==historyGen||target!==sid)return;threadEl.innerHTML='';if(!d.messages.length){threadEl.appendChild(empty)}else d.messages.forEach(m=>bubble(m.role,m.text));lastMessageId=d.messages.reduce((max,m)=>Math.max(max,Number(m.id)||0),0)
  }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';if((e.message||'').toLowerCase()==='no such conversation'){try{let created=await api('/session/new',{method:'POST'});sid=created.id;syncSession(sid);await loadSessions();await loadHistory();return}catch(e2){notice('Could not load this conversation: '+(e2.message||e.message),true)};return;}notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
 async function switchSession(id){
   runToken++;
@@ -277,17 +277,17 @@ async function switchSession(id){
   focusComposer();
 }
 async function newSession(){runToken++;try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){notice(e.message,true)}}
-async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastAgentCount;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text||(at.length+' photo'+(at.length===1?'':'s')));let token=++runToken;busy=true;sendBtn.disabled=true;statusEl.textContent='Working';let wait=thinking();
- try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name}))})});
-  if(d.reply){wait.remove();if(runSid===sid){bubble('agent',d.reply);lastAgentCount=baseline+1}}
+async function send(){let text=input.value.trim();if(busy||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastMessageId,accepted=false;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text||(at.length+' photo'+(at.length===1?'':'s')));let token=++runToken;busy=true;sendBtn.disabled=true;statusEl.textContent='Working';let wait=thinking();
+ try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name}))})});accepted=true;
+  if(d.reply){wait.remove();if(runSid===sid){bubble('agent',d.reply);lastMessageId=Math.max(lastMessageId,Number(d.message_id)||0)}}
   else if(d.pending){await poll(runSid,wait,baseline,token)}
   else{wait.remove();if(runSid===sid)notice('Hermes returned no result. Your message remains in this conversation.',true)}
   await loadSessions();loadEvents()
-}catch(e){wait.remove();if(runSid===sid&&/already working with another task|still working on the previous task|agent is busy/.test(String(e.message).toLowerCase())){notice('Hermes is already working on another request. Tap send again when it finishes.',false);input.value=text;attachments=at;renderAttachments();autosize()}else if(runSid===sid){optimistic.remove();notice('Not sent: '+e.message,true);input.value=text;attachments=at;renderAttachments();autosize()}
+ }catch(e){wait.remove();if(accepted){if(runSid===sid)notice('Your message was sent, but Command lost connection while waiting. The result will remain in this conversation.',false)}else if(runSid===sid&&/already working with another task|still working on the previous task|agent is busy/.test(String(e.message).toLowerCase())){notice('Hermes is already working on another request. Tap send again when it finishes.',false);input.value=text;attachments=at;renderAttachments();autosize()}else if(runSid===sid){optimistic.remove();notice('Not sent: '+e.message,true);input.value=text;attachments=at;renderAttachments();autosize()}
 }
  finally{busy=false;sendBtn.disabled=false;statusEl.textContent='Ready';focusComposer()}
 }
-async function poll(runSid,wait,baseline,token){for(let n=0;n<500;n++){if(token!==runToken){wait.remove();return;}await new Promise(r=>setTimeout(r,6000));if(token!==runToken){wait.remove();return;}let d=await api('/history?session='+runSid),agents=d.messages.filter(m=>m.role==='agent');if(agents.length>baseline){wait.remove();if(runSid===sid){bubble('agent',agents[agents.length-1].text);lastAgentCount=agents.length}else await loadSessions();return}}wait.remove();if(token===runToken&&runSid===sid)notice('The job is still running. Its result will remain in this conversation.',false)}
+async function poll(runSid,wait,baseline,token){for(let n=0;n<500;n++){if(token!==runToken){wait.remove();return;}await new Promise(r=>setTimeout(r,6000));if(token!==runToken){wait.remove();return;}let d=await api('/history?session='+runSid),agents=d.messages.filter(m=>m.role==='agent'&&(Number(m.id)||0)>baseline);if(agents.length){wait.remove();if(runSid===sid){let reply=agents[agents.length-1];bubble('agent',reply.text);lastMessageId=Math.max(lastMessageId,Number(reply.id)||0)}else await loadSessions();return}}wait.remove();if(token===runToken&&runSid===sid)notice('The job is still running. Its result will remain in this conversation.',false)}
 async function upload(f){if(!f)return;if(attachments.length>=8){notice('Up to 8 photos per message.',true);return}
  if(f.size>32*1024*1024){notice((f.name||'This image')+' is larger than 32 MB.',true);return}
  if(!/\.(jpe?g|png|webp)$/i.test(f.name||'')){let ext=(f.type||'').includes('png')?'.png':(f.type||'').includes('webp')?'.webp':'.jpg';f=new File([f],'pasted-'+Date.now()+ext,{type:f.type||'image/jpeg'})}

@@ -1553,10 +1553,11 @@ def db():
 
 def store(session_id, role, text):
     conn = db()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO webchat_messages (session_id, role, text) VALUES (?, ?, ?)",
         (session_id, role, text),
     )
+    message_id = cur.lastrowid
     conn.execute(
         "UPDATE webchat_sessions SET updated_at=datetime('now') WHERE id=?", (session_id,)
     )
@@ -1570,6 +1571,7 @@ def store(session_id, role, text):
             conn.execute("UPDATE webchat_sessions SET title=? WHERE id=?", (title, session_id))
     conn.commit()
     conn.close()
+    return message_id
 
 
 def ensure_session(session_id, email=None):
@@ -2031,7 +2033,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             conn = db()
             rows = conn.execute(
-                "SELECT role, text, created_at FROM webchat_messages "
+                "SELECT id, role, text, created_at FROM webchat_messages "
                 "WHERE session_id=? ORDER BY id DESC LIMIT 80",
                 (session_id,),
             ).fetchall()
@@ -7269,8 +7271,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if message.startswith("/model"):
             store(session_id, "user", message)
             reply = handle_model_command(session_id, message)
-            store(session_id, "agent", reply)
-            self._json(200, {"reply": reply})
+            message_id = store(session_id, "agent", reply)
+            self._json(200, {"reply": reply, "message_id": message_id})
             return
         if not LOCK.acquire(blocking=False):
             self._json(409, {"error": "Still working on the previous task — its result will "
@@ -7331,7 +7333,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     outcome["reply"] = f"All models failed — last error: {last_err}"
             finally:
                 try:
-                    store(session_id, "agent", outcome.get("reply") or "(no reply)")
+                    outcome["message_id"] = store(
+                        session_id, "agent", outcome.get("reply") or "(no reply)")
                 finally:
                     for image_path, _name, _ocr in images:
                         _forget_upload(image_path, remove_data=True)
@@ -7340,7 +7343,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         threading.Thread(target=worker, daemon=True).start()
         if done.wait(HERMES_SOFT_WAIT):
-            self._json(200, {"reply": outcome.get("reply")})
+            self._json(200, {
+                "reply": outcome.get("reply"),
+                "message_id": outcome.get("message_id"),
+            })
         else:
             self._json(200, {"pending": True, "reply": None})
 
