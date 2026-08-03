@@ -29,9 +29,10 @@ from shopify_scopes import REQUESTED_SCOPES, normalized_scopes
 BASE = "/root/ops-dashboard"
 STATE = os.path.join(BASE, "data", ".health-state.json")
 
-SERVICES = ["nginx", "oauth2-proxy", "ops-agent-chat", "drop",
-            "ops-dashboard-refresh"]
-TIMERS = ["ops-dashboard.timer", "ops-order-sync.timer", "labs-backup.timer"]
+SERVICES = ["nginx", "oauth2-proxy", "ops-agent-chat", "drop", "ops-auth",
+            "ops-dashboard-refresh", "fail2ban"]
+TIMERS = ["ops-dashboard.timer", "ops-order-sync.timer", "labs-backup.timer",
+          "labs-health.timer", "labs-reddit-scan.timer"]
 PROBES = [
     ("agent API", "http://127.0.0.1:8901/supplier/arrears",
      {"X-User-Email": "timelabs.inc@gmail.com"}, 200),
@@ -104,9 +105,10 @@ def check_databases():
                     "webchat_sessions": {"owner_email", "visibility"},
                     "supplier_bill_items": {"quantity"},
                     "orders": {
-                        "order_no", "is_stock", "supplier_visible",
+                        "order_no", "is_stock", "supplier_visible", "local_hidden",
                         "shopify_contact_fingerprint",
                         "shopify_contact_override",
+                        "shopify_build_override",
                         "shopify_conflict_fingerprint",
                     },
                     "order_number_seq": {"id", "last_value"},
