@@ -64,6 +64,22 @@ SUP_CSS = r"""
   .sync{font-size:11.5px;color:var(--muted);}
   .sync.err{color:var(--bad);}
 
+  /* Exception-first entry point. Stage tabs answer where work is; these
+     buttons answer what needs fixing before a build can move cleanly. */
+  .focusbox{margin-top:10px;}
+  .focushead{display:flex;align-items:center;gap:8px;margin:0 2px 7px;}
+  .focushead b{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
+  .focushead span{font-size:11.5px;color:var(--muted);}
+  .focusbar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;}
+  .focusitem{min-width:0;text-align:left;border:1px solid var(--border);background:var(--card);
+    color:var(--ink);border-radius:var(--r-s);padding:9px 10px;cursor:pointer;}
+  .focusitem b{display:block;font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.15;}
+  .focusitem span{display:block;font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;}
+  .focusitem.on{border-color:var(--accent);background:var(--accent-bg);color:var(--accent);}
+  .focusitem.clear b{color:var(--good);}
+  @media(max-width:520px){.focusbar{grid-template-columns:repeat(2,minmax(0,1fr));}}
+
   /* tabs */
   .tabs{display:flex;gap:4px;margin-top:11px;
     border-bottom:1px solid var(--border);}
@@ -564,7 +580,7 @@ function toast(m){var t=$('toast');t.textContent=m;t.classList.add('show');
   clearTimeout(toastT);toastT=setTimeout(function(){t.classList.remove('show');},3200);}
 async function api(path,opts){
   var r=await fetch(API+path,opts);
-  if(r.status===403){throw new Error('This account can\'t open the build queue.');}
+  if(r.status===403){throw new Error('This account can\'t open Builds.');}
   var d=await r.json().catch(function(){return {};});
   if(!r.ok)throw new Error(d.error||'Something went wrong');
   return d;
@@ -587,7 +603,7 @@ function ago(s){
 }
 function cls(s){return String(s||'').replace(/[^a-z]/gi,'');}
 
-var STATUSES=[], PIPELINE=[], LABELS={}, ORDERS=[], filter='pending', q='', openDetail={}, sort='newest', onlyPhotos=false, IS_ADMIN=false;
+var STATUSES=[], PIPELINE=[], LABELS={}, ORDERS=[], filter='pending', q='', openDetail={}, sort='newest', onlyPhotos=false, focusMode='', IS_ADMIN=false;
 var caseF='', moveF='', selectMode=false, SEL={};
 
 /* The five sections, in order. Each stage IS its own section now — a build
@@ -602,6 +618,8 @@ function nextOf(st){
 function bucket(o){return o.status;}
 function matches(o){
   if(onlyPhotos&&!o.photos)return false;
+  if(focusMode==='missing-photo'&&(o.status==='cancelled'||o.photos))return false;
+  if(focusMode==='unpriced'&&(o.status==='cancelled'||o.supplier_cost!=null))return false;
   if(caseF&&(o.case_style||'')!==caseF)return false;
   if(moveF&&(o.movement||'')!==moveF)return false;
   if(!q)return true;
@@ -617,6 +635,7 @@ function activeFilters(){
   if(q)n++;
   if(caseF)n++;
   if(moveF)n++;
+  if(focusMode)n++;
   return n;
 }
 /* Attribute filters are built from what's actually in the queue rather than
@@ -665,7 +684,8 @@ function photoEl(o){
   if(!o.photos){
     return '<div class="oshot none"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg></div>';
   }
-  return '<button type="button" class="oshot" data-lb="'+o.id+'" data-n="'+o.photos+'">'+
+  return '<button type="button" class="oshot" data-lb="'+o.id+'" data-n="'+o.photos+'" '+
+    'aria-label="Open '+o.photos+' reference photo'+(o.photos===1?'':'s')+' for order '+(o.order_no||o.id)+'">'+
     '<img src="'+supplierPhotoUrl(o,0)+'" alt="Reference photo for order '+o.id+'" loading="lazy">'+
     (o.photos>1?'<span class="more">+'+(o.photos-1)+'</span>':'')+'</button>';
 }
@@ -819,7 +839,32 @@ function drawStageBar(counts){
     '<b>'+(counts.all||0)+'</b><span class="lbl">All</span></button>');
   bar.innerHTML=html.join('');
   bar.querySelectorAll('.stg').forEach(function(c){
-    c.onclick=function(){ filter=c.dataset.f; render(); window.scrollTo({top:0,behavior:'smooth'}); };
+    c.onclick=function(){ focusMode=''; filter=c.dataset.f; render(); window.scrollTo({top:0,behavior:'smooth'}); };
+  });
+}
+
+function drawFocus(){
+  var active=ORDERS.filter(function(o){return o.status!=='cancelled';});
+  var pending=active.filter(function(o){return o.status===PIPELINE[0];}).length;
+  var missing=active.filter(function(o){return !o.photos;}).length;
+  var unpriced=active.filter(function(o){return o.supplier_cost==null;}).length;
+  var items=[
+    ['pending',pending,'Awaiting start'],
+    ['missing-photo',missing,'Missing reference'],
+    ['unpriced',unpriced,'No price set']
+  ];
+  $('focusbar').innerHTML=items.map(function(it){
+    var on=(it[0]==='pending'&&!focusMode&&filter===PIPELINE[0])||focusMode===it[0];
+    return '<button class="focusitem'+(on?' on':'')+(it[1]===0?' clear':'')+'" data-focus="'+it[0]+'">'+
+      '<b>'+it[1]+'</b><span>'+it[2]+'</span></button>';
+  }).join('');
+  $('focusbar').querySelectorAll('[data-focus]').forEach(function(b){
+    b.onclick=function(){
+      var k=b.dataset.focus;
+      focusMode=(k==='pending'?'':k);
+      filter=(k==='pending'?PIPELINE[0]:'all');
+      render();window.scrollTo({top:0,behavior:'smooth'});
+    };
   });
 }
 
@@ -842,8 +887,8 @@ function render(){
   });
   if(!html){
     html='<div class="sempty"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg><div>'+
-      (q||onlyPhotos||caseF||moveF?'Nothing matches the current filters.'
-        :'Nothing in the queue yet. New orders land in Pending the moment they&rsquo;re logged.')+
+      (q||onlyPhotos||caseF||moveF||focusMode?'Nothing matches the current filters.'
+        :'Nothing in Builds yet. New work appears in Pending as soon as it is shared.')+
       '</div></div>';
   }
   $('list').innerHTML=html;
@@ -851,6 +896,7 @@ function render(){
   PIPELINE.forEach(function(k){counts[k]=(groups[k]||[]).length;});
   counts.cancelled=(groups.cancelled||[]).length;
   drawStageBar(counts);
+  drawFocus();
   document.querySelectorAll('.schip[data-sort]').forEach(function(c){
     c.classList.toggle('on',c.dataset.sort===sort);
   });
@@ -1607,7 +1653,7 @@ $('fbtn').onclick=function(){
   $('fbtn').setAttribute('aria-expanded',open?'true':'false');
 };
 $('fclear').onclick=function(){
-  q='';onlyPhotos=false;sort='newest';caseF='';moveF='';
+  q='';onlyPhotos=false;focusMode='';sort='newest';caseF='';moveF='';
   $('q').value='';render();
 };
 var qT;
@@ -1689,20 +1735,20 @@ def build():
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Build queue">
+<meta name="apple-mobile-web-app-title" content="Builds">
 <meta name="mobile-web-app-capable" content="yes">
-<title>Build queue — Timelabs Co</title>
+<title>Builds — Timelabs Co</title>
 <style>{HUB_STYLE}{SUP_CSS}</style></head>
 <body>
 <div class="swrap">
   <div class="stop">
     <div class="stop-row">
-      <span class="sdot">T</span><b>Build queue</b>
+      <span class="sdot">T</span><b>Builds</b>
       <span class="sp"></span>
       <span class="swho" id="who"></span>
     </div>
     <div class="tabs">
-      <button class="on" data-tab="queue">Build queue</button>
+      <button class="on" data-tab="queue">Builds</button>
       <button data-tab="bills">Batches</button>
     </div>
 
@@ -1754,6 +1800,10 @@ def build():
        three added ~120px to a header that is pinned for the whole session:
        on a 390x844 phone the queue itself was left about half a card. -->
   <div id="queue-extra">
+      <div class="focusbox">
+        <div class="focushead"><b>Needs action</b><span>Tap a count to focus the list</span></div>
+        <div class="focusbar" id="focusbar"></div>
+      </div>
       <div class="moneybar" id="moneybar"></div>
       <div class="syncline"><span class="sync" id="sync">Loading&hellip;</span></div>
       <details class="helpbox">
@@ -1797,7 +1847,7 @@ def build():
     <div id="billlist"><div class="sempty">Loading&hellip;</div></div>
   </section>
 
-  <p class="sfoot">Timelabs Co &middot; build queue</p>
+  <p class="sfoot">Timelabs Co &middot; Builds</p>
 </div>
 
 <div class="peek" id="peek" aria-hidden="true"><img id="peek-img" alt=""></div>

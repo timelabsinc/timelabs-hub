@@ -62,7 +62,7 @@ TOOLS = [
         ("access", "People &amp; access", "Invite people, set roles, remove — who can sign in and what they can do.", "/ops/access.html", "admin"),
         ("files", "System files", "Browse the Hermes server files — read-only, hidden-file toggle.", "/ops/files.html", "admin"),
         ("map", "System map", "How the whole OS fits together — services, health, roadmap.", "/ops/architecture.html", "admin"),
-        ("supplier", "Supplier build queue", "What your supplier sees — order number, spec, status. No customer details, no price.", "/ops/supplier.html", "admin"),
+        ("supplier", "Builds", "Production queue for specs, references, stages and supplier batches. No customer details or selling price.", "/ops/supplier.html", "admin"),
     ]),
 ]
 

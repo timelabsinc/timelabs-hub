@@ -63,7 +63,7 @@ Design language is **"Meridian"** — clean, modern, light + dark, gold accent (
 | **People & access** | `/ops/access.html` | Invite people, set a role, remove — who signs in and exactly what they can do. |
 | **System files** | `/ops/files.html` | Read-only browser over the server (`/root`); credential file **contents are always withheld**. |
 | **System map** | `/ops/architecture.html` | How the OS fits together — services, live health, roadmap. |
-| **Supplier build queue** | `/ops/supplier.html` | What the supplier sees — order number, spec, photo, status. No customer details, no price. Their own sign-in, confined to this one page. |
+| **Builds** | `/ops/supplier.html` | Production queue for order number, spec, reference, stage and supplier batches. No customer details or selling price. Their own sign-in, confined to this one page. |
 
 ---
 
@@ -79,7 +79,7 @@ shared workflow.
 - Per-product-line analytics via an `order_items` table; product names are renamable
   retroactively for clean "what's selling" reporting.
 
-### Supplier queue (phone-first)
+### Builds (supplier queue, phone-first)
 - Shows each build's **reference photo, spec, quantity, status** — never customer name,
   phone, address, or price. Enforced in the query itself, not just the UI.
 - **One-tap** stage advance; hold/hover a photo to enlarge; per-order **timeline**;
@@ -115,7 +115,7 @@ shared workflow.
 | **full** | Home | Every day-to-day tool; no admin |
 | **orders** | Order form | Order form + order/customer lists only |
 | **intake** | Intake form | Log new orders and nothing else |
-| **supplier** | Supplier queue | The build queue only — no PII, no price |
+| **supplier** | Builds | Builds only — no customer identity, address, or selling price |
 
 Enforced in **two layers**: nginx bounces a restricted role off any page it doesn't own, and
 every data endpoint independently checks the caller's role (so the API can't be called

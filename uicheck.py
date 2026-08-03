@@ -427,6 +427,22 @@ def drop_share_contract(page="/var/www/drop/index.html"):
     return issues
 
 
+def builds_contract(page="/var/www/ops/supplier.html",
+                    tools_page="/var/www/ops/tools.html"):
+    """Builds should stay exception-first, named consistently and accessible."""
+    html = open(page, encoding="utf-8", errors="replace").read()
+    tools_html = open(tools_page, encoding="utf-8", errors="replace").read()
+    issues = []
+    required = ('<title>Builds ', '<b>Builds</b>', 'id="focusbar"',
+                'data-focus="', 'aria-label="Open ')
+    for marker in required:
+        if marker not in html:
+            issues.append(f"missing {marker}")
+    if '>Builds</' not in tools_html or 'href="/ops/supplier.html"' not in tools_html:
+        issues.append("Tools does not expose Builds by its current name")
+    return issues
+
+
 def main():
     pages = (sorted(glob.glob("/var/www/ops/*.html"))
              + ["/var/www/drop/index.html", "/var/www/intake/index.html"])
@@ -507,8 +523,15 @@ def main():
     print("  ✓ active links can be reviewed and revoked" if not drop_shares
           else f"  {len(drop_shares)} broken Drop sharing rule(s)")
 
+    print("\n═══ BUILDS OPENS ON EXCEPTIONS ═══")
+    builds = builds_contract()
+    for issue in builds:
+        print(f"  ✗ supplier.html          {issue}")
+    print("  ✓ production work is named, focused and accessible" if not builds
+          else f"  {len(builds)} broken Builds rule(s)")
+
     return 1 if (total or missing or containment or drop_chrome or role_nav or touch_targets
-                 or home_actions or drop_shares) else 0
+                 or home_actions or drop_shares or builds) else 0
 
 
 if __name__ == "__main__":
