@@ -983,6 +983,10 @@ RTE_CSS = r"""
 .rte-bar button:hover{background:var(--card-2);color:var(--ink);}
 .rte-bar button:active{transform:scale(.94);}
 .rte-bar .sep{width:1px;height:16px;background:var(--border);margin:0 4px;}
+@media(pointer:coarse){
+  .rte-bar{gap:3px;}
+  .rte-bar button{min-width:36px;height:36px;padding:0 10px;}
+}
 .rte-ed{min-height:120px;max-height:340px;overflow-y:auto;padding:11px 13px;font-size:14px;line-height:1.55;color:var(--ink);outline:none;}
 .rte-ed.empty:before{content:attr(data-ph);color:var(--muted);pointer-events:none;}
 .rte-ed p{margin:0 0 8px;} .rte-ed p:last-child{margin:0;}

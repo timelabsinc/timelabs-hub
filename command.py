@@ -69,7 +69,7 @@ html,body{height:100%;overflow:hidden}
   border:1px solid var(--border);padding:10px;border-radius:8px}.md code{font-size:.9em;background:var(--bg);padding:1px 4px;border-radius:4px}
 .md table{display:block;overflow:auto;border-collapse:collapse;margin:10px 0}.md th,.md td{border:1px solid var(--border);padding:6px 9px;text-align:left}
 .md a{color:var(--accent)}.msg-tools{display:flex;gap:5px;margin-top:10px;padding-top:9px;border-top:1px solid var(--border)}
-.msg-tools button{border:0;background:none;color:var(--muted);font:inherit;font-size:11px;cursor:pointer;padding:3px 6px}
+.msg-tools button{min-height:32px;border:0;background:none;color:var(--muted);font:inherit;font-size:11px;cursor:pointer;padding:5px 8px}
 .msg-tools button:hover{color:var(--accent)}
 .thinking{max-width:900px;margin:0 auto 18px;color:var(--muted);font-size:12px;display:flex;gap:8px;align-items:center}
 .dots{display:flex;gap:3px}.dots i{width:6px;height:6px;background:var(--accent);border-radius:50%;animation:pulse 1s infinite}

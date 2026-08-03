@@ -74,6 +74,7 @@ MOBILE_FIX = """<style id="labs-mobile-fix">
   color:var(--body);border-radius:var(--r-s);width:36px;height:36px;box-shadow:var(--shadow);}
 .topbar .iconbtn:hover{border-color:var(--border-2);background:var(--card);color:var(--ink);}
 .topbar .iconbtn:active{transform:scale(.94);}
+#gdReconnect{min-height:36px;}
 @media (min-width:760px){ .topbar{padding:20px 0 18px;} }
 @media (max-width:759px){ .topbar .who{display:none;} }
 </style>"""

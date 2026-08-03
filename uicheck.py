@@ -379,6 +379,25 @@ def role_navigation_contract(page):
     return issues
 
 
+def touch_target_contract():
+    """Guard the compact controls that are actually used on touch screens."""
+    checks = (
+        ("/var/www/drop/index.html", ".fdots", "width", "36px"),
+        ("/var/www/drop/index.html", "#gdReconnect", "min-height", "36px"),
+        ("/var/www/ops/command.html", ".msg-tools button", "min-height", "32px"),
+        ("/var/www/ops/product-builder.html", ".rte-bar button", "height", "36px"),
+    )
+    issues = []
+    for page, selector, prop, want in checks:
+        html = open(page, encoding="utf-8", errors="replace").read()
+        css = " ".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.S))
+        got = _last_px(css, PHONE, lambda s, selector=selector: s == selector, prop)
+        if got != want:
+            issues.append((os.path.basename(page),
+                           f"{selector} needs {prop}:{want} on touch (found {got or 'nothing'})"))
+    return issues
+
+
 def main():
     pages = (sorted(glob.glob("/var/www/ops/*.html"))
              + ["/var/www/drop/index.html", "/var/www/intake/index.html"])
@@ -438,7 +457,14 @@ def main():
     print("  ✓ hidden tools do not remain visible" if not role_nav
           else f"  {role_nav} broken role-navigation rule(s)")
 
-    return 1 if (total or missing or containment or drop_chrome or role_nav) else 0
+    print("\n═══ HIGH-FREQUENCY TOUCH TARGETS ARE USABLE ═══")
+    touch_targets = touch_target_contract()
+    for page, issue in touch_targets:
+        print(f"  ✗ {page:22} {issue}")
+    print("  ✓ compact actions have a touch-safe hit area" if not touch_targets
+          else f"  {len(touch_targets)} undersized touch target(s)")
+
+    return 1 if (total or missing or containment or drop_chrome or role_nav or touch_targets) else 0
 
 
 if __name__ == "__main__":
