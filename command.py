@@ -35,8 +35,26 @@ def _cmo_documents_json():
     return json.dumps(docs, ensure_ascii=False).replace("<", "\\u003c")
 
 
+def _instagram_metrics():
+    fallback = {"followers": 3117, "posts": 5, "top_views": 4399,
+                "top_interactions": 101}
+    try:
+        snap = json.loads((BASE / "data/instagram_audit_snapshot.json").read_text(encoding="utf-8"))
+        account = snap.get("account") or {}
+        posts = snap.get("posts") or []
+        return {
+            "followers": int(account.get("followers") or fallback["followers"]),
+            "posts": len(posts),
+            "top_views": max((int(p.get("views") or 0) for p in posts), default=0),
+            "top_interactions": max((int(p.get("interactions") or 0) for p in posts), default=0),
+        }
+    except (OSError, ValueError, TypeError):
+        return fallback
+
+
 def build():
     cmo_documents = _cmo_documents_json()
+    instagram = _instagram_metrics()
     doc = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -249,8 +267,8 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
     <div class="rail-head"><span class="rail-title">CMO intelligence</span><button type="button" class="icon-btn context-toggle" id="contextClose" aria-label="Close business context">×</button></div>
     <div class="context">
       <div class="context-block"><h3>Measured Instagram snapshot</h3><div class="analytics">
-        <div class="metric"><b>3,117</b><span>followers</span></div><div class="metric"><b>5</b><span>posts / 90 days</span></div>
-        <div class="metric"><b>4,399</b><span>top Reel views</span></div><div class="metric"><b>101</b><span>top interactions</span></div>
+        <div class="metric"><b>__CMO_IG_FOLLOWERS__</b><span>followers</span></div><div class="metric"><b>__CMO_IG_POSTS__</b><span>posts / 90 days</span></div>
+        <div class="metric"><b>__CMO_IG_TOP_VIEWS__</b><span>top content views</span></div><div class="metric"><b>__CMO_IG_TOP_INTERACTIONS__</b><span>top interactions</span></div>
       </div></div>
       <div class="context-block"><h3>Specialist agents</h3><div class="agent-feed">
         <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs Instagram specialist under the Hermes CMO charter. Read all CMO context documents and the latest Instagram snapshot. Audit cadence, formats, creative themes, proof, captions, conversion handoff and measurement. Return the next five evidence-led content briefs with hook, shot list, proof, CTA, KPI and review rule. Prepare internal tasks only; do not publish."><span class="agent-icon">IG</span><span><b>Instagram Agent</b><small>Cadence, creative and conversion</small></span><span class="agent-state">Ready</span></button>
@@ -458,6 +476,10 @@ loadSessions().then(loadHistory);loadEvents();focusComposer();
 })();
 """ + WHOAMI_JS + r"""
 </script></body></html>"""
+    doc = (doc.replace("__CMO_IG_FOLLOWERS__", f"{instagram['followers']:,}")
+          .replace("__CMO_IG_POSTS__", f"{instagram['posts']:,}")
+          .replace("__CMO_IG_TOP_VIEWS__", f"{instagram['top_views']:,}")
+          .replace("__CMO_IG_TOP_INTERACTIONS__", f"{instagram['top_interactions']:,}"))
     tmp = OUT + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(doc)

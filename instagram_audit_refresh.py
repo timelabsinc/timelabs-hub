@@ -63,6 +63,10 @@ def main():
     os.replace(tmp, SNAPSHOT)
     import instagram_audit
     instagram_audit.build()
+    # Command's CMO intelligence rail embeds the same sanitized snapshot.
+    # Rebuild it here so the visible metrics cannot drift from the audit page.
+    import command
+    command.build()
     print("refreshed sanitized Instagram snapshot")
 
 if __name__ == "__main__":
