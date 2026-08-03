@@ -54,6 +54,15 @@ html,body{height:100%;overflow:hidden}
   font-size:20px;font-weight:850;box-shadow:var(--shadow-lg)}
 .empty h1{font-size:clamp(25px,3vw,38px);letter-spacing:-.035em;margin:18px 0 8px;color:var(--ink)}
 .empty>p{color:var(--muted);font-size:14px;line-height:1.6;max-width:580px}
+.cmo-desk{margin-top:22px;padding:16px;border:1px solid color-mix(in srgb,var(--accent) 55%,var(--border));
+  border-radius:13px;background:linear-gradient(135deg,var(--accent-bg),var(--card))}
+.cmo-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
+.cmo-head b{font-size:14px}.cmo-head span{display:block;color:var(--muted);font-size:12px;line-height:1.45;margin-top:3px}
+.cmo-badge{flex:none;border-radius:999px;padding:4px 8px;background:var(--accent);color:white;font-size:10px;font-weight:800;
+  letter-spacing:.06em;text-transform:uppercase}.cmo-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.cmo-action{border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--ink);padding:11px;text-align:left;
+  font:inherit;cursor:pointer}.cmo-action b{display:block;font-size:12px}.cmo-action small{display:block;color:var(--muted);font-size:10.5px;line-height:1.35;margin-top:4px}
+.cmo-action:hover{border-color:var(--accent);transform:translateY(-1px)}
 .starts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:24px}
 .start{padding:13px;text-align:left;border:1px solid var(--border);border-radius:11px;background:var(--card);
   color:var(--ink);font:inherit;font-size:13px;line-height:1.35;cursor:pointer}
@@ -119,7 +128,7 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
   .workspace{height:100%}.mobile-toggle{display:inline-grid;place-items:center}
   .rail.left{position:absolute;inset:0 auto 0 0;width:min(84vw,300px);z-index:30;transform:translateX(-101%);
     transition:transform .18s}.rail.left.open{transform:none}
-  .thread{padding:18px 12px}.empty{margin-top:3vh}.starts{grid-template-columns:1fr}
+  .thread{padding:18px 12px}.empty{margin-top:3vh}.starts,.cmo-actions{grid-template-columns:1fr}
   .compose-wrap{padding-left:8px;padding-right:8px}.msg.user .bubble{max-width:90%}
   .compose button,.mobile-toggle,.context-toggle{width:44px;height:44px}
   .work-head{height:58px;padding:0 8px}.work-title span{display:none}.status{font-size:0}.status i{width:8px;height:8px}
@@ -137,7 +146,7 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
   <section class="workspace">
     <div class="work-head">
       <button type="button" class="icon-btn mobile-toggle" id="menuBtn" aria-label="Show conversations" aria-controls="leftRail" aria-expanded="false">☰</button>
-      <div class="work-title"><b id="threadTitle">New command</b><span>Hermes · Timelabs business operator</span></div>
+      <div class="work-title"><b id="threadTitle">New command</b><span>Hermes · business operator and CMO</span></div>
       <span class="status" aria-live="polite"><i></i><span id="agentStatus">Ready</span></span>
       <button type="button" class="icon-btn context-toggle" id="contextBtn" aria-label="Show business context" aria-controls="contextRail" aria-expanded="false">ⓘ</button>
     </div>
@@ -146,6 +155,14 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
         <div class="empty-mark">L</div>
         <h1>What should we move forward?</h1>
         <p>Ask a question or give Hermes a job. It can inspect the business and work across the Labs OS tools available to your account.</p>
+        <div class="cmo-desk">
+          <div class="cmo-head"><div><b>CMO desk</b><span>Research, positioning, channels and measurable growth. External actions remain review-gated.</span></div><div class="cmo-badge">Active</div></div>
+          <div class="cmo-actions">
+            <button type="button" class="cmo-action start" data-prompt="Act as my TimeLabs CMO. Read /root/ops-dashboard/docs/hermes-cmo-charter.md and /root/ops-dashboard/docs/competitive-intelligence-audit.md completely. Inspect current memory_facts categories state, business and preference; use labs sales and products for current commercial context; inspect the latest Instagram audit snapshot; and run fresh public research where facts may have changed. Produce a decision-ready weekly CMO brief: executive verdict, commercial and channel scorecard using only measured data, customer and market signals, meaningful competitor changes, website/offer/content gaps, the three highest-leverage priorities, tasks you can prepare now, owner decisions required, and KPI, guardrail and review date for each recommendation. Label every important claim as first-party measured, public verified, competitor self-claim, community anecdote or inference. Save durable decisions to memory_facts and concrete work to action_items. Do not publish, spend, message, contact competitors or change Shopify without explicit approval."><b>Run CMO brief</b><small>Full evidence-backed weekly review</small></button>
+            <button type="button" class="cmo-action start" data-prompt="Act as my TimeLabs CMO. Read the CMO charter and latest competitive intelligence audit, then run a fresh source-cited market watch across direct Indian mod sellers, adjacent Indian microbrands, official-brand substitutes, global custom-watch benchmarks, communities and discovery channels. Report only changes and opportunities affecting a TimeLabs decision. Compare positioning, price ladder, product proof, warranty, lead time, content formats, conversion path and channel use. Separate verified facts, self-claims, anecdotes and inference. End with at most five prioritized moves, each with expected effect, effort, dependency, KPI and stop/scale rule. No external writes or outreach."><b>Market watch</b><small>Competitors and category signals</small></button>
+            <button type="button" class="cmo-action start" data-prompt="Act as my TimeLabs CMO. Audit our acquisition and retention path across Instagram, WhatsApp, Shopify, email, search, Reddit, YouTube and creator or collector partnerships using available first-party data and public evidence. Map discovery to proof, consultation, order, build, delivery and review/referral. Identify broken or unmeasured handoffs, privacy/access constraints, channels competitors use better, and the smallest 30-day plan to improve qualified demand. For every action include owner, prerequisite, KPI, guardrail and review date. Prepare drafts and internal tasks only; do not publish, spend or message anyone without approval."><b>Channel plan</b><small>Build the 30-day growth system</small></button>
+          </div>
+        </div>
         <div class="starts">
           <button type="button" class="start" data-prompt="Give me today's operating brief: new orders, anything blocked, and the three actions that matter most."><b>Run today’s brief</b><small>Orders, blockers and priorities</small></button>
           <button type="button" class="start" data-prompt="Show me every order that needs attention and explain why."><b>Review orders</b><small>Find work that needs intervention</small></button>
@@ -168,7 +185,12 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
   <aside class="rail right" id="contextRail" aria-label="Business context">
     <div class="rail-head"><span class="rail-title">Business context</span><button type="button" class="icon-btn context-toggle" id="contextClose" aria-label="Close business context">×</button></div>
     <div class="context">
-      <div class="context-block"><h3>Active operator</h3><div class="mode"><b>Hermes</b><span>One operator across orders, store, suppliers, content, files and system operations.</span></div></div>
+      <div class="context-block"><h3>Active operator</h3><div class="mode"><b>Hermes · CMO + operator</b><span>Owns research, positioning, channel plans and measurement. External actions remain review-gated.</span></div></div>
+      <div class="context-block"><h3>CMO cadence</h3><div class="cap-list">
+        <div class="cap">Market watch <span>Weekly</span></div>
+        <div class="cap">Growth review <span>Weekly</span></div>
+        <div class="cap">Positioning &amp; offer <span>Monthly</span></div>
+      </div></div>
       <div class="context-block"><h3>Control policy</h3><div class="cap-list">
         <div class="cap">Inspect &amp; analyse <span>Direct</span></div>
         <div class="cap">Prepare changes <span>Ask first</span></div>
