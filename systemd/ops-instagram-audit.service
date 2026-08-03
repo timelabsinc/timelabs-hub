@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Labs OS Instagram audit through Composio (read-only)
+ConditionPathExists=/root/.hermes/mcp-tokens/composio.json
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/ops-dashboard
+ExecStart=/root/ops-dashboard/venv/bin/python /root/ops-dashboard/instagram_audit_refresh.py
+User=root
+NoNewPrivileges=true
+PrivateTmp=true
+
