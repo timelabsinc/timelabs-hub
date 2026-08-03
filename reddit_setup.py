@@ -21,6 +21,7 @@ import sys
 
 sys.path.insert(0, "/root/ops-dashboard")
 import reddit_clean
+import writing_quality
 
 DB = "/root/ops-dashboard/data/hermes.db"
 SUB = "IndiaWatchMods"
@@ -85,7 +86,9 @@ def main():
     if kind not in PROMPTS:
         raise SystemExit(f"unknown piece: {kind}")
     prompt = CONTEXT.format(posts=existing()) + "\n" + PROMPTS[kind] + (
-        "\n\nNever use an em dash or an en dash. Straight quotes only.")
+        "\n\nMandatory editorial standard:\n"
+        + writing_quality.prompt_brief("reddit")
+        + "\n\nNever use an em dash or an en dash. Straight quotes only.")
     base_cmd = ["hermes", "--ignore-rules", "-t", HERMES_TOOLSET, "-z"]
     r = subprocess.run(base_cmd + [prompt], capture_output=True,
                        text=True, timeout=600)

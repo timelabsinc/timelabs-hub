@@ -89,6 +89,14 @@ CHANNEL_GUIDANCE = {
         "show a before/after, tell a customer story or ask a precise preference. Add what the image cannot show. "
         "Do not stack luxury adjectives, emoji or generic DM calls."
     ),
+    "linkedin": (
+        "Start from a real decision, mistake, customer moment or number. Keep the specific detail that makes the story recognizable. "
+        "Do not manufacture vulnerability, stack hooks, force a three-lesson structure or end with engagement bait."
+    ),
+    "meta_ad": (
+        "Lead with one concrete buyer problem, proof point or product distinction. Match every claim to supplied evidence. "
+        "No fake urgency, generic luxury language, invented social proof or pressure disguised as a call to action."
+    ),
     "email": (
         "State the reason early, include only decision-relevant context, make one clear request and close naturally. "
         "Acknowledge the customer's actual issue before policy. Avoid formal filler and repeated summaries."
@@ -96,6 +104,10 @@ CHANNEL_GUIDANCE = {
     "whatsapp": (
         "Use short natural turns, one request at a time and the customer's actual name/details. "
         "Do not turn a message into an email or hide the answer behind a long preamble."
+    ),
+    "sales": (
+        "Answer the buyer's actual question first. Use only supplied price, availability, specification and delivery facts. "
+        "Be helpful and confident without pressure, fake scarcity or a scripted close. Offer one clear next step."
     ),
     "blog": (
         "Answer the search question early. Use first-party measurements, build records, failures, photos and sources. "
@@ -129,6 +141,40 @@ def prompt_brief(channel="general"):
     key = (channel or "general").strip().lower()
     guidance = CHANNEL_GUIDANCE.get(key, "Use the shortest native shape that completes the reader's job.")
     return BASE_BRIEF + "\nChannel rule: " + guidance
+
+
+def infer_channel(request):
+    """Best-effort routing for free-form content requests in Command.
+
+    This only chooses editorial guidance. It grants no tool or publishing
+    permission, and an unrecognized request safely falls back to general.
+    """
+    text = (request or "").strip().lower()
+    if not re.search(
+            r"\b(?:write|draft|rewrite|create|prepare|caption|copy|script|message|"
+            r"post|description|reply|email|ad)\b", text):
+        return None
+    routes = (
+        ("reddit", ("reddit", "subreddit")),
+        ("sales", ("sales message", "sales reply", "sales dm", "buyer reply", "lead reply")),
+        ("instagram", ("instagram", "reel caption", "story caption", "carousel caption")),
+        ("linkedin", ("linkedin",)),
+        ("meta_ad", ("meta ad", "facebook ad", "instagram ad", "paid ad")),
+        ("whatsapp", ("whatsapp", "community message")),
+        ("email", ("email", "newsletter")),
+        ("youtube", ("youtube", "video script")),
+        ("blog", ("blog", "article", "seo post")),
+        ("product", ("product description", "pdp", "product page", "listing copy")),
+        ("founder", ("founder post", "founder note")),
+    )
+    for channel, needles in routes:
+        if any(needle in text for needle in needles):
+            return channel
+    if "caption" in text:
+        return "instagram"
+    if "ad copy" in text:
+        return "meta_ad"
+    return "general"
 
 
 def lint(text, channel="general"):

@@ -39,6 +39,7 @@ from order_metrics import (
 )
 from shopify_oauth import canonical_hmac_message
 from shopify_scopes import REQUESTED_SCOPE_STRING, normalized_scopes
+import writing_quality
 
 HOST, PORT = "127.0.0.1", 8901
 DB = "/root/ops-dashboard/data/hermes.db"
@@ -1503,6 +1504,7 @@ def ai_product_prompt(saved, hint=""):
         '- "price": a suggested price as a number in INR, or "" if genuinely unsure.\n'
         "No text outside the JSON object."
     )
+    lines.append("Mandatory product-copy standard:\n" + writing_quality.prompt_brief("product"))
     return "\n".join(lines)
 
 
@@ -1594,42 +1596,80 @@ NONADMIN_PREAMBLE = (
     "Recent conversation:\n"
 )
 
-# Jasper-style templates: a slash command expands into a structured brief.
+# Content routes: a slash command expands into a structured brief and selects
+# the channel-specific writing standard. These create drafts only; authorization
+# and any external action remain separate.
 TEMPLATES = {
-    "/caption": (
+    "/caption": ("instagram",
         "Write an Instagram caption in the Timelabs brand voice. Structure: hook line "
         "(no 'introducing'), 2-3 short lines of concrete detail (movement, build, delivery), "
-        "soft CTA, then 8-12 niche hashtags on the last line. Give 2 variants. Brief: "
+        "one natural next step, and no more than five relevant hashtags if they genuinely help. "
+        "Give 2 variants. Brief: "
     ),
-    "/ad": (
+    "/story": ("instagram",
+        "Write an Instagram Story sequence of 3-5 frames. Each frame needs one short on-screen "
+        "line and, only where useful, a poll/question/link-sticker suggestion. Add what the image "
+        "cannot show; do not describe the picture back to the viewer. Brief: "
+    ),
+    "/ad": ("meta_ad",
         "Write Meta ad copy in the Timelabs brand voice: 3 primary-text variants "
         "(under 125 chars each), 3 headlines (under 40 chars), 1 description (under 30 chars). "
-        "Lead with a concrete trust anchor, soft CTA. Present as a table. Brief: "
+        "Use only supplied proof and no fake urgency. Present as a table. Brief: "
     ),
-    "/product": (
+    "/product": ("product",
         "Write a Shopify product description in the Timelabs brand voice: 2-3 sentence "
         "opening (design story, movement, one distinctive detail), then a specs list "
-        "(movement, case size, glass, strap, water resistance, delivery 5-10 days insured), "
-        "no emoji, no superlatives without evidence. Brief: "
+        "using only supplied facts. Never infer water resistance, delivery, material or compatibility. "
+        "No emoji or superlatives without evidence. Brief: "
     ),
-    "/email": (
+    "/email": ("email",
         "Write a customer email in the Timelabs brand voice: subject line (under 45 chars, "
         "no clickbait), founder-personal body under 120 words, one soft CTA. Give 2 subject "
         "variants. Brief: "
     ),
-    "/post": (
+    "/post": ("whatsapp",
         "Write this week's WhatsApp community post per the playbook calendar in the Timelabs "
-        "brand voice: under 80 words, one concrete detail, ends with the soft handle. Check "
-        "content_library for the last community-post to avoid repeating. Brief: "
+        "brand voice: under 80 words, one concrete detail and one relevant next step. Brief: "
+    ),
+    "/whatsapp": ("whatsapp",
+        "Write a WhatsApp message in the Timelabs voice. Answer the actual situation early, keep "
+        "it natural on a phone, and use one clear next step. Use only the facts in the brief. Brief: "
+    ),
+    "/sales": ("sales",
+        "Write a one-to-one sales reply for a watch buyer. Answer their question first, use only "
+        "the supplied price/specification/availability/delivery facts, and close with one helpful "
+        "next step. No pressure, fake scarcity or scripted sales language. Brief: "
+    ),
+    "/reddit": ("reddit",
+        "Write a Reddit draft as a useful watch-community participant. Choose the route stated in "
+        "the brief (showcase, build diary, honest review, educational answer, comparison, founder "
+        "note or question), disclose the brand relationship where relevant, and do not promote. Brief: "
+    ),
+    "/blog": ("blog",
+        "Write a useful blog draft that answers the stated question early and uses only the supplied "
+        "first-party evidence and openable sources. Delete padding and do not invent citations. Brief: "
+    ),
+    "/youtube": ("youtube",
+        "Write a YouTube script for speech and footage, opening on the object, conflict or result. "
+        "Mark what should be shown, avoid repeated previews/recaps, and preserve every fact. Brief: "
+    ),
+    "/linkedin": ("linkedin",
+        "Write a LinkedIn draft from a real decision, mistake, customer moment or number. No false "
+        "vulnerability, lesson list, engagement bait or generic founder moral. Brief: "
+    ),
+    "/founder": ("founder",
+        "Write in the approved TimeLabs founder voice from a real decision, mistake, customer moment "
+        "or number. Preserve the specific tension and do not manufacture a moral. Brief: "
     ),
 }
 
 
 def expand_template(message):
-    for cmd, brief in TEMPLATES.items():
+    for cmd, (channel, brief) in TEMPLATES.items():
         if message.lower().startswith(cmd):
-            return brief + message[len(cmd):].strip()
-    return message
+            return brief + message[len(cmd):].strip(), channel
+    channel = writing_quality.infer_channel(message)
+    return message, channel
 
 
 def db():
@@ -1680,9 +1720,23 @@ def recent(session_id, limit):
     return list(reversed(rows))
 
 
-def build_prompt(session_id, message, images=None, admin=True):
+def build_prompt(session_id, message, images=None, admin=True, content_channel=None):
     """images: list of (path, name, ocr_text) — supports multi-photo messages."""
     lines = [PREAMBLE if admin else NONADMIN_PREAMBLE]
+    lines.append(
+        "When this request creates or rewrites public/customer-facing content, "
+        "apply this mandatory standard before drafting:\n"
+        + writing_quality.prompt_brief(content_channel or "general"))
+    if not admin:
+        lines.append(
+            "Approved public TimeLabs context for this team account: TimeLabs Co is an "
+            "Indian independent maker of hand-built custom watches powered by authentic "
+            "Seiko movements. Complete builds can use aftermarket/custom components and "
+            "must never be described as factory Seiko models or as affiliated with Seiko. "
+            "The voice is confident, concrete, collector-aware and calm. Only use a price, "
+            "movement, material, water-resistance, compatibility, delivery or warranty fact "
+            "when the team member supplied it in this conversation or it is clearly visible "
+            "in an attached source. Ask for a required missing fact; otherwise omit it.")
     user_label = "Owner" if admin else "Team member"
     for row in recent(session_id, CONTEXT_TURNS):
         speaker = user_label if row["role"] == "user" else "You"
@@ -2069,7 +2123,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_shopify_page_detail(query)
             return
         if path == "/events":
-            if not (self._has_tool("face") or self._has_tool("chat")):
+            # Command is available to the Creator role, but the global Hub
+            # activity feed can include access, order and store events. Only a
+            # role that can already open Home receives that cross-business feed.
+            if not self._has_tool("face"):
                 self._json(403, {"error": "not available for this account"})
                 return
             conn = db()
@@ -7733,13 +7790,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             shown = message or ("(photo)" if len(images) == 1 else f"({len(images)} photos)")
             for _, name, _ in images:
                 shown += f"  [attached photo: {name}]"
-            expanded = expand_template(message) if message else (
-                "Please look at the attached photo." if len(images) == 1
-                else f"Please look at the {len(images)} attached photos."
-            )
+            if message:
+                expanded, content_channel = expand_template(message)
+            else:
+                expanded = ("Please look at the attached photo." if len(images) == 1
+                            else f"Please look at the {len(images)} attached photos.")
+                content_channel = None
             images = [(p, n, ocr_image(p)) for p, n, _ in images]
             prompt = build_prompt(
-                session_id, expanded, images, admin=not isolate_caller)
+                session_id, expanded, images, admin=not isolate_caller,
+                content_channel=content_channel)
             # Build from the existing history, then store this turn. Storing first
             # makes recent() include the message and build_prompt() append it again,
             # which can cause Hermes to interpret one action request twice.
@@ -7763,6 +7823,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         reply = run_hermes(
                             prompt, model, provider, tools_for_caller,
                             ignore_rules=isolate_caller)
+                        if content_channel:
+                            flags = writing_quality.lint(reply, content_channel)
+                            if flags:
+                                notes = "\n".join(
+                                    f"- {flag['code']}: {flag['message']}"
+                                    for flag in flags[:10])
+                                editor_prompt = (
+                                    prompt + "\n\nYour draft was:\n" + reply
+                                    + "\n\nRun one final editorial pass using these flags:\n"
+                                    + notes
+                                    + "\nPreserve every supplied or verified fact exactly. "
+                                      "Do not add claims, numbers or sources. Return the complete "
+                                      "revised draft only.")
+                                revised = run_hermes(
+                                    editor_prompt, model, provider, tools_for_caller,
+                                    ignore_rules=isolate_caller)
+                                if len(writing_quality.lint(revised, content_channel)) <= len(flags):
+                                    reply = revised
                         if note and "auto-switched" in note:
                             reply += f"\n\n*({note} — set `/model claude` to keep it, or `/model default`)*"
                         elif note and model != (pref_model or FAILOVER_CHAIN[0][0]):

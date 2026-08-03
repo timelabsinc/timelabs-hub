@@ -45,12 +45,12 @@ ROLES = {
         "home": "/ops/",
         "tools": ["face", "drop", "ledger", "chat", "orders", "reddit"],
     },
-    "content": {
-        "label": "Content",
-        "blurb": "Reddit research/drafts and Drop. Live Shopify publishing stays "
-                 "admin-only.",
-        "home": "/ops/reddit.html",
-        "tools": ["reddit", "drop"],
+    "creator": {
+        "label": "Creator",
+        "blurb": "Content drafting in private Command conversations, plus Reddit and Drop. "
+                 "No orders, customers, margins, owner chats, sending or publishing.",
+        "home": "/ops/command.html",
+        "tools": ["chat", "reddit", "drop"],
     },
     "orders": {
         "label": "Orders",
@@ -214,7 +214,7 @@ def can_open_path(email, uri):
         return False
     rel = path[4:].lstrip("/")
     if rel == "tools.html":
-        return role in ("full", "content")
+        return role in ("full", "creator")
     if rel.startswith("agent/"):
         return can_use(email, "chat")
     tool = _OPS_PATH_TO_TOOL.get(rel)

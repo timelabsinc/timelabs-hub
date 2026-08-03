@@ -334,6 +334,31 @@ The canonical implementation lives in `writing_quality.py`.
 | `evidence.unsupported` | Claim outside the provided proof set | Human/model factual audit; not regex-only |
 | `fidelity.changed` | Rewrite no longer matches source facts | Source comparison; block |
 
+## Labs OS coverage
+
+The standard is enforced at the shared generation paths, not left to each
+operator to remember:
+
+- **Command:** every admin and team prompt receives the base standard. Slash
+  routes and recognizable free-form writing requests select channel guidance
+  for Instagram captions/stories, Meta ads, Reddit, WhatsApp, one-to-one sales,
+  email, blog, YouTube, LinkedIn/founder and product copy. If the first draft
+  matches an editorial flag, Command runs one fact-preserving edit pass.
+- **Reddit:** post, reply and subreddit-setup pipelines receive the Reddit
+  standard before drafting and retain the stricter deterministic final gate.
+- **Product Builder:** AI product-photo listings receive the product standard
+  before structured JSON is generated. Shopify creation and publishing remain
+  separate admin-only actions.
+- **Hermes CMO:** the canonical rule is stored in preference memory and this
+  document is embedded in Command context.
+
+Drop photo indexing, the Instagram audit, Blog uploader and Content updater are
+not copy generators: they produce search metadata, show read-only analysis or
+save text a person supplied. Their output should not be described as
+“humanized.” If a new tool starts generating customer-facing copy, it must call
+`writing_quality.prompt_brief(channel)` and run the editorial review before it
+is registered as complete.
+
 ## Sources and limits
 
 - [Wikipedia: Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing) is a practical field guide. It explicitly warns that its signs are descriptive and not proof.

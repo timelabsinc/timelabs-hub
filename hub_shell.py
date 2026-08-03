@@ -909,7 +909,7 @@ WHOAMI_JS = """
     var allowed=i.tools==='*'?null:(i.tools||[]);
     function can(k){
       if(i.admin||allowed===null)return true;
-      if(k==='tools')return i.role==='full'||i.role==='content';
+      if(k==='tools')return i.role==='full'||i.role==='creator';
       return allowed.indexOf(k)>=0;
     }
     document.querySelectorAll('.appitem[data-tool]').forEach(function(a){

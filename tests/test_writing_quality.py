@@ -11,6 +11,17 @@ class WritingQualityTests(unittest.TestCase):
         self.assertIn("image cannot show", instagram)
         self.assertNotEqual(reddit, instagram)
 
+    def test_every_creator_channel_has_native_guidance(self):
+        channels = (
+            "reddit", "instagram", "linkedin", "meta_ad", "whatsapp",
+            "sales", "email", "blog", "youtube", "product", "founder",
+        )
+        for channel in channels:
+            with self.subTest(channel=channel):
+                prompt = writing_quality.prompt_brief(channel)
+                self.assertIn("Channel rule:", prompt)
+                self.assertNotIn("shortest native shape", prompt)
+
     def test_residue_and_vague_sources_block(self):
         text = "Here is a polished version. Studies show this is better."
         codes = {flag["code"] for flag in writing_quality.lint(text)}
@@ -28,6 +39,18 @@ class WritingQualityTests(unittest.TestCase):
     def test_single_question_is_not_a_rule_of_three(self):
         flags = writing_quality.lint("Would you keep the silver hands?")
         self.assertFalse(any(flag["code"].startswith("structure.rule_of_three") for flag in flags))
+
+    def test_free_form_content_requests_are_routed(self):
+        cases = {
+            "Write an Instagram caption for these photos": "instagram",
+            "Draft a WhatsApp sales message for this buyer": "sales",
+            "Create a Reddit showcase post": "reddit",
+            "Rewrite this customer email": "email",
+            "What were sales yesterday?": None,
+        }
+        for request, expected in cases.items():
+            with self.subTest(request=request):
+                self.assertEqual(writing_quality.infer_channel(request), expected)
 
 
 if __name__ == "__main__":

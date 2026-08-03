@@ -62,7 +62,7 @@ def build():
 <meta name="color-scheme" content="light dark"><title>Command — Labs OS</title>
 <style>""" + HUB_STYLE + r"""
 html,body{height:100%;overflow:hidden}
-[hidden]{display:none!important}
+[hidden]{display:none !important}
 .wrap{max-width:none;width:100%;height:100vh;height:100dvh;margin:0;padding:0;display:flex;flex-direction:column}
 .topbar{padding-left:24px;padding-right:24px}
 .appnav{flex:none;margin:0 24px;display:flex}
@@ -113,6 +113,9 @@ html,body{height:100%;overflow:hidden}
 .empty>p{color:var(--muted);font-size:14px;line-height:1.6;max-width:580px}
 .cmo-desk{margin-top:22px;padding:16px;border:1px solid color-mix(in srgb,var(--accent) 55%,var(--border));
   border-radius:13px;background:linear-gradient(135deg,var(--accent-bg),var(--card))}
+.creator-desk{margin-top:22px;padding:16px;border:1px solid color-mix(in srgb,var(--accent) 55%,var(--border));
+  border-radius:13px;background:linear-gradient(135deg,var(--accent-bg),var(--card))}
+.creator-more{margin:10px 2px 0;color:var(--muted);font-size:10.5px;line-height:1.45}
 .cmo-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
 .cmo-head b{font-size:14px}.cmo-head span{display:block;color:var(--muted);font-size:12px;line-height:1.45;margin-top:3px}
 .cmo-badge{flex:none;border-radius:999px;padding:4px 8px;background:var(--accent);color:white;font-size:10px;font-weight:800;
@@ -162,6 +165,7 @@ html,body{height:100%;overflow:hidden}
 .metric b{display:block;font-size:16px;font-variant-numeric:tabular-nums}.metric span{display:block;color:var(--muted);font-size:9.5px;margin-top:2px}
 .agent-feed{display:grid;gap:6px}.agent-card{width:100%;display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:9px;align-items:center;
   border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--ink);padding:9px;text-align:left;font:inherit;cursor:pointer}
+.prompt-action{font:inherit}
 .agent-card:hover{border-color:var(--accent);background:var(--accent-bg)}.agent-icon{width:29px;height:29px;border-radius:9px;display:grid;
   place-items:center;background:var(--accent-bg);color:var(--accent);font-size:11px;font-weight:900}.agent-card b{display:block;font-size:11.5px}
 .agent-card small{display:block;font-size:9.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -228,15 +232,30 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
   <section class="workspace">
     <div class="work-head">
       <button type="button" class="icon-btn mobile-toggle" id="menuBtn" aria-label="Show conversations" aria-controls="leftRail" aria-expanded="false">☰</button>
-      <div class="work-title"><b id="threadTitle">New command</b><span>Hermes · business operator and CMO</span></div>
+      <div class="work-title"><b id="threadTitle">New command</b><span id="operatorMode">Hermes · business operator and CMO</span></div>
       <span class="status" aria-live="polite"><i></i><span id="agentStatus">Ready</span></span>
       <button type="button" class="icon-btn context-toggle" id="contextBtn" aria-label="Show business context" aria-controls="contextRail" aria-expanded="false">ⓘ</button>
     </div>
     <div class="thread" id="thread" role="log" aria-live="polite" aria-relevant="additions">
       <div class="empty" id="empty">
         <div class="empty-mark">L</div>
-        <h1>What should we move forward?</h1>
-        <p>Ask a question or give Hermes a job. It can inspect the business and work across the Labs OS tools available to your account.</p>
+        <h1 id="emptyTitle">What should we move forward?</h1>
+        <p id="emptyCopy">Ask a question or give Hermes a job. It can inspect the business and work across the Labs OS tools available to your account.</p>
+        <div class="creator-desk" id="creatorDesk" hidden>
+          <div class="cmo-head"><div><b>Creator desk</b><span>Attach photos or paste the real facts, choose a route, then edit the result. Your account cannot post, send or publish.</span></div><div class="cmo-badge">Draft only</div></div>
+          <div class="cmo-actions">
+            <button type="button" class="cmo-action" data-fill="/caption Route: showcase. Use the attached photos and facts. Add one detail the image cannot show."><b>Instagram caption</b><small>Showcase, story or product detail</small></button>
+            <button type="button" class="cmo-action" data-fill="/story Use the attached photos and facts. Build one short sequence with a clear interaction."><b>Instagram Story</b><small>Frames, copy and interaction</small></button>
+            <button type="button" class="cmo-action" data-fill="/reddit Route: showcase. Use the attached photos and facts. Make it useful to watch builders, not promotional."><b>Reddit post</b><small>Showcase, diary, review or answer</small></button>
+            <button type="button" class="cmo-action" data-fill="/whatsapp Situation: . Facts we can state: . The next step should be: ."><b>WhatsApp message</b><small>Community or customer update</small></button>
+            <button type="button" class="cmo-action" data-fill="/sales Buyer asked: . Verified price/specification/availability/delivery facts: ."><b>Sales reply</b><small>Helpful one-to-one response</small></button>
+            <button type="button" class="cmo-action" data-fill="/email Recipient and situation: . Facts to include: . Requested next step: ."><b>Email</b><small>Customer, campaign or follow-up</small></button>
+            <button type="button" class="cmo-action" data-fill="/blog Question to answer: . First-party evidence and source links: ."><b>Blog draft</b><small>Useful, sourced long-form copy</small></button>
+            <button type="button" class="cmo-action" data-fill="/youtube Video subject: . Footage available: . Verified facts: ."><b>YouTube script</b><small>Spoken script and shot cues</small></button>
+          </div>
+          <p class="creator-more">More routes: type <code>/ad</code>, <code>/product</code>, <code>/linkedin</code> or <code>/founder</code> before the brief.</p>
+        </div>
+        <div id="ownerDesk" hidden>
         <div class="cmo-desk">
           <div class="cmo-head"><div><b>CMO desk</b><span>Research, positioning, channels and measurable growth. External actions remain review-gated.</span></div><div class="cmo-badge">Active</div></div>
           <div class="cmo-actions">
@@ -250,6 +269,7 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
           <button type="button" class="start" data-prompt="Show me every order that needs attention and explain why."><b>Review orders</b><small>Find work that needs intervention</small></button>
           <button type="button" class="start" data-prompt="What changed across Labs OS since yesterday?"><b>What changed?</b><small>Read the business activity feed</small></button>
           <button type="button" class="start" data-prompt="Check the health of Hermes and Labs OS. Report problems only, with the safest next action."><b>Check the system</b><small>Services, jobs and integrations</small></button>
+        </div>
         </div>
       </div>
     </div>
@@ -312,6 +332,19 @@ const attachEl=document.getElementById('attachments'), composeWrap=document.quer
 const cmoContext=document.getElementById('cmoContext'), chatsTab=document.getElementById('chatsTab'), companyTab=document.getElementById('companyTab');
 const docModal=document.getElementById('docModal'), docTitle=document.getElementById('docTitle'), docBody=document.getElementById('docBody');
 let busy=false, attachments=[], uploading=0, lastMessageId=0, historyGen=0, sessionsGen=0, runToken=0;
+async function loadAccessMode(){
+ try{
+  let i=await api('/access/me'),creator=i.role==='creator';
+  document.body.classList.toggle('creator-mode',creator);
+  document.getElementById('ownerDesk').hidden=creator;
+  document.getElementById('creatorDesk').hidden=!creator;
+  if(creator){
+   document.getElementById('emptyTitle').textContent='What are we creating?';
+   document.getElementById('emptyCopy').textContent='Attach the source material, choose a channel, and give Hermes the facts. Every result is a private draft for human review.';
+   document.getElementById('operatorMode').textContent='Hermes · content drafting and research';
+  }
+ }catch(e){}
+}
 function syncSendState(){sendBtn.disabled=busy||uploading>0}
 function stored(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function remember(k,v){try{localStorage.setItem(k,v)}catch(e){}}
@@ -365,7 +398,7 @@ function bubble(role,text){if(empty&&empty.parentNode)empty.remove();let m=docum
  m.innerHTML='<div class="msg-label">'+(role==='user'?'You':'Hermes')+'</div><div class="bubble"></div>';let b=m.querySelector('.bubble');
  if(role==='agent'){b.innerHTML='<div class="md">'+md(text)+'</div><div class="msg-tools"><button type="button">Copy</button></div>';b.querySelector('button').onclick=e=>navigator.clipboard.writeText(text).then(()=>{e.target.textContent='Copied';setTimeout(()=>e.target.textContent='Copy',1000)})}
  else b.textContent=text;threadEl.appendChild(m);threadEl.scrollTop=threadEl.scrollHeight;return m}
-function thinking(){let d=document.createElement('div');d.className='thinking';d.innerHTML='<span class="dots"><i></i><i></i><i></i></span><span>Hermes is working with live business context…</span>';threadEl.appendChild(d);threadEl.scrollTop=threadEl.scrollHeight;return d}
+function thinking(){let creator=document.body.classList.contains('creator-mode'),d=document.createElement('div');d.className='thinking';d.innerHTML='<span class="dots"><i></i><i></i><i></i></span><span>'+(creator?'Hermes is drafting with the TimeLabs writing standard…':'Hermes is working with live business context…')+'</span>';threadEl.appendChild(d);threadEl.scrollTop=threadEl.scrollHeight;return d}
 function notice(text,bad){let n=document.createElement('div');n.className='notice'+(bad?' bad':'');n.textContent=text;threadEl.appendChild(n);threadEl.scrollTop=threadEl.scrollHeight;return n}
 async function api(path,opt){let r=await fetch(API+path,opt);let ct=r.headers.get('content-type')||'';
  if((r.status===401||r.status===403)&&ct.indexOf('application/json')<0){location.href='/oauth2/start?rd='+encodeURIComponent(location.pathname+location.search);throw new Error('Sign-in required')}
@@ -427,7 +460,8 @@ let form=new FormData();form.append('image',f);uploading++;syncSendState();try{l
 function renderAttachments(){attachEl.innerHTML='';attachments.forEach((a,i)=>{let c=document.createElement('div');c.className='attachment';c.innerHTML=(a.url?'<img src="'+a.url+'" alt="">':'')+'<span>'+esc(a.name)+'</span><button type="button" aria-label="Remove">×</button>';c.querySelector('button').onclick=()=>{attachments.splice(i,1);renderAttachments()};attachEl.appendChild(c)})}
 async function loadEvents(){try{let d=await api('/events'),el=document.getElementById('events');el.innerHTML='';(d.events||[]).slice(0,8).forEach(x=>{let v=document.createElement('div');v.className='event';v.innerHTML='<b>'+esc((x.app||'Labs')+' · '+(x.kind||'activity').replace(/_/g,' '))+'</b><p>'+esc(x.detail||'')+'</p><time>'+esc((x.created_at||'').slice(0,16).replace('T',' '))+'</time>';el.appendChild(v)});if(!el.children.length)el.innerHTML='<div class="event"><p>No recent activity.</p></div>'}catch(e){}}
 function autosize(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,150)+'px'}
-document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.prompt;send()});document.getElementById('newBtn').onclick=newSession;
+document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.prompt;send()});
+document.querySelectorAll('[data-fill]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.fill;autosize();focusComposer()});document.getElementById('newBtn').onclick=newSession;
 chatsTab.onclick=()=>setSidebar('chats');companyTab.onclick=()=>setSidebar('company');document.getElementById('docClose').onclick=closeDocument;
 docModal.onclick=e=>{if(e.target===docModal)closeDocument()};renderDocuments();setSidebar('company');
 document.getElementById('attachBtn').onclick=()=>document.getElementById('fileInput').click();document.getElementById('fileInput').onchange=async e=>{for(let f of e.target.files)await upload(f);e.target.value=''};
@@ -472,7 +506,7 @@ window.addEventListener('popstate',()=>{
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!docModal.hidden){closeDocument();return}if(e.key==='Escape'&&(rail.classList.contains('open')||contextRail.classList.contains('open')))closeMenu()});
 for(let mq of [leftMq,contextMq]){if(mq.addEventListener)mq.addEventListener('change',()=>closeMenu(false));else mq.addListener(()=>closeMenu(false))}
-syncDrawers();
+syncDrawers();loadAccessMode();
 loadSessions().then(loadHistory);loadEvents();focusComposer();
 })();
 """ + WHOAMI_JS + r"""

@@ -130,6 +130,11 @@ STRIP_PARTS = {
     "okpis": (".okpi", ".okpi b", 76, 12, "₹99,99,999"),
 }
 
+# These responsive grids contain counts, not currency. A page can still carry
+# a rupee sign elsewhere in explanatory/competitor prose, which is not a reason
+# to measure the count grid as a money strip.
+NON_MONEY_STRIPS = {"ia-kpis"}
+
 
 def value_size(css, cell, value_sel, width=PHONE):
     """font-size of the amount inside this strip, at `width`.
@@ -160,6 +165,8 @@ def check(page):
     out = []
     for sel, colmin in strips(css):
         base = sel.lstrip('.').split()[0]
+        if base in NON_MONEY_STRIPS:
+            continue
         # only strips this page actually renders money into. The markup is
         # often an empty div that JS fills, so look at the whole page for the
         # formatter as well as at the element itself.

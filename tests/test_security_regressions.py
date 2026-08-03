@@ -36,12 +36,12 @@ class AccessPathTests(unittest.TestCase):
                 self.assertIsNone(access_store.canonical_request_path(path))
 
     def test_authorization_never_uses_unsafe_raw_prefix(self):
-        with mock.patch.object(access_store, "get_role", return_value="content"):
+        with mock.patch.object(access_store, "get_role", return_value="creator"):
             with mock.patch.object(access_store, "can_use", return_value=True):
                 self.assertFalse(access_store.can_open_path(
-                    "content@example.com", "/drop/%2e%2e/ops/index.html"))
+                    "creator@example.com", "/drop/%2e%2e/ops/index.html"))
                 self.assertTrue(access_store.can_open_path(
-                    "content@example.com", "/drop/files/reference.jpg"))
+                    "creator@example.com", "/drop/files/reference.jpg"))
 
     def test_role_path_matrix(self):
         allowed = {
@@ -56,8 +56,8 @@ class AccessPathTests(unittest.TestCase):
                 "/ops/ledger.html", "/ops/reddit.html", "/ops/tools.html",
                 "/drop/files/reference.jpg",
             },
-            "content": {
-                "/ops/reddit.html", "/ops/tools.html",
+            "creator": {
+                "/ops/command.html", "/ops/reddit.html", "/ops/tools.html",
                 "/drop/files/reference.jpg",
             },
             "orders": {"/ops/order-form.html"},
