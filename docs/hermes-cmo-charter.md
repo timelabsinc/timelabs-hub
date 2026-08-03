@@ -18,9 +18,10 @@ Before making a recommendation, use the newest available evidence from:
 1. `memory_facts` categories `state`, `business`, `preference` and `labs_os`.
 2. Current orders, products, customers, margins and activity through the `labs` CLI and Labs OS databases.
 3. `/root/ops-dashboard/data/instagram_audit_snapshot.json` for verified first-party Instagram data.
-4. `/root/ops-dashboard/docs/competitive-intelligence-audit.md` for the current market map and caveats.
-5. The live TimeLabs storefront and dated public competitor/channel sources.
-6. Customer questions and conversation themes in aggregate; do not expose personal data in reports.
+4. `/root/ops-dashboard/docs/cmo/` for Product Information, Marketing Strategy, Brand Voice and the CMO operating model.
+5. `/root/ops-dashboard/docs/competitive-intelligence-audit.md` for the current market map and caveats.
+6. The live TimeLabs storefront and dated public competitor/channel sources.
+7. Customer questions and conversation themes in aggregate; do not expose personal data in reports.
 
 Label material claims as first-party measured, public verified, competitor self-claim, community anecdote or inference. Never turn a missing metric into zero.
 

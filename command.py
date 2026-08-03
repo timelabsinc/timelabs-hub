@@ -6,19 +6,44 @@ This is deliberately additive while the interface proves itself: the existing
 role-checked chat, upload, session and event endpoints; no second agent backend
 or parallel source of business truth is introduced.
 """
+import json
 import os
+from pathlib import Path
 from hub_shell import HUB_STYLE, WHOAMI_JS, hub_header
 
 OUT = "/var/www/ops/command.html"
+BASE = Path("/root/ops-dashboard")
+
+CMO_DOCUMENTS = [
+    ("product", "Product Information", "Product, customer, pricing and platform context", BASE / "docs/cmo/product-information.md"),
+    ("strategy", "Marketing Strategy", "ICP, positioning, channels and 30-day direction", BASE / "docs/cmo/marketing-strategy.md"),
+    ("competition", "Competitive Intelligence", "Market map, direct rivals and channel gaps", BASE / "docs/competitive-intelligence-audit.md"),
+    ("voice", "Brand Voice", "How TimeLabs should sound and prove claims", BASE / "docs/cmo/brand-voice.md"),
+    ("system", "How the CMO works", "Context, specialists, coordination and approval logic", BASE / "docs/cmo/system.md"),
+]
+
+
+def _cmo_documents_json():
+    docs = []
+    for key, title, summary, path in CMO_DOCUMENTS:
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError:
+            body = f"# {title}\n\nThis context document is currently unavailable."
+        docs.append({"key": key, "title": title, "summary": summary, "body": body})
+    # A literal </script> inside a document must not terminate the inert JSON tag.
+    return json.dumps(docs, ensure_ascii=False).replace("<", "\\u003c")
 
 
 def build():
+    cmo_documents = _cmo_documents_json()
     doc = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark"><title>Command — Labs OS</title>
 <style>""" + HUB_STYLE + r"""
 html,body{height:100%;overflow:hidden}
+[hidden]{display:none!important}
 .wrap{max-width:none;width:100%;height:100vh;height:100dvh;margin:0;padding:0;display:flex;flex-direction:column}
 .topbar{padding-left:24px;padding-right:24px}
 .appnav{flex:none;margin:0 24px;display:flex}
@@ -37,6 +62,19 @@ html,body{height:100%;overflow:hidden}
 .session:hover{background:var(--card-2)}.session.on{background:var(--accent-bg);border-color:var(--accent)}
 .session b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .session span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
+.rail-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:8px;border-bottom:1px solid var(--border)}
+.rail-tab{border:0;border-radius:8px;background:transparent;color:var(--muted);font:inherit;font-size:11px;font-weight:700;
+  padding:7px;cursor:pointer}.rail-tab.on{background:var(--accent-bg);color:var(--accent)}
+.cmo-context{padding:11px;overflow:auto;flex:1}.company-card{padding:12px;border:1px solid var(--border);border-radius:11px;background:var(--card-2)}
+.company-card b{display:block;font-size:14px}.company-card p{font-size:11px;line-height:1.5;color:var(--muted);margin:6px 0 0}
+.context-title{margin:17px 2px 7px;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.doc-list{display:grid;gap:5px}.doc-btn{display:grid;grid-template-columns:30px minmax(0,1fr) auto;align-items:center;gap:8px;
+  width:100%;padding:8px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.doc-btn:hover{background:var(--card-2);border-color:var(--border)}.doc-icon{width:28px;height:28px;border-radius:8px;background:var(--accent-bg);
+  color:var(--accent);display:grid;place-items:center;font-size:12px;font-weight:850}.doc-btn b{display:block;font-size:11.5px}
+.doc-btn small{display:block;color:var(--muted);font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}.doc-open{color:var(--muted)}
+.competitors{display:flex;flex-wrap:wrap;gap:5px}.competitor{border:1px solid var(--border);background:var(--card);border-radius:999px;
+  padding:5px 7px;font-size:9.5px;color:var(--muted)}
 .rail-foot{padding:10px;border-top:1px solid var(--border)}
 .fallback{display:block;text-align:center;color:var(--muted);font-size:11px;text-decoration:none;padding:7px}
 .fallback:hover{color:var(--accent)}
@@ -101,6 +139,18 @@ html,body{height:100%;overflow:hidden}
 .compose-note{max-width:900px;margin:6px auto 0;text-align:center;font-size:10.5px;color:var(--muted)}
 .context{overflow:auto;padding:13px}.context-block{margin-bottom:20px}.context h3{font-size:11px;text-transform:uppercase;
   letter-spacing:.08em;color:var(--muted);margin:0 0 8px}
+.analytics{display:grid;grid-template-columns:1fr 1fr;gap:6px}.metric{border:1px solid var(--border);border-radius:9px;background:var(--card);padding:9px}
+.metric b{display:block;font-size:16px;font-variant-numeric:tabular-nums}.metric span{display:block;color:var(--muted);font-size:9.5px;margin-top:2px}
+.agent-feed{display:grid;gap:6px}.agent-card{width:100%;display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:9px;align-items:center;
+  border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--ink);padding:9px;text-align:left;font:inherit;cursor:pointer}
+.agent-card:hover{border-color:var(--accent);background:var(--accent-bg)}.agent-icon{width:29px;height:29px;border-radius:9px;display:grid;
+  place-items:center;background:var(--accent-bg);color:var(--accent);font-size:11px;font-weight:900}.agent-card b{display:block;font-size:11.5px}
+.agent-card small{display:block;font-size:9.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-state{font-size:9px;color:var(--good);font-weight:750}.doc-modal{position:absolute;inset:0;z-index:60;background:rgba(10,15,12,.38);
+  display:grid;place-items:center;padding:20px}.doc-sheet{width:min(780px,96vw);max-height:min(820px,92%);display:flex;flex-direction:column;
+  border:1px solid var(--border);border-radius:14px;background:var(--bg);box-shadow:var(--shadow-lg);overflow:hidden}.doc-head{height:55px;flex:none;
+  display:flex;align-items:center;justify-content:space-between;padding:0 15px;border-bottom:1px solid var(--border)}.doc-head b{font-size:13px}
+.doc-body{overflow:auto;padding:20px}.doc-body .md{max-width:700px;margin:0 auto}.doc-close{width:34px;height:34px}
 .mode{border:1px solid var(--accent);background:var(--accent-bg);border-radius:10px;padding:10px}
 .mode b{display:block;font-size:13px}.mode span{display:block;font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4}
 .cap-list{display:grid;gap:5px}.cap{display:flex;align-items:center;justify-content:space-between;padding:8px 9px;
@@ -138,8 +188,21 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
 <div class="wrap" data-no-assist>""" + hub_header("chat") + r"""
 <div class="cmd">
   <aside class="rail left" id="leftRail" aria-label="Conversations">
-    <div class="rail-head"><span class="rail-title">Conversations</span><button type="button" class="new-btn" id="newBtn">+ New</button></div>
-    <div class="session-list" id="sessions"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
+    <div class="rail-head"><span class="rail-title">TimeLabs CMO</span><button type="button" class="new-btn" id="newBtn">+ New chat</button></div>
+    <div class="rail-tabs" role="tablist" aria-label="Command sidebar">
+      <button type="button" class="rail-tab" id="chatsTab" role="tab" aria-selected="false">Chats</button>
+      <button type="button" class="rail-tab on" id="companyTab" role="tab" aria-selected="true">Company</button>
+    </div>
+    <div class="session-list" id="sessions" hidden><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
+    <div class="cmo-context" id="cmoContext">
+      <div class="company-card"><b>TimeLabs Co</b><p>Hand-built custom Seiko-movement watches. Company context is loaded and shared across every CMO specialist workflow.</p></div>
+      <div class="context-title">Documents</div>
+      <div class="doc-list" id="documentList"></div>
+      <div class="context-title">Competitors</div>
+      <div class="competitors"><span class="competitor">IndiaModWatches</span><span class="competitor">AG WatchStudio</span><span class="competitor">SeikoMods India</span><span class="competitor">WatchModCustom</span><span class="competitor">Indian microbrands</span></div>
+      <div class="context-title">Context policy</div>
+      <div class="company-card"><p>Current metrics stay connected to their systems of record. Documents hold durable strategy, positioning and operating rules.</p></div>
+    </div>
     <div class="rail-foot"><a class="fallback" href="/ops/agent/">Open classic Labs Chat</a></div>
   </aside>
   <div class="shade" id="shade" aria-hidden="true"></div>
@@ -183,8 +246,24 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
     </div>
   </section>
   <aside class="rail right" id="contextRail" aria-label="Business context">
-    <div class="rail-head"><span class="rail-title">Business context</span><button type="button" class="icon-btn context-toggle" id="contextClose" aria-label="Close business context">×</button></div>
+    <div class="rail-head"><span class="rail-title">CMO intelligence</span><button type="button" class="icon-btn context-toggle" id="contextClose" aria-label="Close business context">×</button></div>
     <div class="context">
+      <div class="context-block"><h3>Measured Instagram snapshot</h3><div class="analytics">
+        <div class="metric"><b>3,117</b><span>followers</span></div><div class="metric"><b>5</b><span>posts / 90 days</span></div>
+        <div class="metric"><b>4,399</b><span>top Reel views</span></div><div class="metric"><b>101</b><span>top interactions</span></div>
+      </div></div>
+      <div class="context-block"><h3>Specialist agents</h3><div class="agent-feed">
+        <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs Instagram specialist under the Hermes CMO charter. Read all CMO context documents and the latest Instagram snapshot. Audit cadence, formats, creative themes, proof, captions, conversion handoff and measurement. Return the next five evidence-led content briefs with hook, shot list, proof, CTA, KPI and review rule. Prepare internal tasks only; do not publish."><span class="agent-icon">IG</span><span><b>Instagram Agent</b><small>Cadence, creative and conversion</small></span><span class="agent-state">Ready</span></button>
+        <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs Content specialist under the Hermes CMO charter. Read Product Information, Marketing Strategy, Brand Voice and the current competitive audit. Build a four-week cross-channel content system from the three strongest evidence-backed themes. Include Reel, carousel, WhatsApp, email and search repurposing, production owner and acceptance criteria. Draft only; do not publish."><span class="agent-icon">CO</span><span><b>Content Agent</b><small>Campaigns and repurposing</small></span><span class="agent-state">Ready</span></button>
+        <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs SEO and GEO specialist under the Hermes CMO charter. Audit the live storefront, product information and competitor sources for technical, on-page, search-intent and AI-answer visibility gaps. Prioritize queries that can lead to qualified custom-watch consultations. Return fixes and content briefs with evidence, effort, expected effect and measurement. Do not change Shopify without approval."><span class="agent-icon">SE</span><span><b>SEO &amp; GEO Agent</b><small>Search and AI visibility</small></span><span class="agent-state">Ready</span></button>
+        <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs Reddit and community specialist. Use the existing Reddit listener and public web research to identify genuine watch-community questions where TimeLabs expertise could help. Separate listening insights from reply opportunities, follow subreddit rules, avoid promotion and astroturfing, and prepare drafts for review only."><span class="agent-icon">RD</span><span><b>Reddit Agent</b><small>Listening and genuine replies</small></span><span class="agent-state">Ready</span></button>
+        <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs WhatsApp and Email lifecycle specialist. Map consent-safe messages from consultation through order, build updates, delivery, care, review and referral. Use the CMO context and current operational reality. Identify missing data and CRM requirements, then prepare the smallest lifecycle plan and drafts. Do not send or broadcast anything."><span class="agent-icon">WA</span><span><b>WhatsApp &amp; Email</b><small>Consultation and lifecycle</small></span><span class="agent-state">Ready</span></button>
+        <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs UGC and owner-proof specialist. Design a permissioned system for build photos, wrist shots, reviews and referral proof from delivery through reuse. Include consent, asset fields, request timing, incentive guardrails and how proof maps back to products. Prepare the workflow and drafts only."><span class="agent-icon">UG</span><span><b>UGC Agent</b><small>Owner proof and referrals</small></span><span class="agent-state">Ready</span></button>
+        <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs influencer and collector-partnership specialist. Research a small, relevant India and diaspora watch-creator set using public evidence. Score fit, audience relevance, authenticity, likely format and risk. Propose a disclosed pilot with selection rules, deliverables, source tracking and stop/scale criteria. Do not contact anyone."><span class="agent-icon">IN</span><span><b>Influencer Agent</b><small>Collector and creator partnerships</small></span><span class="agent-state">Ready</span></button>
+        <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs competitor-intelligence specialist. Read the current audit, then verify only facts likely to have changed. Update the direct, adjacent, substitute and benchmark market map; identify meaningful price, offer, proof, content or channel changes; and state the TimeLabs decision each signal affects. Public research only, no block evasion or contact."><span class="agent-icon">CI</span><span><b>Competitor Agent</b><small>Market changes and threats</small></span><span class="agent-state">Ready</span></button>
+        <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs storefront conversion specialist. Audit the live site against Product Information, Marketing Strategy, Brand Voice and current customer trust gaps. Review navigation, disclosure, proof, product content, mobile friction and consultation handoff. Return a prioritized change plan and dry-run copy; do not modify Shopify."><span class="agent-icon">CV</span><span><b>Storefront Agent</b><small>Proof and conversion</small></span><span class="agent-state">Ready</span></button>
+        <button type="button" class="agent-card prompt-action" data-prompt="Act as the TimeLabs marketing analytics specialist. Inspect only available first-party sales, product, Instagram, channel and operational data. Define the source-to-order measurement contract, identify data-quality gaps, and produce a weekly scorecard with metric definitions and owners. Never treat missing data as zero."><span class="agent-icon">AN</span><span><b>Analytics Agent</b><small>Attribution and scorecards</small></span><span class="agent-state">Ready</span></button>
+      </div></div>
       <div class="context-block"><h3>Active operator</h3><div class="mode"><b>Hermes · CMO + operator</b><span>Owns research, positioning, channel plans and measurement. External actions remain review-gated.</span></div></div>
       <div class="context-block"><h3>CMO cadence</h3><div class="cap-list">
         <div class="cap">Market watch <span>Weekly</span></div>
@@ -199,14 +278,20 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
       <div class="context-block"><h3>Recent activity</h3><div id="events"><div class="event"><p>Loading activity…</p></div></div></div>
     </div>
   </aside>
+  <div class="doc-modal" id="docModal" role="dialog" aria-modal="true" aria-labelledby="docTitle" hidden>
+    <div class="doc-sheet"><div class="doc-head"><b id="docTitle">Context document</b><button type="button" class="icon-btn doc-close" id="docClose" aria-label="Close document">×</button></div><div class="doc-body"><div class="md" id="docBody"></div></div></div>
+  </div>
 </div>
 </div>
+<script type="application/json" id="cmoDocuments">""" + cmo_documents + r"""</script>
 <script>
 (function(){
 const API='/ops/agent/api', threadEl=document.getElementById('thread'), empty=document.getElementById('empty');
 const input=document.getElementById('input'), sendBtn=document.getElementById('sendBtn');
 const statusEl=document.getElementById('agentStatus'), sessionsEl=document.getElementById('sessions');
 const attachEl=document.getElementById('attachments'), composeWrap=document.querySelector('.compose-wrap');
+const cmoContext=document.getElementById('cmoContext'), chatsTab=document.getElementById('chatsTab'), companyTab=document.getElementById('companyTab');
+const docModal=document.getElementById('docModal'), docTitle=document.getElementById('docTitle'), docBody=document.getElementById('docBody');
 let busy=false, attachments=[], uploading=0, lastMessageId=0, historyGen=0, sessionsGen=0, runToken=0;
 function syncSendState(){sendBtn.disabled=busy||uploading>0}
 function stored(k){try{return localStorage.getItem(k)}catch(e){return null}}
@@ -252,6 +337,11 @@ function md(src){let ls=esc(src).split('\n'),h='',i=0;while(i<ls.length){let l=l
  if(/^\s*([-*]|\d+\.)\s+/.test(l)){let o=/^\s*\d+\./.test(l),a=[];while(i<ls.length&&/^\s*([-*]|\d+\.)\s+/.test(ls[i]))a.push('<li>'+inline(ls[i++].replace(/^\s*([-*]|\d+\.)\s+/,''))+'</li>');h+=(o?'<ol>':'<ul>')+a.join('')+(o?'</ol>':'</ul>');continue}
  if(/\|/.test(l)&&i+1<ls.length&&/^\s*\|?[\s:|-]+\|/.test(ls[i+1])){let row=x=>x.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(x=>inline(x.trim()));let hd=row(l);i+=2;let b=[];while(i<ls.length&&/\|/.test(ls[i]))b.push(row(ls[i++]));h+='<table><thead><tr>'+hd.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+b.map(r=>'<tr>'+r.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</tbody></table>';continue}
  let b=[l];i++;while(i<ls.length&&ls[i].trim()&&!/^(#{1,3}\s|```|\s*([-*]|\d+\.)\s)/.test(ls[i]))b.push(ls[i++]);h+='<p>'+inline(b.join('<br>'))+'</p>'}return h}
+let cmoDocs=[];try{cmoDocs=JSON.parse(document.getElementById('cmoDocuments').textContent||'[]')}catch(e){}
+function renderDocuments(){let el=document.getElementById('documentList');el.innerHTML='';cmoDocs.forEach(d=>{let b=document.createElement('button');b.type='button';b.className='doc-btn';b.innerHTML='<span class="doc-icon">D</span><span><b>'+esc(d.title)+'</b><small>'+esc(d.summary)+'</small></span><span class="doc-open">›</span>';b.onclick=()=>openDocument(d);el.appendChild(b)})}
+let docTrigger=null;function openDocument(d){docTrigger=document.activeElement;docTitle.textContent=d.title;docBody.innerHTML=md(d.body);docModal.hidden=false;closeMenu(false);document.getElementById('docClose').focus()}
+function closeDocument(){if(docModal.hidden)return;docModal.hidden=true;if(docTrigger&&docTrigger.focus)docTrigger.focus();docTrigger=null}
+function setSidebar(view){let chats=view==='chats';sessionsEl.hidden=!chats;cmoContext.hidden=chats;chatsTab.classList.toggle('on',chats);companyTab.classList.toggle('on',!chats);chatsTab.setAttribute('aria-selected',String(chats));companyTab.setAttribute('aria-selected',String(!chats))}
 function bubble(role,text){if(empty&&empty.parentNode)empty.remove();let m=document.createElement('div');m.className='msg '+role;
  m.innerHTML='<div class="msg-label">'+(role==='user'?'You':'Hermes')+'</div><div class="bubble"></div>';let b=m.querySelector('.bubble');
  if(role==='agent'){b.innerHTML='<div class="md">'+md(text)+'</div><div class="msg-tools"><button type="button">Copy</button></div>';b.querySelector('button').onclick=e=>navigator.clipboard.writeText(text).then(()=>{e.target.textContent='Copied';setTimeout(()=>e.target.textContent='Copy',1000)})}
@@ -299,7 +389,7 @@ async function switchSession(id){
   await loadSessions();
   focusComposer();
 }
-async function newSession(){runToken++;try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){notice(e.message,true)}}
+async function newSession(){runToken++;setSidebar('chats');try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){notice(e.message,true)}}
 async function send(){let text=input.value.trim();if(busy||uploading||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastMessageId,accepted=false;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text||(at.length+' photo'+(at.length===1?'':'s')));let token=++runToken;busy=true;syncSendState();statusEl.textContent='Working';let wait=thinking();
  try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name}))})});accepted=true;
   if(d.reply){wait.remove();if(runSid===sid){bubble('agent',d.reply);lastMessageId=Math.max(lastMessageId,Number(d.message_id)||0)}}
@@ -318,7 +408,9 @@ let form=new FormData();form.append('image',f);uploading++;syncSendState();try{l
 function renderAttachments(){attachEl.innerHTML='';attachments.forEach((a,i)=>{let c=document.createElement('div');c.className='attachment';c.innerHTML=(a.url?'<img src="'+a.url+'" alt="">':'')+'<span>'+esc(a.name)+'</span><button type="button" aria-label="Remove">×</button>';c.querySelector('button').onclick=()=>{attachments.splice(i,1);renderAttachments()};attachEl.appendChild(c)})}
 async function loadEvents(){try{let d=await api('/events'),el=document.getElementById('events');el.innerHTML='';(d.events||[]).slice(0,8).forEach(x=>{let v=document.createElement('div');v.className='event';v.innerHTML='<b>'+esc((x.app||'Labs')+' · '+(x.kind||'activity').replace(/_/g,' '))+'</b><p>'+esc(x.detail||'')+'</p><time>'+esc((x.created_at||'').slice(0,16).replace('T',' '))+'</time>';el.appendChild(v)});if(!el.children.length)el.innerHTML='<div class="event"><p>No recent activity.</p></div>'}catch(e){}}
 function autosize(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,150)+'px'}
-document.querySelectorAll('.start').forEach(b=>b.onclick=()=>{input.value=b.dataset.prompt;send()});document.getElementById('newBtn').onclick=newSession;
+document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.prompt;send()});document.getElementById('newBtn').onclick=newSession;
+chatsTab.onclick=()=>setSidebar('chats');companyTab.onclick=()=>setSidebar('company');document.getElementById('docClose').onclick=closeDocument;
+docModal.onclick=e=>{if(e.target===docModal)closeDocument()};renderDocuments();setSidebar('company');
 document.getElementById('attachBtn').onclick=()=>document.getElementById('fileInput').click();document.getElementById('fileInput').onchange=async e=>{for(let f of e.target.files)await upload(f);e.target.value=''};
 sendBtn.onclick=send;input.oninput=autosize;input.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}};
 document.addEventListener('paste',e=>{for(let x of (e.clipboardData&&e.clipboardData.items)||[])if(x.kind==='file'&&x.type.indexOf('image/')===0)upload(x.getAsFile())});
@@ -359,7 +451,7 @@ window.addEventListener('popstate',()=>{
  loadSessions();
  focusComposer();
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&(rail.classList.contains('open')||contextRail.classList.contains('open')))closeMenu()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!docModal.hidden){closeDocument();return}if(e.key==='Escape'&&(rail.classList.contains('open')||contextRail.classList.contains('open')))closeMenu()});
 for(let mq of [leftMq,contextMq]){if(mq.addEventListener)mq.addEventListener('change',()=>closeMenu(false));else mq.addListener(()=>closeMenu(false))}
 syncDrawers();
 loadSessions().then(loadHistory);loadEvents();focusComposer();
