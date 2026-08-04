@@ -1602,6 +1602,19 @@ NONADMIN_PREAMBLE = (
     "Recent conversation:\n"
 )
 
+CONTENT_HANDOFF = (
+    "Creator handoff format: put text that can be pasted into the destination "
+    "inside one or more fenced code blocks. Put a short plain heading immediately "
+    "before each block so the creator knows where it belongs. Use separate blocks "
+    "for separate fields or choices, such as Email subject, Email body, Story frame "
+    "or Caption option. Never put explanations, citations, internal notes or review "
+    "instructions inside a paste block. Never leave bracketed placeholders in a "
+    "paste block. If an essential fact is missing, ask one short question instead of "
+    "guessing; otherwise omit the unknown detail. After the paste blocks, add a "
+    "'Final checks' section only when useful, with no more than three brief items the "
+    "creator must confirm before publishing. Do not narrate that you followed these rules."
+)
+
 # Content routes: a slash command expands into a structured brief and selects
 # the channel-specific writing standard. These create drafts only; authorization
 # and any external action remain separate.
@@ -1620,7 +1633,8 @@ TEMPLATES = {
     "/ad": ("meta_ad",
         "Write Meta ad copy in the Timelabs brand voice: 3 primary-text variants "
         "(under 125 chars each), 3 headlines (under 40 chars), 1 description (under 30 chars). "
-        "Use only supplied proof and no fake urgency. Present as a table. Brief: "
+        "Use only supplied proof and no fake urgency. Keep primary text, headlines and "
+        "description in clearly labelled paste blocks, not a table. Brief: "
     ),
     "/product": ("product",
         "Write a Shopify product description in the Timelabs brand voice: 2-3 sentence "
@@ -1733,6 +1747,8 @@ def build_prompt(session_id, message, images=None, admin=True, content_channel=N
         "When this request creates or rewrites public/customer-facing content, "
         "apply this mandatory standard before drafting:\n"
         + writing_quality.prompt_brief(content_channel or "general"))
+    if content_channel:
+        lines.append(CONTENT_HANDOFF)
     if not admin:
         lines.append(
             "Approved public TimeLabs context for this team account: TimeLabs Co is an "

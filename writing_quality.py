@@ -151,8 +151,9 @@ def infer_channel(request):
     """
     text = (request or "").strip().lower()
     if not re.search(
-            r"\b(?:write|draft|rewrite|create|prepare|caption|copy|script|message|"
-            r"post|description|reply|email|ad)\b", text):
+            r"\b(?:write|draft|rewrite|edit|shorten|lengthen|expand|adapt|humanize|"
+            r"humanise|create|prepare|caption|copy|script|message|post|description|"
+            r"reply|email|ad)\b|\bmake (?:this|it)\b", text):
         return None
     routes = (
         ("reddit", ("reddit", "subreddit")),

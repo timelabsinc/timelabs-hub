@@ -15,6 +15,7 @@ OUT = "/var/www/ops/command.html"
 BASE = Path("/root/ops-dashboard")
 
 CMO_DOCUMENTS = [
+    ("creator", "Creator guide", "Simple workflow, channel briefs and publish checklist", BASE / "docs/creator-guide.md"),
     ("product", "Product Information", "Product, customer, pricing and platform context", BASE / "docs/cmo/product-information.md"),
     ("strategy", "Marketing Strategy", "ICP, positioning, channels and 30-day direction", BASE / "docs/cmo/marketing-strategy.md"),
     ("competition", "Competitive Intelligence", "Market map, direct rivals and channel gaps", BASE / "docs/competitive-intelligence-audit.md"),
@@ -116,6 +117,16 @@ html,body{height:100%;overflow:hidden}
 .creator-desk{margin-top:22px;padding:16px;border:1px solid color-mix(in srgb,var(--accent) 55%,var(--border));
   border-radius:13px;background:linear-gradient(135deg,var(--accent-bg),var(--card))}
 .creator-more{margin:10px 2px 0;color:var(--muted);font-size:10.5px;line-height:1.45}
+.creator-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:0 0 12px}
+.creator-step{display:grid;grid-template-columns:24px minmax(0,1fr);gap:7px;align-items:start;padding:9px;
+  border:1px solid var(--border);border-radius:9px;background:color-mix(in srgb,var(--card) 84%,transparent)}
+.creator-step i{width:23px;height:23px;display:grid;place-items:center;border-radius:7px;background:var(--accent);color:#fff;
+  font-style:normal;font-size:10px;font-weight:850}.creator-step b{display:block;font-size:10.5px}.creator-step span{display:block;
+  color:var(--muted);font-size:9.5px;line-height:1.35;margin-top:2px}
+.creator-help{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:11px;padding-top:11px;
+  border-top:1px solid var(--border)}.creator-help p{margin:0;color:var(--muted);font-size:10.5px;line-height:1.4}
+.creator-guide-btn{flex:none;border:1px solid var(--accent);border-radius:8px;background:var(--accent-bg);color:var(--accent);
+  padding:7px 10px;font:inherit;font-size:10.5px;font-weight:750;cursor:pointer}
 .cmo-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
 .cmo-head b{font-size:14px}.cmo-head span{display:block;color:var(--muted);font-size:12px;line-height:1.45;margin-top:3px}
 .cmo-badge{flex:none;border-radius:999px;padding:4px 8px;background:var(--accent);color:white;font-size:10px;font-weight:800;
@@ -135,10 +146,13 @@ html,body{height:100%;overflow:hidden}
   padding:16px 18px;color:var(--ink);font-size:14px;line-height:1.6;box-shadow:var(--shadow)}
 .md h1,.md h2,.md h3{margin:12px 0 6px;line-height:1.25}.md h1{font-size:20px}.md h2{font-size:17px}.md h3{font-size:15px}
 .md p{margin:7px 0}.md ul,.md ol{margin:7px 0;padding-left:20px}.md pre{overflow:auto;background:var(--bg);
-  border:1px solid var(--border);padding:10px;border-radius:8px}.md code{font-size:.9em;background:var(--bg);padding:1px 4px;border-radius:4px}
+  border:1px solid var(--border);padding:10px;border-radius:8px;white-space:pre-wrap}.msg .md pre{position:relative;padding:42px 10px 10px}.md code{font-size:.9em;background:var(--bg);padding:1px 4px;border-radius:4px}
+.md pre code{padding:0;background:transparent}.block-copy{position:absolute;top:7px;right:7px;min-height:28px;border:1px solid var(--border);
+  border-radius:7px;background:var(--card);color:var(--accent);font:inherit;font-size:10.5px;font-weight:750;padding:4px 8px;cursor:pointer}
 .md table{display:block;overflow:auto;border-collapse:collapse;margin:10px 0}.md th,.md td{border:1px solid var(--border);padding:6px 9px;text-align:left}
 .md a{color:var(--accent)}.msg-tools{display:flex;gap:5px;margin-top:10px;padding-top:9px;border-top:1px solid var(--border)}
 .msg-tools button{min-height:32px;border:0;background:none;color:var(--muted);font:inherit;font-size:11px;cursor:pointer;padding:5px 8px}
+.copy-all{font-weight:700}
 .msg-tools button:hover{color:var(--accent)}
 .thinking{max-width:900px;margin:0 auto 18px;color:var(--muted);font-size:12px;display:flex;gap:8px;align-items:center}
 .dots{display:flex;gap:3px}.dots i{width:6px;height:6px;background:var(--accent);border-radius:50%;animation:pulse 1s infinite}
@@ -201,7 +215,7 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
   .workspace{height:100%}.mobile-toggle{display:inline-grid;place-items:center}
   .rail.left{position:absolute;inset:0 auto 0 0;width:min(84vw,300px);z-index:30;transform:translateX(-101%);
     transition:transform .18s}.rail.left.open{transform:none}
-  .thread{padding:18px 12px}.empty{margin-top:3vh}.starts,.cmo-actions{grid-template-columns:1fr}
+  .thread{padding:18px 12px}.empty{margin-top:3vh}.starts,.cmo-actions,.creator-steps{grid-template-columns:1fr}
   .compose-wrap{padding-left:8px;padding-right:8px}.msg.user .bubble{max-width:90%}
   .compose button,.mobile-toggle,.context-toggle{width:44px;height:44px}
   .work-head{height:58px;padding:0 8px}.work-title span{display:none}.status{font-size:0}.status i{width:8px;height:8px}
@@ -211,7 +225,7 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
 <div class="wrap" data-no-assist>""" + hub_header("chat") + r"""
 <div class="cmd">
   <aside class="rail left" id="leftRail" aria-label="Conversations">
-    <div class="rail-head"><span class="rail-title">TimeLabs CMO</span><button type="button" class="new-btn" id="newBtn">+ New chat</button></div>
+    <div class="rail-head"><span class="rail-title" id="leftRailTitle">TimeLabs CMO</span><button type="button" class="new-btn" id="newBtn">+ New chat</button></div>
     <div class="rail-tabs" role="tablist" aria-label="Command sidebar">
       <button type="button" class="rail-tab" id="chatsTab" role="tab" aria-selected="false">Chats</button>
       <button type="button" class="rail-tab on" id="companyTab" role="tab" aria-selected="true">Company</button>
@@ -242,18 +256,24 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
         <h1 id="emptyTitle">What should we move forward?</h1>
         <p id="emptyCopy">Ask a question or give Hermes a job. It can inspect the business and work across the Labs OS tools available to your account.</p>
         <div class="creator-desk" id="creatorDesk" hidden>
-          <div class="cmo-head"><div><b>Creator desk</b><span>Attach photos or paste the real facts, choose a route, then edit the result. Your account cannot post, send or publish.</span></div><div class="cmo-badge">Draft only</div></div>
-          <div class="cmo-actions">
-            <button type="button" class="cmo-action" data-fill="/caption Route: showcase. Use the attached photos and facts. Add one detail the image cannot show."><b>Instagram caption</b><small>Showcase, story or product detail</small></button>
-            <button type="button" class="cmo-action" data-fill="/story Use the attached photos and facts. Build one short sequence with a clear interaction."><b>Instagram Story</b><small>Frames, copy and interaction</small></button>
-            <button type="button" class="cmo-action" data-fill="/reddit Route: showcase. Use the attached photos and facts. Make it useful to watch builders, not promotional."><b>Reddit post</b><small>Showcase, diary, review or answer</small></button>
-            <button type="button" class="cmo-action" data-fill="/whatsapp Situation: . Facts we can state: . The next step should be: ."><b>WhatsApp message</b><small>Community or customer update</small></button>
-            <button type="button" class="cmo-action" data-fill="/sales Buyer asked: . Verified price/specification/availability/delivery facts: ."><b>Sales reply</b><small>Helpful one-to-one response</small></button>
-            <button type="button" class="cmo-action" data-fill="/email Recipient and situation: . Facts to include: . Requested next step: ."><b>Email</b><small>Customer, campaign or follow-up</small></button>
-            <button type="button" class="cmo-action" data-fill="/blog Question to answer: . First-party evidence and source links: ."><b>Blog draft</b><small>Useful, sourced long-form copy</small></button>
-            <button type="button" class="cmo-action" data-fill="/youtube Video subject: . Footage available: . Verified facts: ."><b>YouTube script</b><small>Spoken script and shot cues</small></button>
+          <div class="cmo-head"><div><b>Creator desk</b><span>Choose where the content will go. Hermes will turn your photos and rough facts into copy-ready text.</span></div><div class="cmo-badge">Draft only</div></div>
+          <div class="creator-steps" aria-label="Creator workflow">
+            <div class="creator-step"><i>1</i><div><b>Add the source</b><span>Attach photos or paste the real question, link or notes.</span></div></div>
+            <div class="creator-step"><i>2</i><div><b>Choose a channel</b><span>Complete the short form that appears below. Rough facts are fine.</span></div></div>
+            <div class="creator-step"><i>3</i><div><b>Review and copy</b><span>Check every claim, then use Copy this text and publish manually.</span></div></div>
           </div>
-          <p class="creator-more">More routes: type <code>/ad</code>, <code>/product</code>, <code>/linkedin</code> or <code>/founder</code> before the brief.</p>
+          <div class="cmo-actions">
+            <button type="button" class="cmo-action" data-tip="Attach the final media, then fill only confirmed facts. Delete any line you do not need." data-fill="/caption&#10;Content goal: showcase / review / product detail&#10;What the photo or video shows: &#10;Confirmed watch facts: &#10;One detail the image cannot show: &#10;Desired next step, if any: &#10;Words or claims to avoid: "><b>Instagram caption</b><small>For a Reel, carousel or product photo</small></button>
+            <button type="button" class="cmo-action" data-tip="List the photos or clips in order. Hermes will return each Story frame separately." data-fill="/story&#10;Purpose of this Story: &#10;Photos or clips, in order: &#10;Confirmed facts to include: &#10;Poll, question or link sticker, if any: &#10;Desired next step: "><b>Instagram Story</b><small>Frames, on-screen text and interaction</small></button>
+            <button type="button" class="cmo-action" data-tip="Say where it will be posted and disclose the TimeLabs relationship when relevant." data-fill="/reddit&#10;Subreddit: &#10;Route: showcase / build diary / honest review / answer / comparison / founder note&#10;What happened or what the media shows: &#10;Useful details for the community: &#10;Our relationship to the post: &#10;Question to ask, if genuine: "><b>Reddit</b><small>Showcase, diary, review or useful answer</small></button>
+            <button type="button" class="cmo-action" data-tip="Paste the real situation. Remove unnecessary phone numbers, payment details or private information." data-fill="/whatsapp&#10;Message type: customer reply / community update / follow-up&#10;What happened or what they asked: &#10;Confirmed facts we can state: &#10;One next step: &#10;Tone: calm / warm / direct: "><b>WhatsApp</b><small>Customer or community message</small></button>
+            <button type="button" class="cmo-action" data-tip="Give only confirmed price, availability, specification and delivery information." data-fill="/sales&#10;Buyer asked: &#10;Confirmed price: &#10;Confirmed availability: &#10;Relevant specifications: &#10;Confirmed delivery information: &#10;Best next step: "><b>Sales reply</b><small>Answer a buyer without pressure</small></button>
+            <button type="button" class="cmo-action" data-tip="Hermes will return subject options and the body as separate copy blocks." data-fill="/email&#10;Email type: customer / campaign / follow-up&#10;Who it is for: &#10;Why we are writing: &#10;Confirmed facts to include: &#10;Requested next step: &#10;Link, if verified: "><b>Email</b><small>Subject and body, ready to paste</small></button>
+            <button type="button" class="cmo-action" data-tip="Use openable sources. Do not include a statistic or quote without its source." data-fill="/blog&#10;Question the article must answer: &#10;Reader: &#10;First-party evidence: &#10;Openable source links: &#10;Products or examples that genuinely help: &#10;Desired next step: "><b>Blog</b><small>Sourced article in Markdown</small></button>
+            <button type="button" class="cmo-action" data-tip="List the footage you actually have so the script does not request impossible shots." data-fill="/youtube&#10;Video subject: &#10;Who it is for: &#10;Available footage: &#10;Verified facts: &#10;Target length: &#10;Desired next step: "><b>YouTube</b><small>Spoken script with simple shot cues</small></button>
+          </div>
+          <p class="creator-more">More routes: type <code>/ad</code>, <code>/product</code>, <code>/linkedin</code> or <code>/founder</code> before your notes.</p>
+          <div class="creator-help"><p>Not sure what to include? Open the basic guide. Never fill a missing fact by guessing.</p><button type="button" class="creator-guide-btn" id="creatorGuideBtn">Open Creator guide</button></div>
         </div>
         <div id="ownerDesk" hidden>
         <div class="cmo-desk">
@@ -281,12 +301,29 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
         <textarea id="input" rows="1" placeholder="Ask Hermes anything…" aria-label="Command"></textarea>
         <button type="button" class="send-btn" id="sendBtn" aria-label="Send">↑</button>
       </div>
-      <div class="compose-note">Ask Hermes for a dry run before any business change. Existing tool safeguards still apply.</div>
+      <div class="compose-note" id="composeNote">Ask Hermes for a dry run before any business change. Existing tool safeguards still apply.</div>
     </div>
   </section>
   <aside class="rail right" id="contextRail" aria-label="Business context">
-    <div class="rail-head"><span class="rail-title">CMO intelligence</span><button type="button" class="icon-btn context-toggle" id="contextClose" aria-label="Close business context">×</button></div>
+    <div class="rail-head"><span class="rail-title" id="contextRailTitle">CMO intelligence</span><button type="button" class="icon-btn context-toggle" id="contextClose" aria-label="Close business context">×</button></div>
     <div class="context">
+      <div id="creatorContext" hidden>
+        <div class="context-block"><h3>Quick start</h3><div class="cap-list">
+          <div class="cap">1. Attach the source <span>Photos or notes</span></div>
+          <div class="cap">2. Choose the channel <span>Fill the short form</span></div>
+          <div class="cap">3. Review the result <span>Check every fact</span></div>
+          <div class="cap">4. Copy and publish <span>Manual step</span></div>
+        </div></div>
+        <div class="context-block"><h3>Before publishing</h3><div class="cap-list">
+          <div class="cap">Media matches copy <span>Required</span></div>
+          <div class="cap">Claims are confirmed <span>Required</span></div>
+          <div class="cap">Price and link checked <span>Required</span></div>
+          <div class="cap">Read aloud once <span>Recommended</span></div>
+        </div></div>
+        <div class="context-block"><h3>Your access</h3><div class="mode"><b>Private drafting only</b><span>You can research, attach media and prepare content. This account cannot send, post, publish or access customer and order data.</span></div></div>
+        <button type="button" class="creator-guide-btn" id="creatorGuideSideBtn">Open the full Creator guide</button>
+      </div>
+      <div id="ownerContext">
       <div class="context-block"><h3>Measured Instagram snapshot</h3><div class="analytics">
         <div class="metric"><b>__CMO_IG_FOLLOWERS__</b><span>followers</span></div><div class="metric"><b>__CMO_IG_POSTS__</b><span>posts / 90 days</span></div>
         <div class="metric"><b>__CMO_IG_TOP_VIEWS__</b><span>top content views</span></div><div class="metric"><b>__CMO_IG_TOP_INTERACTIONS__</b><span>top interactions</span></div>
@@ -315,6 +352,7 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
         <div class="cap">Business actions <span>Tool policy</span></div>
       </div></div>
       <div class="context-block"><h3>Recent activity</h3><div id="events"><div class="event"><p>Loading activity…</p></div></div></div>
+      </div>
     </div>
   </aside>
   <div class="doc-modal" id="docModal" role="dialog" aria-modal="true" aria-labelledby="docTitle" hidden>
@@ -338,10 +376,17 @@ async function loadAccessMode(){
   document.body.classList.toggle('creator-mode',creator);
   document.getElementById('ownerDesk').hidden=creator;
   document.getElementById('creatorDesk').hidden=!creator;
+  document.getElementById('ownerContext').hidden=creator;
+  document.getElementById('creatorContext').hidden=!creator;
   if(creator){
    document.getElementById('emptyTitle').textContent='What are we creating?';
-   document.getElementById('emptyCopy').textContent='Attach the source material, choose a channel, and give Hermes the facts. Every result is a private draft for human review.';
+   document.getElementById('emptyCopy').textContent='Add the source, choose where it will be published, then fill the short form. Hermes returns text you can review and copy.';
    document.getElementById('operatorMode').textContent='Hermes · content drafting and research';
+   document.getElementById('leftRailTitle').textContent='Creator workspace';
+   document.getElementById('contextRailTitle').textContent='Creator checklist';
+   document.getElementById('composeNote').textContent='Use confirmed facts only. Hermes prepares drafts; you review, copy and publish manually.';
+   input.placeholder='Choose a channel above, or paste your content brief…';
+   setSidebar('chats');
   }
  }catch(e){}
 }
@@ -389,14 +434,26 @@ function md(src){let ls=esc(src).split('\n'),h='',i=0;while(i<ls.length){let l=l
  if(/^\s*([-*]|\d+\.)\s+/.test(l)){let o=/^\s*\d+\./.test(l),a=[];while(i<ls.length&&/^\s*([-*]|\d+\.)\s+/.test(ls[i]))a.push('<li>'+inline(ls[i++].replace(/^\s*([-*]|\d+\.)\s+/,''))+'</li>');h+=(o?'<ol>':'<ul>')+a.join('')+(o?'</ol>':'</ul>');continue}
  if(/\|/.test(l)&&i+1<ls.length&&/^\s*\|?[\s:|-]+\|/.test(ls[i+1])){let row=x=>x.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(x=>inline(x.trim()));let hd=row(l);i+=2;let b=[];while(i<ls.length&&/\|/.test(ls[i]))b.push(row(ls[i++]));h+='<table><thead><tr>'+hd.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+b.map(r=>'<tr>'+r.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</tbody></table>';continue}
  let b=[l];i++;while(i<ls.length&&ls[i].trim()&&!/^(#{1,3}\s|```|\s*([-*]|\d+\.)\s)/.test(ls[i]))b.push(ls[i++]);h+='<p>'+inline(b.join('<br>'))+'</p>'}return h}
+async function copyText(value){
+ try{await navigator.clipboard.writeText(value);return true}catch(e){
+  let t=document.createElement('textarea');t.value=value;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();
+  let ok=false;try{ok=document.execCommand('copy')}catch(e2){}t.remove();return ok
+ }
+}
+function copiedState(button,label){let old=button.textContent;button.textContent=label||'Copied';setTimeout(()=>button.textContent=old,1200)}
 let cmoDocs=[];try{cmoDocs=JSON.parse(document.getElementById('cmoDocuments').textContent||'[]')}catch(e){}
 function renderDocuments(){let el=document.getElementById('documentList');el.innerHTML='';cmoDocs.forEach(d=>{let b=document.createElement('button');b.type='button';b.className='doc-btn';b.innerHTML='<span class="doc-icon">D</span><span><b>'+esc(d.title)+'</b><small>'+esc(d.summary)+'</small></span><span class="doc-open">›</span>';b.onclick=()=>openDocument(d);el.appendChild(b)})}
 let docTrigger=null;function openDocument(d){docTrigger=document.activeElement;docTitle.textContent=d.title;docBody.innerHTML=md(d.body);docModal.hidden=false;closeMenu(false);document.getElementById('docClose').focus()}
+function openCreatorGuide(){let d=cmoDocs.find(x=>x.key==='creator');if(d)openDocument(d)}
 function closeDocument(){if(docModal.hidden)return;docModal.hidden=true;if(docTrigger&&docTrigger.focus)docTrigger.focus();docTrigger=null}
 function setSidebar(view){let chats=view==='chats';sessionsEl.hidden=!chats;cmoContext.hidden=chats;chatsTab.classList.toggle('on',chats);companyTab.classList.toggle('on',!chats);chatsTab.setAttribute('aria-selected',String(chats));companyTab.setAttribute('aria-selected',String(!chats))}
 function bubble(role,text){if(empty&&empty.parentNode)empty.remove();let m=document.createElement('div');m.className='msg '+role;
  m.innerHTML='<div class="msg-label">'+(role==='user'?'You':'Hermes')+'</div><div class="bubble"></div>';let b=m.querySelector('.bubble');
- if(role==='agent'){b.innerHTML='<div class="md">'+md(text)+'</div><div class="msg-tools"><button type="button">Copy</button></div>';b.querySelector('button').onclick=e=>navigator.clipboard.writeText(text).then(()=>{e.target.textContent='Copied';setTimeout(()=>e.target.textContent='Copy',1000)})}
+ if(role==='agent'){
+  b.innerHTML='<div class="md">'+md(text)+'</div><div class="msg-tools"><button type="button" class="copy-all">Copy full response</button></div>';
+  b.querySelector('.copy-all').onclick=async e=>{if(await copyText(text))copiedState(e.target)};
+  b.querySelectorAll('.md pre').forEach(pre=>{let code=pre.querySelector('code'),button=document.createElement('button');button.type='button';button.className='block-copy';button.textContent='Copy this text';button.onclick=async()=>{if(await copyText(code.textContent))copiedState(button)};pre.appendChild(button)})
+ }
  else b.textContent=text;threadEl.appendChild(m);threadEl.scrollTop=threadEl.scrollHeight;return m}
 function thinking(){let creator=document.body.classList.contains('creator-mode'),d=document.createElement('div');d.className='thinking';d.innerHTML='<span class="dots"><i></i><i></i><i></i></span><span>'+(creator?'Hermes is drafting with the TimeLabs writing standard…':'Hermes is working with live business context…')+'</span>';threadEl.appendChild(d);threadEl.scrollTop=threadEl.scrollHeight;return d}
 function notice(text,bad){let n=document.createElement('div');n.className='notice'+(bad?' bad':'');n.textContent=text;threadEl.appendChild(n);threadEl.scrollTop=threadEl.scrollHeight;return n}
@@ -461,9 +518,10 @@ function renderAttachments(){attachEl.innerHTML='';attachments.forEach((a,i)=>{l
 async function loadEvents(){try{let d=await api('/events'),el=document.getElementById('events');el.innerHTML='';(d.events||[]).slice(0,8).forEach(x=>{let v=document.createElement('div');v.className='event';v.innerHTML='<b>'+esc((x.app||'Labs')+' · '+(x.kind||'activity').replace(/_/g,' '))+'</b><p>'+esc(x.detail||'')+'</p><time>'+esc((x.created_at||'').slice(0,16).replace('T',' '))+'</time>';el.appendChild(v)});if(!el.children.length)el.innerHTML='<div class="event"><p>No recent activity.</p></div>'}catch(e){}}
 function autosize(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,150)+'px'}
 document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.prompt;send()});
-document.querySelectorAll('[data-fill]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.fill;autosize();focusComposer()});document.getElementById('newBtn').onclick=newSession;
+document.querySelectorAll('[data-fill]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.fill;document.getElementById('composeNote').textContent=b.dataset.tip||'Fill what you know. Never guess a missing fact.';autosize();focusComposer()});document.getElementById('newBtn').onclick=newSession;
 chatsTab.onclick=()=>setSidebar('chats');companyTab.onclick=()=>setSidebar('company');document.getElementById('docClose').onclick=closeDocument;
 docModal.onclick=e=>{if(e.target===docModal)closeDocument()};renderDocuments();setSidebar('company');
+document.getElementById('creatorGuideBtn').onclick=openCreatorGuide;document.getElementById('creatorGuideSideBtn').onclick=openCreatorGuide;
 document.getElementById('attachBtn').onclick=()=>document.getElementById('fileInput').click();document.getElementById('fileInput').onchange=async e=>{for(let f of e.target.files)await upload(f);e.target.value=''};
 sendBtn.onclick=send;input.oninput=autosize;input.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}};
 document.addEventListener('paste',e=>{for(let x of (e.clipboardData&&e.clipboardData.items)||[])if(x.kind==='file'&&x.type.indexOf('image/')===0)upload(x.getAsFile())});

@@ -46,6 +46,8 @@ class WritingQualityTests(unittest.TestCase):
             "Draft a WhatsApp sales message for this buyer": "sales",
             "Create a Reddit showcase post": "reddit",
             "Rewrite this customer email": "email",
+            "Make this shorter without changing the facts": "general",
+            "Adapt the approved copy for another channel": "general",
             "What were sales yesterday?": None,
         }
         for request, expected in cases.items():
