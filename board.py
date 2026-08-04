@@ -37,14 +37,24 @@ CSS = """
 .bd-chip.on{background:var(--accent);border-color:var(--accent);color:#fff;}
 .bd-chip .c{margin-left:6px;font-size:10.5px;opacity:.6;font-variant-numeric:tabular-nums;}
 
-.bd-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px;}
+/* align-items:start, or one tall card stretches every card beside it to
+   match and the shorter ones grow a dead zone under their title. */
+.bd-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));
+  gap:14px;align-items:start;}
 .bd-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
   overflow:hidden;box-shadow:var(--shadow);cursor:pointer;display:flex;flex-direction:column;}
 .bd-card:hover{border-color:var(--border-2);}
 .bd-thumb{aspect-ratio:4/3;background:var(--card-2);display:flex;align-items:center;
-  justify-content:center;color:var(--muted);position:relative;}
-.bd-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  justify-content:center;color:var(--muted);position:relative;overflow:hidden;}
+/* Absolutely positioned, not height:100%. A percentage height against a
+   parent sized only by aspect-ratio is indefinite, so it resolves to auto
+   and a portrait image (652x1250 here) renders full height and bursts the
+   tile. Same pattern as the Reddit picker's grid. */
+.bd-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  display:block;}
 .bd-thumb svg{width:30px;height:30px;stroke:var(--muted);fill:none;stroke-width:1.6;}
+.bd-noimg{padding:12px 13px;font-size:12px;line-height:1.5;color:var(--muted);
+  overflow:hidden;text-align:left;}
 .bd-card.archived{opacity:.55;}
 .bd-play{position:absolute;top:7px;right:7px;width:26px;height:26px;border-radius:50%;
   background:rgba(0,0,0,.58);display:flex;align-items:center;justify-content:center;}
@@ -52,10 +62,10 @@ CSS = """
 .bd-arch-badge{position:absolute;top:7px;left:7px;background:rgba(0,0,0,.55);color:#fff;
   font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.03em;
   padding:2px 7px;border-radius:5px;}
-.bd-body{padding:10px 12px 12px;display:flex;flex-direction:column;gap:6px;flex:1;}
+.bd-body{padding:10px 12px 12px;display:flex;flex-direction:column;gap:6px;}
 .bd-title{font-size:13.5px;font-weight:650;color:var(--ink);line-height:1.3;}
 .bd-cat{font-size:11px;color:var(--accent);font-weight:600;}
-.bd-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:auto;}
+.bd-tags{display:flex;flex-wrap:wrap;gap:5px;}
 .bd-tag{font-size:10.5px;color:var(--muted);background:var(--card-2);border-radius:5px;
   padding:2px 7px;}
 .bd-empty{color:var(--muted);font-size:13.5px;padding:40px 0;text-align:center;}
@@ -389,9 +399,14 @@ function stateBadge(r){
 function drawGrid(){
   $('bd-empty').style.display=refs.length?'none':'block';
   $('bd-grid').innerHTML=refs.map(function(r){
+    /* An idea can be worth keeping without a picture. Show the opening of
+       the write-up instead of an empty frame, so it reads as a note rather
+       than a broken tile. */
     var thumb=r.photo_count>0
       ? '<img src="'+thumbUrl(r.id,0)+'" alt="" loading="lazy" decoding="async">'
-      : '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg>';
+      : (r.analysis
+          ? '<span class="bd-noimg">'+esc(r.analysis.slice(0,150))+'…</span>'
+          : '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg>');
     var tags=(r.tags||[]).slice(0,4).map(function(t){return '<span class="bd-tag">'+esc(t)+'</span>';}).join('');
     return '<div class="bd-card'+(r.archived?' archived':'')+'" data-id="'+r.id+'">'
       +'<div class="bd-thumb">'+thumb+(r.archived?'<span class="bd-arch-badge">Archived</span>':'')

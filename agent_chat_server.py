@@ -1761,12 +1761,17 @@ def _reference_discover_run(board_id):
                 _fsync_directory(ref_dir)
         conn = db()
         try:
-            # An item with no usable image is not a design reference. Drop it
-            # rather than leave a blank tile the owner has to clean up.
+            # For a visual source the picture IS the reference, so an item
+            # without one is dropped rather than left as a blank tile. For
+            # ideas the payload is the write-up — throwing away a good idea
+            # because its article had no clean image loses the actual value,
+            # and it lost a whole run that way.
             if stored:
                 conn.execute(
                     "UPDATE design_references SET local_photos=? WHERE id=?",
                     (json.dumps(stored), ref_id))
+                kept += 1
+            elif source == "ideas" and str(item.get("analysis") or "").strip():
                 kept += 1
             else:
                 conn.execute("DELETE FROM design_references WHERE id=?", (ref_id,))
@@ -1776,7 +1781,9 @@ def _reference_discover_run(board_id):
         finally:
             conn.close()
     if not kept:
-        raise ValueError("found results, but none had an image we could save")
+        raise ValueError(
+            "found results, but nothing usable came back" if source == "ideas"
+            else "found results, but none had an image we could save")
     return kept
 
 
