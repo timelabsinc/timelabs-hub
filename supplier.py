@@ -30,7 +30,7 @@ import os
 import sys
 
 sys.path.insert(0, "/root/ops-dashboard")
-from hub_shell import HUB_STYLE
+from hub_shell import HUB_STYLE, ROLE_PREVIEW_JS, role_preview_control
 
 OUT = "/var/www/ops/supplier.html"
 
@@ -1721,7 +1721,7 @@ if(/^#batch-\d+$/.test(location.hash||'')){
   if(_bt)_bt.click();
 }
 
-fetch(API+'/whoami').then(function(r){return r.ok?r.json():null;}).then(function(i){
+(window.LabsAccessPromise||fetch(API+'/access/me').then(function(r){return r.ok?r.json():null;})).then(function(i){
   if(i&&i.email){var w=$('who');if(w)w.textContent=i.email;}
   if(i&&i.admin){IS_ADMIN=true; if(BILLS.length)drawBills();}
 }).catch(function(){});
@@ -1745,6 +1745,7 @@ def build():
     <div class="stop-row">
       <span class="sdot">T</span><b>Builds</b>
       <span class="sp"></span>
+      {role_preview_control()}
       <span class="swho" id="who"></span>
     </div>
     <div class="tabs">
@@ -1896,7 +1897,8 @@ def build():
 
 <input id="supplier-photo-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script>{SUP_JS}</script>
+<script>{ROLE_PREVIEW_JS}
+{SUP_JS}</script>
 </body></html>"""
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:

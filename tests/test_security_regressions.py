@@ -85,7 +85,8 @@ class AccessPathTests(unittest.TestCase):
 class CommandSurfaceTests(unittest.TestCase):
     def test_shared_assistant_only_launches_role_checked_command(self):
         self.assertIn("/ops/agent/api/access/me", hub_shell.ASSIST_JS)
-        self.assertIn("/ops/command.html?session=", hub_shell.ASSIST_JS)
+        self.assertIn("new URL('/ops/command.html'", hub_shell.ASSIST_JS)
+        self.assertIn("u.searchParams.set('session',sid)", hub_shell.ASSIST_JS)
         self.assertNotIn("/send", hub_shell.ASSIST_JS)
         self.assertNotIn("/history", hub_shell.ASSIST_JS)
         self.assertNotIn("labsAskPanel", hub_shell.ASSIST_JS)

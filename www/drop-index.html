@@ -1652,14 +1652,13 @@ async function gdList(){
 /* Identity, admin controls, and the same role-filtered navigation as Labs OS. */
 (async () => {
   try {
-    const res = await fetch('/ops/agent/api/access/me');
-    if(!res.ok) return;
-    const i = await res.json();
+    const i = await (window.LabsAccessPromise || fetch('/ops/agent/api/access/me').then(res => res.ok ? res.json() : null));
+    if(!i) return;
     if(i.email) $('who').textContent = i.email;
     if(i.admin) document.body.classList.add('is-admin');
     const allowed = i.tools === '*' ? null : (i.tools || []);
     const can = key => i.admin || allowed === null ||
-      (key === 'tools' ? i.role === 'full' || i.role === 'content' : allowed.includes(key));
+      (key === 'tools' ? i.role === 'full' || i.role === 'creator' : allowed.includes(key));
     document.querySelectorAll('.appitem[data-tool]').forEach(item => {
       if(!can(item.dataset.tool)){
         item.hidden = true; item.setAttribute('aria-hidden','true'); item.tabIndex = -1;

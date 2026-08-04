@@ -2104,7 +2104,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_customers_list()
             return
         if path == "/access/me":
-            self._handle_access_me()
+            self._handle_access_me(query)
             return
         if path == "/access/list":
             self._handle_access_list()
@@ -2562,19 +2562,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "changed": changed})
 
     # --- Tool access: who may use what -------------------------------------
-    def _handle_access_me(self):
+    def _handle_access_me(self, query=""):
         """Any signed-in user: their own role + allowed tools. Drives nav/tile
         filtering, so a page never offers a tool the person can't open."""
         email = (self.headers.get("X-User-Email") or "").strip().lower()
         import access_store
-        role = access_store.get_role(email)
-        if not role:
-            self._json(200, {"email": "", "role": None, "tools": [], "home": "/ops/"})
-            return
-        spec = access_store.ROLES[role]
-        self._json(200, {"email": email, "role": role, "label": spec["label"],
-                         "tools": spec["tools"], "home": spec["home"],
-                         "admin": role == "admin"})
+        params = dict(urllib.parse.parse_qsl(query, keep_blank_values=True))
+        self._json(200, access_store.presentation_for(email, params.get("view_as")))
 
     def _handle_access_list(self):
         if (self.headers.get("X-User-Email") or "").strip().lower() not in ADMIN_EMAILS:
@@ -7784,13 +7778,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(403, {"error": "not available for this account"})
             return
         caller_email = (self.headers.get("X-User-Email") or "").strip().lower()
-        tools_for_caller = toolset_for(caller_email)
-        isolate_caller = caller_email not in ADMIN_EMAILS
         length = int(self.headers.get("Content-Length", 0))
         try:
             payload = json.loads(self.rfile.read(min(length, 32768)).decode())
             message = str(payload.get("message", "")).strip()
             session_id = int(payload.get("session_id") or 1)
+            preview_role = str(payload.get("preview_role") or "").strip().lower()
             # images: [{path, name}] — legacy single image_path/image_name still accepted
             raw_images = payload.get("images") or []
             if payload.get("image_path"):
@@ -7798,6 +7791,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             self._json(400, {"error": "bad request"})
             return
+        preview_nonadmin = (caller_email in ADMIN_EMAILS
+                            and preview_role in ("full", "creator"))
+        tools_for_caller = (("web", "clarify", "vision") if preview_nonadmin
+                            else toolset_for(caller_email))
+        isolate_caller = caller_email not in ADMIN_EMAILS or preview_nonadmin
         email = caller_email
         if not ensure_session(session_id, email):
             self._json(404, {"error": "no such conversation"})

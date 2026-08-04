@@ -24,7 +24,7 @@ import re
 import sys
 
 sys.path.insert(0, "/root/ops-dashboard")
-from hub_shell import hub_header
+from hub_shell import ROLE_PREVIEW_JS, hub_header
 
 TARGET = "/var/www/drop/index.html"
 BEGIN = "<!--labs:chrome-->"
@@ -70,14 +70,25 @@ MOBILE_FIX = """<style id="labs-mobile-fix">
 .topbar .top-actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:nowrap;}
 .topbar .who{font-size:12px;color:var(--muted);max-width:150px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
+.topbar .role-preview{display:flex;align-items:center;gap:6px;border:1px solid var(--border);
+  background:var(--card);border-radius:9px;padding:4px 5px 4px 8px;color:var(--accent);}
+.topbar .role-preview span{font-size:10.5px;font-weight:800;white-space:nowrap;}
+.topbar .role-preview select{min-height:30px;border:0;border-left:1px solid var(--border);background:transparent;
+  color:var(--ink);font:inherit;font-size:12px;font-weight:700;padding:2px 24px 2px 7px;cursor:pointer;}
+body.is-role-preview .topbar .role-preview{box-shadow:0 0 0 2px var(--accent-bg);}
 .topbar .iconbtn{cursor:pointer;border:1px solid var(--border);background:var(--card);
   color:var(--body);border-radius:var(--r-s);width:36px;height:36px;box-shadow:var(--shadow);}
 .topbar .iconbtn:hover{border-color:var(--border-2);background:var(--card);color:var(--ink);}
 .topbar .iconbtn:active{transform:scale(.94);}
 #gdReconnect{min-height:36px;}
 @media (min-width:760px){ .topbar{padding:20px 0 18px;} }
-@media (max-width:759px){ .topbar .who{display:none;} }
+@media (max-width:759px){
+  .topbar .who,.topbar .role-preview span{display:none;}
+  .topbar .role-preview{padding-left:4px}.topbar .role-preview select{font-size:16px;max-width:128px;}
+}
 </style>"""
+
+PREVIEW_SCRIPT = '<script id="labs-role-preview">' + ROLE_PREVIEW_JS + '</script>'
 
 # Drop's own toolbar controls. The SPA's JS binds to these ids, so they must
 # survive the header being regenerated — that's what hub_header(actions=...)
@@ -131,6 +142,10 @@ def build():
                      out, count=1, flags=re.S)
     else:
         out = out.replace("</head>", MOBILE_FIX + "\n</head>", 1)
+
+    out = re.sub(r'<script id="labs-role-preview">.*?</script>\s*', "", out,
+                 flags=re.S)
+    out = out.replace(END, END + "\n" + PREVIEW_SCRIPT, 1)
 
     if out == html:
         print("chrome already current")

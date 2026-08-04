@@ -29,7 +29,8 @@ import sys
 import time
 
 sys.path.insert(0, "/root/ops-dashboard")
-from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS
+from hub_shell import (HUB_STYLE, _appnav, hub_header, hub_footer,
+                       role_preview_control, WHOAMI_JS)
 
 OUT = "/var/www/ops/order-form.html"
 
@@ -1977,7 +1978,9 @@ def build():
     intake_header = (
         '<header style="display:flex;align-items:center;justify-content:space-between;'
         'padding:16px 0;border-bottom:1px solid var(--border);margin-bottom:18px">'
-        '<b>Labs OS</b><span style="font-size:13px;color:var(--muted)">Order intake</span>'
+        '<b>Labs OS</b><div style="display:flex;align-items:center;gap:8px">'
+        + role_preview_control()
+        + '<span style="font-size:13px;color:var(--muted)">Order intake</span></div>'
         '</header>')
     intake_doc = doc.replace(
         "<body>", '<body class="intake" data-no-assist>', 1)

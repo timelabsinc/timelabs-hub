@@ -146,6 +146,32 @@ def home_for(email):
     return ROLES[role]["home"] if role in ROLES else "/oauth2/sign_out"
 
 
+def presentation_for(email, view_as=None):
+    """Return the role presentation used by Labs UI.
+
+    An admin may request a visual preview of another role. This deliberately
+    changes only the UI contract returned by ``/access/me``; the authenticated
+    identity and server-side authorization remain unchanged. Pages label this
+    state as a preview so it cannot be mistaken for permission impersonation.
+    """
+    email = (email or "").strip().lower()
+    actual_role = get_role(email)
+    requested = str(view_as or "").strip().lower()
+    preview = actual_role == "admin" and requested in ROLES and requested != "admin"
+    role = requested if preview else actual_role
+    if role not in ROLES:
+        return {"email": "", "role": None, "tools": [], "home": "/ops/",
+                "admin": False, "actual_admin": False, "preview": False,
+                "actual_role": actual_role}
+    spec = ROLES[role]
+    actual_admin = actual_role == "admin"
+    return {"email": email, "role": role, "label": spec["label"],
+            "tools": spec["tools"], "home": spec["home"],
+            "admin": actual_admin and not preview,
+            "actual_admin": actual_admin, "preview": preview,
+            "actual_role": actual_role}
+
+
 _OPS_PATH_TO_TOOL = {
     "": "face",
     "index.html": "face",

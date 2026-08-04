@@ -15,7 +15,6 @@ OUT = "/var/www/ops/command.html"
 BASE = Path("/root/ops-dashboard")
 
 CMO_DOCUMENTS = [
-    ("creator", "Creator guide", "Simple workflow, channel briefs and publish checklist", BASE / "docs/creator-guide.md"),
     ("product", "Product Information", "Product, customer, pricing and platform context", BASE / "docs/cmo/product-information.md"),
     ("strategy", "Marketing Strategy", "ICP, positioning, channels and 30-day direction", BASE / "docs/cmo/marketing-strategy.md"),
     ("competition", "Competitive Intelligence", "Market map, direct rivals and channel gaps", BASE / "docs/competitive-intelligence-audit.md"),
@@ -114,19 +113,6 @@ html,body{height:100%;overflow:hidden}
 .empty>p{color:var(--muted);font-size:14px;line-height:1.6;max-width:580px}
 .cmo-desk{margin-top:22px;padding:16px;border:1px solid color-mix(in srgb,var(--accent) 55%,var(--border));
   border-radius:13px;background:linear-gradient(135deg,var(--accent-bg),var(--card))}
-.creator-desk{margin-top:22px;padding:16px;border:1px solid color-mix(in srgb,var(--accent) 55%,var(--border));
-  border-radius:13px;background:linear-gradient(135deg,var(--accent-bg),var(--card))}
-.creator-more{margin:10px 2px 0;color:var(--muted);font-size:10.5px;line-height:1.45}
-.creator-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:0 0 12px}
-.creator-step{display:grid;grid-template-columns:24px minmax(0,1fr);gap:7px;align-items:start;padding:9px;
-  border:1px solid var(--border);border-radius:9px;background:color-mix(in srgb,var(--card) 84%,transparent)}
-.creator-step i{width:23px;height:23px;display:grid;place-items:center;border-radius:7px;background:var(--accent);color:#fff;
-  font-style:normal;font-size:10px;font-weight:850}.creator-step b{display:block;font-size:10.5px}.creator-step span{display:block;
-  color:var(--muted);font-size:9.5px;line-height:1.35;margin-top:2px}
-.creator-help{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:11px;padding-top:11px;
-  border-top:1px solid var(--border)}.creator-help p{margin:0;color:var(--muted);font-size:10.5px;line-height:1.4}
-.creator-guide-btn{flex:none;border:1px solid var(--accent);border-radius:8px;background:var(--accent-bg);color:var(--accent);
-  padding:7px 10px;font:inherit;font-size:10.5px;font-weight:750;cursor:pointer}
 .cmo-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
 .cmo-head b{font-size:14px}.cmo-head span{display:block;color:var(--muted);font-size:12px;line-height:1.45;margin-top:3px}
 .cmo-badge{flex:none;border-radius:999px;padding:4px 8px;background:var(--accent);color:white;font-size:10px;font-weight:800;
@@ -161,6 +147,17 @@ html,body{height:100%;overflow:hidden}
 .compose-wrap{flex:none;padding:10px clamp(12px,4vw,48px) calc(12px + env(safe-area-inset-bottom));
   border-top:1px solid transparent}
 .compose-wrap.drag{background:var(--accent-bg);border-top-color:var(--accent)}
+.creator-workbar{max-width:900px;margin:0 auto 8px;padding:10px;border:1px solid color-mix(in srgb,var(--accent) 45%,var(--border));
+  border-radius:12px;background:linear-gradient(135deg,var(--accent-bg),var(--card));box-shadow:var(--shadow)}
+.creator-work-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.creator-work-head b{display:block;font-size:11.5px;color:var(--ink)}.creator-work-head span{display:block;font-size:10px;color:var(--muted);margin-top:2px}
+.creator-new{flex:none;min-height:34px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--ink);
+  font:inherit;font-size:10.5px;font-weight:750;padding:5px 9px;cursor:pointer}
+.creator-routes{display:flex;gap:6px;overflow-x:auto;padding:1px 0 3px;scrollbar-width:thin}
+.creator-route{flex:none;min-height:38px;border:1px solid var(--border);border-radius:9px;background:var(--card);color:var(--ink);
+  font:inherit;font-size:11px;font-weight:700;padding:7px 10px;cursor:pointer;white-space:nowrap}
+.creator-route:hover,.creator-route.on{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
+.creator-tip{margin:6px 2px 0;color:var(--muted);font-size:10px;line-height:1.35}
 .attachments{max-width:900px;margin:0 auto 7px;display:flex;gap:6px;flex-wrap:wrap}
 .attachment{display:flex;align-items:center;gap:6px;padding:5px 7px;border:1px solid var(--border);background:var(--card);
   border-radius:8px;font-size:11px}.attachment img{width:28px;height:28px;border-radius:5px;object-fit:cover}
@@ -212,11 +209,13 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
 @media(max-width:720px){
   html,body{overflow:hidden}.wrap{padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0))}
   .topbar{display:none}.appnav{display:flex;margin:0}.cmd{display:block;position:relative}
+  body.is-admin .topbar,body.is-role-preview .topbar{display:flex;padding:6px 8px}body.is-admin .brand-name,body.is-role-preview .brand-name{display:none}
   .workspace{height:100%}.mobile-toggle{display:inline-grid;place-items:center}
   .rail.left{position:absolute;inset:0 auto 0 0;width:min(84vw,300px);z-index:30;transform:translateX(-101%);
     transition:transform .18s}.rail.left.open{transform:none}
-  .thread{padding:18px 12px}.empty{margin-top:3vh}.starts,.cmo-actions,.creator-steps{grid-template-columns:1fr}
+  .thread{padding:18px 12px}.empty{margin-top:3vh}.starts,.cmo-actions{grid-template-columns:1fr}
   .compose-wrap{padding-left:8px;padding-right:8px}.msg.user .bubble{max-width:90%}
+  .creator-workbar{padding:8px}.creator-work-head span{display:none}.creator-route{min-height:44px;font-size:12px}
   .compose button,.mobile-toggle,.context-toggle{width:44px;height:44px}
   .work-head{height:58px;padding:0 8px}.work-title span{display:none}.status{font-size:0}.status i{width:8px;height:8px}
 }
@@ -255,26 +254,6 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
         <div class="empty-mark">L</div>
         <h1 id="emptyTitle">What should we move forward?</h1>
         <p id="emptyCopy">Ask a question or give Hermes a job. It can inspect the business and work across the Labs OS tools available to your account.</p>
-        <div class="creator-desk" id="creatorDesk" hidden>
-          <div class="cmo-head"><div><b>Creator desk</b><span>Choose where the content will go. Hermes will turn your photos and rough facts into copy-ready text.</span></div><div class="cmo-badge">Draft only</div></div>
-          <div class="creator-steps" aria-label="Creator workflow">
-            <div class="creator-step"><i>1</i><div><b>Add the source</b><span>Attach photos or paste the real question, link or notes.</span></div></div>
-            <div class="creator-step"><i>2</i><div><b>Choose a channel</b><span>Complete the short form that appears below. Rough facts are fine.</span></div></div>
-            <div class="creator-step"><i>3</i><div><b>Review and copy</b><span>Check every claim, then use Copy this text and publish manually.</span></div></div>
-          </div>
-          <div class="cmo-actions">
-            <button type="button" class="cmo-action" data-tip="Attach the final media, then fill only confirmed facts. Delete any line you do not need." data-fill="/caption&#10;Content goal: showcase / review / product detail&#10;What the photo or video shows: &#10;Confirmed watch facts: &#10;One detail the image cannot show: &#10;Desired next step, if any: &#10;Words or claims to avoid: "><b>Instagram caption</b><small>For a Reel, carousel or product photo</small></button>
-            <button type="button" class="cmo-action" data-tip="List the photos or clips in order. Hermes will return each Story frame separately." data-fill="/story&#10;Purpose of this Story: &#10;Photos or clips, in order: &#10;Confirmed facts to include: &#10;Poll, question or link sticker, if any: &#10;Desired next step: "><b>Instagram Story</b><small>Frames, on-screen text and interaction</small></button>
-            <button type="button" class="cmo-action" data-tip="Say where it will be posted and disclose the TimeLabs relationship when relevant." data-fill="/reddit&#10;Subreddit: &#10;Route: showcase / build diary / honest review / answer / comparison / founder note&#10;What happened or what the media shows: &#10;Useful details for the community: &#10;Our relationship to the post: &#10;Question to ask, if genuine: "><b>Reddit</b><small>Showcase, diary, review or useful answer</small></button>
-            <button type="button" class="cmo-action" data-tip="Paste the real situation. Remove unnecessary phone numbers, payment details or private information." data-fill="/whatsapp&#10;Message type: customer reply / community update / follow-up&#10;What happened or what they asked: &#10;Confirmed facts we can state: &#10;One next step: &#10;Tone: calm / warm / direct: "><b>WhatsApp</b><small>Customer or community message</small></button>
-            <button type="button" class="cmo-action" data-tip="Give only confirmed price, availability, specification and delivery information." data-fill="/sales&#10;Buyer asked: &#10;Confirmed price: &#10;Confirmed availability: &#10;Relevant specifications: &#10;Confirmed delivery information: &#10;Best next step: "><b>Sales reply</b><small>Answer a buyer without pressure</small></button>
-            <button type="button" class="cmo-action" data-tip="Hermes will return subject options and the body as separate copy blocks." data-fill="/email&#10;Email type: customer / campaign / follow-up&#10;Who it is for: &#10;Why we are writing: &#10;Confirmed facts to include: &#10;Requested next step: &#10;Link, if verified: "><b>Email</b><small>Subject and body, ready to paste</small></button>
-            <button type="button" class="cmo-action" data-tip="Use openable sources. Do not include a statistic or quote without its source." data-fill="/blog&#10;Question the article must answer: &#10;Reader: &#10;First-party evidence: &#10;Openable source links: &#10;Products or examples that genuinely help: &#10;Desired next step: "><b>Blog</b><small>Sourced article in Markdown</small></button>
-            <button type="button" class="cmo-action" data-tip="List the footage you actually have so the script does not request impossible shots." data-fill="/youtube&#10;Video subject: &#10;Who it is for: &#10;Available footage: &#10;Verified facts: &#10;Target length: &#10;Desired next step: "><b>YouTube</b><small>Spoken script with simple shot cues</small></button>
-          </div>
-          <p class="creator-more">More routes: type <code>/ad</code>, <code>/product</code>, <code>/linkedin</code> or <code>/founder</code> before your notes.</p>
-          <div class="creator-help"><p>Not sure what to include? Open the basic guide. Never fill a missing fact by guessing.</p><button type="button" class="creator-guide-btn" id="creatorGuideBtn">Open Creator guide</button></div>
-        </div>
         <div id="ownerDesk" hidden>
         <div class="cmo-desk">
           <div class="cmo-head"><div><b>CMO desk</b><span>Research, positioning, channels and measurable growth. External actions remain review-gated.</span></div><div class="cmo-badge">Active</div></div>
@@ -294,6 +273,23 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
       </div>
     </div>
     <div class="compose-wrap">
+      <div class="creator-workbar" id="creatorWorkbar" hidden>
+        <div class="creator-work-head"><div><b>Add the source, then choose what you need</b><span>The selected brief opens in the message box. Fill only confirmed facts, send, review and copy.</span></div><button type="button" class="creator-new" id="creatorNewBtn">Start new content</button></div>
+        <div class="creator-routes" role="list" aria-label="Choose a content output">
+          <button type="button" class="creator-route" data-channel="Instagram caption" data-tip="Attach the final media. Add what the image cannot show; do not describe every visible detail." data-fill="/caption&#10;Content goal: showcase / review / product detail&#10;What the photo or video shows: &#10;Confirmed watch facts: &#10;One detail the image cannot show: &#10;Desired next step, if any: &#10;Words or claims to avoid: ">Instagram caption</button>
+          <button type="button" class="creator-route" data-channel="Instagram Story" data-tip="List photos or clips in order. Hermes returns each frame as a separate paste block." data-fill="/story&#10;Purpose of this Story: &#10;Photos or clips, in order: &#10;Confirmed facts to include: &#10;Poll, question or link sticker, if any: &#10;Desired next step: ">Story</button>
+          <button type="button" class="creator-route" data-channel="Reddit" data-tip="Name the subreddit and disclose the TimeLabs relationship. Make the post useful before promotional." data-fill="/reddit&#10;Subreddit: &#10;Route: showcase / build diary / honest review / answer / comparison / founder note&#10;What happened or what the media shows: &#10;Useful details for the community: &#10;Our relationship to the post: &#10;Question to ask, if genuine: ">Reddit</button>
+          <button type="button" class="creator-route" data-channel="WhatsApp" data-tip="Paste the real situation without unnecessary private data. Give one clear next step." data-fill="/whatsapp&#10;Message type: customer reply / community update / follow-up&#10;What happened or what they asked: &#10;Confirmed facts we can state: &#10;One next step: &#10;Tone: calm / warm / direct: ">WhatsApp</button>
+          <button type="button" class="creator-route" data-channel="Sales reply" data-tip="Use only confirmed price, availability, specifications and delivery information." data-fill="/sales&#10;Buyer asked: &#10;Confirmed price: &#10;Confirmed availability: &#10;Relevant specifications: &#10;Confirmed delivery information: &#10;Best next step: ">Sales reply</button>
+          <button type="button" class="creator-route" data-channel="Email" data-tip="Hermes returns subject choices and the body as separate paste blocks." data-fill="/email&#10;Email type: customer / campaign / follow-up&#10;Who it is for: &#10;Why we are writing: &#10;Confirmed facts to include: &#10;Requested next step: &#10;Link, if verified: ">Email</button>
+          <button type="button" class="creator-route" data-channel="Blog" data-tip="Use openable sources. Do not include a statistic or quotation without its source." data-fill="/blog&#10;Question the article must answer: &#10;Reader: &#10;First-party evidence: &#10;Openable source links: &#10;Products or examples that genuinely help: &#10;Desired next step: ">Blog</button>
+          <button type="button" class="creator-route" data-channel="YouTube" data-tip="List the footage you actually have so the script does not request impossible shots." data-fill="/youtube&#10;Video subject: &#10;Who it is for: &#10;Available footage: &#10;Verified facts: &#10;Target length: &#10;Desired next step: ">YouTube</button>
+          <button type="button" class="creator-route" data-channel="Ad" data-tip="Supply proof for every claim. Hermes will not add fake urgency or scarcity." data-fill="/ad&#10;Offer or product: &#10;Audience: &#10;Confirmed proof and facts: &#10;Desired next step: &#10;Claims to avoid: ">Ad</button>
+          <button type="button" class="creator-route" data-channel="Product copy" data-tip="Confirm movement, dimensions, materials, compatibility, warranty and delivery before drafting." data-fill="/product&#10;Product name: &#10;Confirmed distinguishing detail: &#10;Confirmed specifications: &#10;Delivery and warranty facts: &#10;Required disclosure: ">Product</button>
+          <button type="button" class="creator-route" data-channel="Founder or LinkedIn post" data-tip="Start from a real decision, mistake, customer moment or number—not a manufactured lesson." data-fill="/founder&#10;Real event or decision: &#10;What actually happened: &#10;Specific detail or number: &#10;What changed next: &#10;Desired reader action, if any: ">Founder</button>
+        </div>
+        <p class="creator-tip" id="creatorTip">Pick an output above. The tool will show exactly what information to add.</p>
+      </div>
       <div class="attachments" id="attachments"></div>
       <div class="compose">
         <button type="button" class="attach-btn" id="attachBtn" aria-label="Attach photos" title="Attach photos">＋</button>
@@ -308,12 +304,13 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
     <div class="rail-head"><span class="rail-title" id="contextRailTitle">CMO intelligence</span><button type="button" class="icon-btn context-toggle" id="contextClose" aria-label="Close business context">×</button></div>
     <div class="context">
       <div id="creatorContext" hidden>
-        <div class="context-block"><h3>Quick start</h3><div class="cap-list">
-          <div class="cap">1. Attach the source <span>Photos or notes</span></div>
-          <div class="cap">2. Choose the channel <span>Fill the short form</span></div>
-          <div class="cap">3. Review the result <span>Check every fact</span></div>
-          <div class="cap">4. Copy and publish <span>Manual step</span></div>
+        <div class="context-block"><h3>Use this screen</h3><div class="cap-list">
+          <div class="cap">Attach media or notes <span>Source</span></div>
+          <div class="cap">Pick an output above the box <span>Brief</span></div>
+          <div class="cap">Fill the known facts and send <span>Draft</span></div>
+          <div class="cap">Use Copy this text <span>Publish</span></div>
         </div></div>
+        <div class="context-block"><h3>What Hermes needs</h3><div class="mode"><b>Real material, not polished instructions</b><span>Photos, the actual question or event, confirmed product facts, the audience and the desired next step are enough. If an important fact is missing, Hermes asks instead of guessing.</span></div></div>
         <div class="context-block"><h3>Before publishing</h3><div class="cap-list">
           <div class="cap">Media matches copy <span>Required</span></div>
           <div class="cap">Claims are confirmed <span>Required</span></div>
@@ -321,7 +318,6 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
           <div class="cap">Read aloud once <span>Recommended</span></div>
         </div></div>
         <div class="context-block"><h3>Your access</h3><div class="mode"><b>Private drafting only</b><span>You can research, attach media and prepare content. This account cannot send, post, publish or access customer and order data.</span></div></div>
-        <button type="button" class="creator-guide-btn" id="creatorGuideSideBtn">Open the full Creator guide</button>
       </div>
       <div id="ownerContext">
       <div class="context-block"><h3>Measured Instagram snapshot</h3><div class="analytics">
@@ -369,19 +365,21 @@ const statusEl=document.getElementById('agentStatus'), sessionsEl=document.getEl
 const attachEl=document.getElementById('attachments'), composeWrap=document.querySelector('.compose-wrap');
 const cmoContext=document.getElementById('cmoContext'), chatsTab=document.getElementById('chatsTab'), companyTab=document.getElementById('companyTab');
 const docModal=document.getElementById('docModal'), docTitle=document.getElementById('docTitle'), docBody=document.getElementById('docBody');
-let busy=false, attachments=[], uploading=0, lastMessageId=0, historyGen=0, sessionsGen=0, runToken=0;
+let busy=false, attachments=[], uploading=0, lastMessageId=0, historyGen=0, sessionsGen=0, runToken=0, accessInfo=null;
 async function loadAccessMode(){
  try{
-  let i=await api('/access/me'),creator=i.role==='creator';
+  let view='';try{view=new URLSearchParams(location.search).get('view_as')||''}catch(e){}
+  let i=await api('/access/me'+(view?'?view_as='+encodeURIComponent(view):'')),creator=i.role==='creator';accessInfo=i;
   document.body.classList.toggle('creator-mode',creator);
-  document.getElementById('ownerDesk').hidden=creator;
-  document.getElementById('creatorDesk').hidden=!creator;
+  let ownerDesk=document.getElementById('ownerDesk');if(ownerDesk)ownerDesk.hidden=creator;
+  document.getElementById('creatorWorkbar').hidden=!creator;
   document.getElementById('ownerContext').hidden=creator;
   document.getElementById('creatorContext').hidden=!creator;
   if(creator){
-   document.getElementById('emptyTitle').textContent='What are we creating?';
-   document.getElementById('emptyCopy').textContent='Add the source, choose where it will be published, then fill the short form. Hermes returns text you can review and copy.';
-   document.getElementById('operatorMode').textContent='Hermes · content drafting and research';
+   let emptyTitle=document.getElementById('emptyTitle'),emptyCopy=document.getElementById('emptyCopy');
+   if(emptyTitle)emptyTitle.textContent='What are we creating?';
+   if(emptyCopy)emptyCopy.textContent='Add the source, choose the output above the message box and fill the brief. Hermes returns text you can review and copy.';
+   document.getElementById('operatorMode').textContent=(i.preview?'Creator preview · ':'')+'Hermes content workspace';
    document.getElementById('leftRailTitle').textContent='Creator workspace';
    document.getElementById('contextRailTitle').textContent='Creator checklist';
    document.getElementById('composeNote').textContent='Use confirmed facts only. Hermes prepares drafts; you review, copy and publish manually.';
@@ -444,7 +442,6 @@ function copiedState(button,label){let old=button.textContent;button.textContent
 let cmoDocs=[];try{cmoDocs=JSON.parse(document.getElementById('cmoDocuments').textContent||'[]')}catch(e){}
 function renderDocuments(){let el=document.getElementById('documentList');el.innerHTML='';cmoDocs.forEach(d=>{let b=document.createElement('button');b.type='button';b.className='doc-btn';b.innerHTML='<span class="doc-icon">D</span><span><b>'+esc(d.title)+'</b><small>'+esc(d.summary)+'</small></span><span class="doc-open">›</span>';b.onclick=()=>openDocument(d);el.appendChild(b)})}
 let docTrigger=null;function openDocument(d){docTrigger=document.activeElement;docTitle.textContent=d.title;docBody.innerHTML=md(d.body);docModal.hidden=false;closeMenu(false);document.getElementById('docClose').focus()}
-function openCreatorGuide(){let d=cmoDocs.find(x=>x.key==='creator');if(d)openDocument(d)}
 function closeDocument(){if(docModal.hidden)return;docModal.hidden=true;if(docTrigger&&docTrigger.focus)docTrigger.focus();docTrigger=null}
 function setSidebar(view){let chats=view==='chats';sessionsEl.hidden=!chats;cmoContext.hidden=chats;chatsTab.classList.toggle('on',chats);companyTab.classList.toggle('on',!chats);chatsTab.setAttribute('aria-selected',String(chats));companyTab.setAttribute('aria-selected',String(!chats))}
 function bubble(role,text){if(empty&&empty.parentNode)empty.remove();let m=document.createElement('div');m.className='msg '+role;
@@ -500,7 +497,7 @@ async function switchSession(id){
 }
 async function newSession(){runToken++;setSidebar('chats');try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){notice(e.message,true)}}
 async function send(){let text=input.value.trim();if(busy||uploading||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastMessageId,accepted=false;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text||(at.length+' photo'+(at.length===1?'':'s')));let token=++runToken;busy=true;syncSendState();statusEl.textContent='Working';let wait=thinking();
- try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name}))})});accepted=true;
+ try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name})),preview_role:accessInfo&&accessInfo.preview?accessInfo.role:null})});accepted=true;
   if(d.reply){wait.remove();if(runSid===sid){bubble('agent',d.reply);lastMessageId=Math.max(lastMessageId,Number(d.message_id)||0)}}
   else if(d.pending){await poll(runSid,wait,baseline,token)}
   else{wait.remove();if(runSid===sid)notice('Hermes returned no result. Your message remains in this conversation.',true)}
@@ -518,10 +515,10 @@ function renderAttachments(){attachEl.innerHTML='';attachments.forEach((a,i)=>{l
 async function loadEvents(){try{let d=await api('/events'),el=document.getElementById('events');el.innerHTML='';(d.events||[]).slice(0,8).forEach(x=>{let v=document.createElement('div');v.className='event';v.innerHTML='<b>'+esc((x.app||'Labs')+' · '+(x.kind||'activity').replace(/_/g,' '))+'</b><p>'+esc(x.detail||'')+'</p><time>'+esc((x.created_at||'').slice(0,16).replace('T',' '))+'</time>';el.appendChild(v)});if(!el.children.length)el.innerHTML='<div class="event"><p>No recent activity.</p></div>'}catch(e){}}
 function autosize(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,150)+'px'}
 document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.prompt;send()});
-document.querySelectorAll('[data-fill]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.fill;document.getElementById('composeNote').textContent=b.dataset.tip||'Fill what you know. Never guess a missing fact.';autosize();focusComposer()});document.getElementById('newBtn').onclick=newSession;
+document.querySelectorAll('[data-fill]').forEach(b=>b.onclick=()=>{closeMenu(false);document.querySelectorAll('.creator-route').forEach(x=>x.classList.toggle('on',x===b));input.value=b.dataset.fill;let tip=b.dataset.tip||'Fill what you know. Never guess a missing fact.';document.getElementById('creatorTip').textContent=(b.dataset.channel?b.dataset.channel+': ':'')+tip;document.getElementById('composeNote').textContent='Fill the brief, attach the correct source and send. Hermes will ask if an essential fact is missing.';autosize();focusComposer()});document.getElementById('newBtn').onclick=newSession;
 chatsTab.onclick=()=>setSidebar('chats');companyTab.onclick=()=>setSidebar('company');document.getElementById('docClose').onclick=closeDocument;
 docModal.onclick=e=>{if(e.target===docModal)closeDocument()};renderDocuments();setSidebar('company');
-document.getElementById('creatorGuideBtn').onclick=openCreatorGuide;document.getElementById('creatorGuideSideBtn').onclick=openCreatorGuide;
+document.getElementById('creatorNewBtn').onclick=async()=>{attachments=[];renderAttachments();input.value='';autosize();document.querySelectorAll('.creator-route').forEach(x=>x.classList.remove('on'));document.getElementById('creatorTip').textContent='Pick an output above. The tool will show exactly what information to add.';await newSession()};
 document.getElementById('attachBtn').onclick=()=>document.getElementById('fileInput').click();document.getElementById('fileInput').onchange=async e=>{for(let f of e.target.files)await upload(f);e.target.value=''};
 sendBtn.onclick=send;input.oninput=autosize;input.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}};
 document.addEventListener('paste',e=>{for(let x of (e.clipboardData&&e.clipboardData.items)||[])if(x.kind==='file'&&x.type.indexOf('image/')===0)upload(x.getAsFile())});

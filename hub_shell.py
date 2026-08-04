@@ -207,6 +207,12 @@ HUB_STYLE = r"""
   .brand-name span{color:var(--muted);font-weight:500;}
   .top-actions{display:flex;align-items:center;gap:8px;}
   .who{font-size:12px;color:var(--muted);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .role-preview{display:flex;align-items:center;gap:6px;border:1px solid color-mix(in srgb,var(--accent) 48%,var(--border));
+    background:var(--accent-bg);border-radius:9px;padding:4px 5px 4px 8px;color:var(--accent);}
+  .role-preview span{font-size:10.5px;font-weight:800;white-space:nowrap;}
+  .role-preview select{min-height:30px;border:0;border-left:1px solid color-mix(in srgb,var(--accent) 32%,var(--border));
+    background:transparent;color:var(--ink);font:inherit;font-size:12px;font-weight:700;padding:2px 24px 2px 7px;cursor:pointer;}
+  body.is-role-preview .role-preview{box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 12%,transparent);}
   .iconbtn{cursor:pointer;border:1px solid var(--border);background:var(--card);color:var(--body);
     border-radius:var(--r-s);width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;
     font-size:15px;transition:all .15s var(--ease);box-shadow:var(--shadow);}
@@ -560,6 +566,10 @@ HUB_STYLE = r"""
     #keypanel.open{transform:translate(-50%,50%) scale(1);opacity:1;pointer-events:auto;}
     .key-grip{display:none;}
   }
+  @media (max-width:620px){
+    .role-preview span,.top-actions>.who{display:none;}
+    .role-preview{padding-left:4px}.role-preview select{font-size:16px;max-width:142px;}
+  }
 """
 
 # ------------------------------------------------------------------ JS
@@ -729,9 +739,8 @@ HUB_SCRIPT = r"""
   }
   async function initAccount(){
     try {
-      var res = await fetch('/ops/agent/api/whoami');
-      if(!res.ok) return;
-      var info = await res.json();
+      var info = await (window.LabsAccessPromise || fetch('/ops/agent/api/access/me').then(function(r){return r.ok?r.json():null;}));
+      if(!info) return;
       if(info.email){
         var who = document.getElementById('who');
         if(who) who.textContent = info.email;
@@ -878,6 +887,17 @@ SECTION_LABEL = {"face": "Home", "drop": "Drop", "ledger": "Ledger",
                  "chat": "Command", "tools": "Tools", "orders": "Orders"}
 
 
+def role_preview_control():
+    """Admin-only visual role selector; ROLE_PREVIEW_JS reveals and drives it."""
+    return (
+        '<label class="role-preview" id="labsRolePreview" hidden>'
+        '<span>View as</span><select id="labsRoleSelect" aria-label="Preview Labs OS as a role">'
+        '<option value="admin">Owner</option><option value="full">Full team</option>'
+        '<option value="creator">Creator</option><option value="orders">Orders</option>'
+        '<option value="intake">Intake</option><option value="supplier">Supplier</option>'
+        '</select></label>')
+
+
 def hub_header(active, actions=""):
     """Shared top bar + app nav.
 
@@ -891,7 +911,7 @@ def hub_header(active, actions=""):
         '<header class="topbar">'
         '<a class="brand" href="/ops/#overview"><span class="brand-dot">L</span>'
         f'<span class="brand-name">Labs <span>{label}</span></span></a>'
-        f'<div class="top-actions">{actions}<span id="who" class="who"></span></div>'
+        f'<div class="top-actions">{actions}{role_preview_control()}<span id="who" class="who"></span></div>'
         '</header>\n  ' + _appnav(active=active, drop_ready=True)
     )
 
@@ -900,9 +920,49 @@ def hub_footer(note="ops.timelabsco.in"):
     return f'<footer><span>Labs OS</span><span>{html.escape(note)}</span></footer>'
 
 
+# Admin-only visual role preview. It changes presentation, navigation and the
+# role-specific Command prompt when Command opts in; it never changes the
+# authenticated identity or the server authorization boundary.
+ROLE_PREVIEW_JS = r"""
+(function(){
+  if(window.__labsRolePreviewReady)return;window.__labsRolePreviewReady=true;
+  var roles=['admin','full','creator','orders','intake','supplier'];
+  var requested='';try{requested=new URLSearchParams(location.search).get('view_as')||'';}catch(e){}
+  if(roles.indexOf(requested)<0)requested='';
+  var accessUrl='/ops/agent/api/access/me'+(requested?'?view_as='+encodeURIComponent(requested):'');
+  window.LabsAccessPromise=fetch(accessUrl).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+  window.LabsAccessPromise.then(function(i){
+    if(!i)return;
+    if(i.preview)document.body.classList.add('is-role-preview');
+    var control=document.getElementById('labsRolePreview'),select=document.getElementById('labsRoleSelect');
+    if(i.actual_admin&&control&&select){
+      control.hidden=false;control.title='Visual preview only — your real owner permissions do not change';
+      var previewLabel=control.querySelector('span');if(previewLabel)previewLabel.textContent=i.preview?'Previewing':'View as';
+      select.value=i.preview?i.role:'admin';
+      select.onchange=function(){
+        var next=select.value,homes={full:'/ops/',creator:'/ops/command.html',orders:'/ops/order-form.html',intake:'/intake/',supplier:'/ops/supplier.html'};
+        if(next==='admin'){
+          var back=new URL(location.href);back.searchParams.delete('view_as');
+          if(location.pathname.indexOf('/intake/')===0||location.pathname==='/ops/supplier.html')back=new URL('/ops/tools.html',location.origin);
+          location.href=back.pathname+back.search+back.hash;return;
+        }
+        var target=new URL(homes[next]||'/ops/tools.html',location.origin);target.searchParams.set('view_as',next);
+        location.href=target.pathname+target.search;
+      };
+    }
+    if(!i.preview)return;
+    document.querySelectorAll('a[href^="/"]').forEach(function(a){
+      if(a.getAttribute('href').indexOf('/oauth2/')===0||a.getAttribute('href').indexOf('/s/')===0)return;
+      try{var u=new URL(a.href,location.origin);u.searchParams.set('view_as',i.role);a.href=u.pathname+u.search+u.hash;}catch(e){}
+    });
+  });
+})();
+"""
+
+
 # Fills the header's who-chip and reveals admin-only bits. Include on every page.
 WHOAMI_JS = """
-  fetch('/ops/agent/api/access/me').then(function(r){return r.ok?r.json():null;}).then(function(i){
+  (window.LabsAccessPromise||fetch('/ops/agent/api/access/me').then(function(r){return r.ok?r.json():null;})).then(function(i){
     if(i && i.email){ var w=document.getElementById('who'); if(w) w.textContent=i.email; }
     if(i && i.admin) document.body.classList.add('is-admin');
     if(!i)return;
@@ -953,7 +1013,10 @@ ASSIST_JS = r"""
   function target(){
     var sid=null;
     try{sid=parseInt(localStorage.getItem('labs_command_session')||localStorage.getItem('tl_session')||'',10);}catch(e){}
-    return Number.isFinite(sid)&&sid>0?'/ops/command.html?session='+encodeURIComponent(sid):'/ops/command.html';
+    var u=new URL('/ops/command.html',location.origin);
+    if(Number.isFinite(sid)&&sid>0)u.searchParams.set('session',sid);
+    try{var preview=new URLSearchParams(location.search).get('view_as');if(preview)u.searchParams.set('view_as',preview);}catch(e){}
+    return u.pathname+u.search;
   }
   var fab=document.createElement('a');
   fab.className='lx-fab';fab.hidden=true;fab.href=target();
@@ -961,7 +1024,7 @@ ASSIST_JS = r"""
   fab.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3l1.3 3.5L14 7.8l-3.7 1.3L9 12.5 7.7 9.1 4 7.8l3.7-1.3z"/><path d="M17.5 13l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg>';
   fab.addEventListener('click',function(){fab.href=target();});
   document.body.appendChild(fab);
-  fetch('/ops/agent/api/access/me').then(function(r){return r.ok?r.json():null;}).then(function(i){
+  (window.LabsAccessPromise||fetch('/ops/agent/api/access/me').then(function(r){return r.ok?r.json():null;})).then(function(i){
     if(!i){fab.remove();return;}
     var allowed=i.tools==='*'?null:(i.tools||[]);
     if(i.admin||allowed===null||allowed.indexOf('chat')>=0)fab.hidden=false;
@@ -1076,8 +1139,8 @@ window.LabsRTE=(function(){
 
 # Wire the assistant + editor styles into every generated page.
 HUB_STYLE = HUB_STYLE + ASSIST_CSS + RTE_CSS + ORDERS_CSS
-WHOAMI_JS = WHOAMI_JS + "\n" + ASSIST_JS
-HUB_SCRIPT = HUB_SCRIPT + "\n" + ASSIST_JS
+WHOAMI_JS = ROLE_PREVIEW_JS + "\n" + WHOAMI_JS + "\n" + ASSIST_JS
+HUB_SCRIPT = ROLE_PREVIEW_JS + "\n" + HUB_SCRIPT + "\n" + ASSIST_JS
 
 
 KEY_PANEL = """
