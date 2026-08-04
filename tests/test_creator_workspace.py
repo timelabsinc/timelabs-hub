@@ -127,6 +127,25 @@ class CreatorWorkspaceTests(unittest.TestCase):
         self.assertIn("rememberSubreddit", source)
         self.assertIn("Which subreddit exactly?", source)
 
+    def test_chats_can_be_archived_restored_and_deleted_from_context_menu(self):
+        command = (ROOT / "command.py").read_text(encoding="utf-8")
+        server = (ROOT / "agent_chat_server.py").read_text(encoding="utf-8")
+        self.assertIn("sessionMenu", command)
+        self.assertIn("oncontextmenu", command)
+        self.assertIn("Chat actions for ", command)
+        self.assertIn("Archived", command)
+        self.assertIn("Delete permanently", command)
+        self.assertIn("This cannot be undone", command)
+        self.assertIn("/session/archive", command)
+        self.assertIn("/session/delete", command)
+        self.assertIn('CASE WHEN s.visibility=\'archived\'', server)
+        self.assertIn('elif path == "/session/archive"', server)
+        self.assertIn('elif path == "/session/delete"', server)
+        self.assertLess(
+            server.index('DELETE FROM webchat_messages WHERE session_id=?'),
+            server.index('DELETE FROM webchat_sessions WHERE id=?'),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

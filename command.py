@@ -76,11 +76,22 @@ html,body{height:100%;overflow:hidden}
 .new-btn,.icon-btn{border:1px solid var(--border);background:var(--card);color:var(--ink);cursor:pointer;
   border-radius:9px;font:inherit}.new-btn{padding:7px 10px;font-size:12px;font-weight:700}
 .new-btn:hover,.icon-btn:hover{border-color:var(--accent);background:var(--accent-bg)}
-.session-list{padding:8px;overflow:auto;flex:1}.session{width:100%;display:block;text-align:left;border:1px solid transparent;
-  background:transparent;color:var(--ink);border-radius:9px;padding:10px;cursor:pointer;margin-bottom:3px}
+.session-viewbar{display:flex;gap:5px;padding:7px 8px;border-bottom:1px solid var(--border)}
+.session-viewbar button{flex:1;border:0;border-radius:7px;background:transparent;color:var(--muted);font:inherit;font-size:10.5px;
+  font-weight:700;padding:6px;cursor:pointer}.session-viewbar button.on{background:var(--card-2);color:var(--ink)}
+.session-list{padding:8px;overflow:auto;flex:1}.session-row{position:relative;margin-bottom:3px}.session{width:100%;display:block;text-align:left;border:1px solid transparent;
+  background:transparent;color:var(--ink);border-radius:9px;padding:10px 38px 10px 10px;cursor:pointer}
 .session:hover{background:var(--card-2)}.session.on{background:var(--accent-bg);border-color:var(--accent)}
 .session b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .session span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
+.session-more{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:30px;height:30px;border:0;border-radius:7px;
+  background:transparent;color:var(--muted);font:inherit;font-size:17px;line-height:1;cursor:pointer;opacity:0}
+.session-row:hover .session-more,.session-more:focus-visible,.session-row:focus-within .session-more{opacity:1}.session-more:hover{background:var(--card);color:var(--ink)}
+.session-empty{padding:22px 10px;text-align:center;color:var(--muted);font-size:11px;line-height:1.5}
+.session-menu{position:fixed;z-index:80;width:156px;padding:5px;border:1px solid var(--border);border-radius:10px;background:var(--card);
+  box-shadow:var(--shadow-lg)}.session-menu button{display:block;width:100%;border:0;border-radius:7px;background:transparent;color:var(--ink);
+  font:inherit;font-size:12px;text-align:left;padding:9px 10px;cursor:pointer}.session-menu button:hover,.session-menu button:focus-visible{background:var(--card-2)}
+.session-menu .danger{color:var(--bad)}
 .rail-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:8px;border-bottom:1px solid var(--border)}
 .rail-tab{border:0;border-radius:8px;background:transparent;color:var(--muted);font:inherit;font-size:11px;font-weight:700;
   padding:7px;cursor:pointer}.rail-tab.on{background:var(--accent-bg);color:var(--accent)}
@@ -244,6 +255,7 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
   .compose button,.mobile-toggle,.context-toggle{width:44px;height:44px}
   .work-head{height:58px;padding:0 8px}.work-title span{display:none}.status{font-size:0}.status i{width:8px;height:8px}
 }
+@media(pointer:coarse){.session-more{opacity:1}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}.dots i,.skeleton{animation:none}.rail{transition:none!important}}
 </style></head><body>
 <div class="wrap" data-no-assist>""" + hub_header("chat") + r"""
@@ -253,6 +265,10 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
     <div class="rail-tabs" role="tablist" aria-label="Command sidebar">
       <button type="button" class="rail-tab" id="chatsTab" role="tab" aria-selected="false">Chats</button>
       <button type="button" class="rail-tab on" id="companyTab" role="tab" aria-selected="true">Company</button>
+    </div>
+    <div class="session-viewbar" id="sessionViewbar" hidden>
+      <button type="button" class="on" id="activeChatsBtn">Active</button>
+      <button type="button" id="archivedChatsBtn">Archived</button>
     </div>
     <div class="session-list" id="sessions" hidden><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
     <div class="cmo-context" id="cmoContext">
@@ -266,6 +282,10 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
     </div>
     <div class="rail-foot"><a class="fallback" href="/ops/agent/">Open classic Labs Chat</a></div>
   </aside>
+  <div class="session-menu" id="sessionMenu" role="menu" hidden>
+    <button type="button" id="sessionArchiveAction" role="menuitem">Archive</button>
+    <button type="button" class="danger" id="sessionDeleteAction" role="menuitem">Delete permanently</button>
+  </div>
   <div class="shade" id="shade" aria-hidden="true"></div>
   <section class="workspace">
     <div class="work-head">
@@ -380,10 +400,13 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
 const API='/ops/agent/api', threadEl=document.getElementById('thread'), empty=document.getElementById('empty');
 const input=document.getElementById('input'), sendBtn=document.getElementById('sendBtn');
 const statusEl=document.getElementById('agentStatus'), sessionsEl=document.getElementById('sessions');
+const sessionViewbar=document.getElementById('sessionViewbar'),activeChatsBtn=document.getElementById('activeChatsBtn'),archivedChatsBtn=document.getElementById('archivedChatsBtn');
+const sessionMenu=document.getElementById('sessionMenu'),sessionArchiveAction=document.getElementById('sessionArchiveAction'),sessionDeleteAction=document.getElementById('sessionDeleteAction');
 const attachEl=document.getElementById('attachments'), composeWrap=document.querySelector('.compose-wrap');
 const cmoContext=document.getElementById('cmoContext'), chatsTab=document.getElementById('chatsTab'), companyTab=document.getElementById('companyTab');
 const docModal=document.getElementById('docModal'), docTitle=document.getElementById('docTitle'), docBody=document.getElementById('docBody');
 let busy=false, attachments=[], uploading=0, lastMessageId=0, historyGen=0, sessionsGen=0, runToken=0, accessInfo=null;
+let allSessions=[],archivedView=false,sessionMenuTarget=null;
 const CREATOR_CHANNELS={
  instagram:{label:'Instagram caption',route:'/caption'},story:{label:'Instagram Story',route:'/story'},
  reddit:{label:'Reddit',route:'/reddit'},whatsapp:{label:'WhatsApp',route:'/whatsapp'},
@@ -484,7 +507,7 @@ let cmoDocs=[];try{cmoDocs=JSON.parse(document.getElementById('cmoDocuments').te
 function renderDocuments(){let el=document.getElementById('documentList');el.innerHTML='';cmoDocs.forEach(d=>{let b=document.createElement('button');b.type='button';b.className='doc-btn';b.innerHTML='<span class="doc-icon">D</span><span><b>'+esc(d.title)+'</b><small>'+esc(d.summary)+'</small></span><span class="doc-open">›</span>';b.onclick=()=>openDocument(d);el.appendChild(b)})}
 let docTrigger=null;function openDocument(d){docTrigger=document.activeElement;docTitle.textContent=d.title;docBody.innerHTML=md(d.body);docModal.hidden=false;closeMenu(false);document.getElementById('docClose').focus()}
 function closeDocument(){if(docModal.hidden)return;docModal.hidden=true;if(docTrigger&&docTrigger.focus)docTrigger.focus();docTrigger=null}
-function setSidebar(view){let chats=view==='chats';sessionsEl.hidden=!chats;cmoContext.hidden=chats;chatsTab.classList.toggle('on',chats);companyTab.classList.toggle('on',!chats);chatsTab.setAttribute('aria-selected',String(chats));companyTab.setAttribute('aria-selected',String(!chats))}
+function setSidebar(view){let chats=view==='chats';sessionsEl.hidden=!chats;sessionViewbar.hidden=!chats;cmoContext.hidden=chats;chatsTab.classList.toggle('on',chats);companyTab.classList.toggle('on',!chats);chatsTab.setAttribute('aria-selected',String(chats));companyTab.setAttribute('aria-selected',String(!chats))}
 function splitUserMedia(text,live){let media=(live||[]).map(a=>({name:String(a.name||'image'),url:String(a.url||'')})),clean=String(text||'');
  clean=clean.replace(/\s*\[attached photo:\s*([^\]]+)\]/gi,(all,name)=>{if(!media.some(a=>a.name===name.trim()))media.push({name:name.trim(),url:''});return ''}).trim();
  return{text:clean,media:media}}
@@ -507,12 +530,23 @@ function notice(text,bad){let n=document.createElement('div');n.className='notic
 async function api(path,opt){let r=await fetch(API+path,opt);let ct=r.headers.get('content-type')||'';
  if((r.status===401||r.status===403)&&ct.indexOf('application/json')<0){location.href='/oauth2/start?rd='+encodeURIComponent(location.pathname+location.search);throw new Error('Sign-in required')}
  let d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||('Request failed ('+r.status+')'));return d}
+function closeSessionMenu(){sessionMenu.hidden=true;sessionMenuTarget=null}
+function openSessionMenu(s,trigger,x,y){sessionMenuTarget=s;sessionArchiveAction.textContent=s.archived?'Restore chat':'Archive chat';sessionMenu.hidden=false;
+ let r=trigger&&trigger.getBoundingClientRect?trigger.getBoundingClientRect():null,left=Number.isFinite(x)?x:(r?r.right-156:12),top=Number.isFinite(y)?y:(r?r.bottom+4:12);
+ let box=sessionMenu.getBoundingClientRect();sessionMenu.style.left=Math.max(8,Math.min(left,innerWidth-box.width-8))+'px';sessionMenu.style.top=Math.max(8,Math.min(top,innerHeight-box.height-8))+'px';sessionArchiveAction.focus()}
+function renderSessionList(){sessionsEl.innerHTML='';let active=allSessions.filter(s=>!s.archived),archived=allSessions.filter(s=>s.archived),shown=archivedView?archived:active;
+ activeChatsBtn.textContent='Active'+(active.length?' · '+active.length:'');archivedChatsBtn.textContent='Archived'+(archived.length?' · '+archived.length:'');activeChatsBtn.classList.toggle('on',!archivedView);archivedChatsBtn.classList.toggle('on',archivedView);
+ if(!shown.length){sessionsEl.innerHTML='<div class="session-empty">'+(archivedView?'No archived chats.':'No active chats.')+'</div>';return}
+ selectedSessionButton=null;shown.forEach(s=>{let row=document.createElement('div');row.className='session-row';let b=document.createElement('button');b.type='button';b.className='session'+(s.id===sid?' on':'');
+  b.innerHTML='<b>'+esc(s.title)+'</b><span>'+s.n+' messages · '+esc((s.updated_at||'').slice(0,16).replace('T',' '))+'</span>';b.onclick=()=>switchSession(s.id);
+  let more=document.createElement('button');more.type='button';more.className='session-more';more.textContent='⋯';more.setAttribute('aria-label','Chat actions for '+s.title);more.onclick=e=>{e.stopPropagation();openSessionMenu(s,more)};
+  row.oncontextmenu=e=>{e.preventDefault();openSessionMenu(s,row,e.clientX,e.clientY)};row.appendChild(b);row.appendChild(more);sessionsEl.appendChild(row);if(s.id===sid)selectedSessionButton=b});
+ if(selectedSessionButton)selectedSessionButton.scrollIntoView({block:'nearest'})}
 async function loadSessions(){
  let gen=++sessionsGen;
  try{
   let d=await api('/sessions');
   if(gen!==sessionsGen)return;
-  sessionsEl.innerHTML='';
   if(!d.sessions.length){
     let n=await api('/session/new',{method:'POST'});
     if(gen!==sessionsGen)return;
@@ -520,21 +554,20 @@ async function loadSessions(){
     d=await api('/sessions');
     if(gen!==sessionsGen)return;
   }
-  if(d.sessions.length&&!d.sessions.some(x=>x.id===sid))sid=d.sessions[0].id;
+  allSessions=d.sessions||[];
+  if(allSessions.length&&!allSessions.some(x=>x.id===sid))sid=(allSessions.find(x=>!x.archived)||allSessions[0]).id;
   if(gen!==sessionsGen)return;
   syncSession(sid);
-  selectedSessionButton=null;
-  d.sessions.forEach(s=>{
-    let b=document.createElement('button');
-    b.className='session'+(s.id===sid?' on':'');
-    b.innerHTML='<b>'+esc(s.title)+'</b><span>'+s.n+' messages · '+esc((s.updated_at||'').slice(0,16).replace('T',' '))+'</span>';
-    b.onclick=()=>switchSession(s.id);sessionsEl.appendChild(b);
-    if(s.id===sid)selectedSessionButton=b;
-  });
-  if(selectedSessionButton)selectedSessionButton.scrollIntoView({block:'nearest'});
-  let cur=d.sessions.find(x=>x.id===sid);
+  renderSessionList();
+  let cur=allSessions.find(x=>x.id===sid);
   document.getElementById('threadTitle').textContent=cur?cur.title:'New command';
 }catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
+async function manageSession(action){let target=sessionMenuTarget;if(!target)return;if(busy&&target.id===sid){closeSessionMenu();notice('Wait for Hermes to finish before managing this chat.',false);return}
+ if(action==='delete'&&!confirm('Permanently delete “'+target.title+'” and all of its messages? This cannot be undone.'))return;
+ closeSessionMenu();try{if(action==='delete')await api('/session/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:target.id})});
+  else await api('/session/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:target.id,archived:!target.archived})});
+  let wasCurrent=target.id===sid;await loadSessions();if(wasCurrent&&(action==='delete'||!target.archived)){let next=allSessions.find(s=>!s.archived);if(next)await switchSession(next.id);else await newSession()}
+ }catch(e){notice(e.message,true)}}
 async function loadHistory(){let gen=++historyGen,target=sid;statusEl.textContent='Loading';try{let d=await api('/history?session='+target);if(gen!==historyGen||target!==sid)return;threadEl.innerHTML='';if(!d.messages.length){threadEl.appendChild(empty)}else d.messages.forEach(m=>bubble(m.role,m.text));lastMessageId=d.messages.reduce((max,m)=>Math.max(max,Number(m.id)||0),0)
  }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';if((e.message||'').toLowerCase()==='no such conversation'){try{let created=await api('/session/new',{method:'POST'});sid=created.id;syncSession(sid);await loadSessions();await loadHistory();return}catch(e2){notice('Could not load this conversation: '+(e2.message||e.message),true)};return;}notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
 async function switchSession(id){
@@ -545,7 +578,7 @@ async function switchSession(id){
   await loadSessions();
   focusComposer();
 }
-async function newSession(){runToken++;setSidebar('chats');try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){notice(e.message,true)}}
+async function newSession(){runToken++;archivedView=false;setSidebar('chats');try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){notice(e.message,true)}}
 async function send(){let text=input.value.trim();if(busy||uploading||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastMessageId,accepted=false;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text,at);let token=++runToken;busy=true;syncSendState();statusEl.textContent='Working';let wait=thinking();
  try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name})),preview_role:accessInfo&&accessInfo.preview?accessInfo.role:null})});accepted=true;
   if(d.reply){wait.remove();if(runSid===sid){bubble('agent',d.reply);lastMessageId=Math.max(lastMessageId,Number(d.message_id)||0)}}
@@ -639,6 +672,8 @@ function generateCreatorDraft(){
 }
 document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.prompt;send()});
 document.getElementById('newBtn').onclick=newSession;
+activeChatsBtn.onclick=()=>{archivedView=false;closeSessionMenu();renderSessionList()};archivedChatsBtn.onclick=()=>{archivedView=true;closeSessionMenu();renderSessionList()};
+sessionArchiveAction.onclick=()=>manageSession('archive');sessionDeleteAction.onclick=()=>manageSession('delete');
 chatsTab.onclick=()=>setSidebar('chats');companyTab.onclick=()=>setSidebar('company');document.getElementById('docClose').onclick=closeDocument;
 docModal.onclick=e=>{if(e.target===docModal)closeDocument()};renderDocuments();setSidebar('company');
 document.getElementById('creatorNewBtn').onclick=async()=>{attachments=[];input.value='';autosize();await newSession();creatorState=freshCreatorState();saveCreatorState();renderAttachments();renderCreator()};
@@ -659,6 +694,7 @@ function syncDrawers(){
  setDrawerHidden(contextRail,contextMq.matches&&!contextRail.classList.contains('open'))
 }
 function closeMenu(restore=true){
+ closeSessionMenu();
  rail.classList.remove('open');contextRail.classList.remove('open');shade.classList.remove('on');
  menuBtn.setAttribute('aria-expanded','false');contextBtn.setAttribute('aria-expanded','false');
  let active=document.activeElement,target=drawerTrigger;drawerTrigger=null;
@@ -684,7 +720,9 @@ window.addEventListener('popstate',()=>{
  loadSessions();
  focusComposer();
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!docModal.hidden){closeDocument();return}if(e.key==='Escape'&&(rail.classList.contains('open')||contextRail.classList.contains('open')))closeMenu()});
+document.addEventListener('pointerdown',e=>{if(!sessionMenu.hidden&&!sessionMenu.contains(e.target))closeSessionMenu()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!sessionMenu.hidden){closeSessionMenu();return}if(e.key==='Escape'&&!docModal.hidden){closeDocument();return}if(e.key==='Escape'&&(rail.classList.contains('open')||contextRail.classList.contains('open')))closeMenu()});
+window.addEventListener('resize',closeSessionMenu);sessionsEl.addEventListener('scroll',closeSessionMenu,{passive:true});
 for(let mq of [leftMq,contextMq]){if(mq.addEventListener)mq.addEventListener('change',()=>closeMenu(false));else mq.addListener(()=>closeMenu(false))}
 syncDrawers();loadAccessMode();
 loadSessions().then(loadHistory);loadEvents();focusComposer();

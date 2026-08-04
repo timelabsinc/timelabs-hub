@@ -2181,6 +2181,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn = db()
             sql = (
                 "SELECT s.id, s.title, s.updated_at, "
+                "CASE WHEN s.visibility='archived' THEN 1 ELSE 0 END AS archived, "
                 "(SELECT COUNT(*) FROM webchat_messages m WHERE m.session_id = s.id) AS n "
                 "FROM webchat_sessions s"
             )
@@ -2188,7 +2189,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if email not in ADMIN_EMAILS:
                 sql += " WHERE s.owner_email=?"
                 args = (email,)
-            rows = conn.execute(sql + " ORDER BY s.updated_at DESC", args).fetchall()
+            rows = conn.execute(
+                sql + " ORDER BY archived ASC, s.updated_at DESC", args).fetchall()
             conn.close()
             self._json(200, {"sessions": [dict(r) for r in rows]})
             return
@@ -7777,6 +7779,83 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
         self._json(200, {"id": sid})
 
+    def _handle_session_archive(self):
+        """Archive or restore one conversation the caller is allowed to open."""
+        if not self._has_tool("chat"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        email = (self.headers.get("X-User-Email") or "").strip().lower()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            payload = json.loads(self.rfile.read(min(length, 4096)).decode())
+            session_id = int(payload.get("id"))
+            archived = bool(payload.get("archived", True))
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        conn = db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT owner_email FROM webchat_sessions WHERE id=?",
+                (session_id,),
+            ).fetchone()
+            if not row or (email not in ADMIN_EMAILS and row["owner_email"] != email):
+                conn.rollback()
+                self._json(404, {"error": "no such conversation"})
+                return
+            conn.execute(
+                "UPDATE webchat_sessions SET visibility=? WHERE id=?",
+                ("archived" if archived else "private", session_id),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        self._json(200, {"id": session_id, "archived": archived})
+
+    def _handle_session_delete(self):
+        """Permanently remove one owned conversation and its local preferences."""
+        if not self._has_tool("chat"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        # A completing worker still needs its session row. Refuse deletion
+        # conservatively while any Hermes task owns the shared process lock.
+        if LOCK.locked():
+            self._json(409, {"error": "Wait for Hermes to finish before deleting a chat."})
+            return
+        email = (self.headers.get("X-User-Email") or "").strip().lower()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            payload = json.loads(self.rfile.read(min(length, 4096)).decode())
+            session_id = int(payload.get("id"))
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        conn = db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT owner_email FROM webchat_sessions WHERE id=?",
+                (session_id,),
+            ).fetchone()
+            if not row or (email not in ADMIN_EMAILS and row["owner_email"] != email):
+                conn.rollback()
+                self._json(404, {"error": "no such conversation"})
+                return
+            conn.execute("DELETE FROM webchat_model_pref WHERE session_id=?", (session_id,))
+            conn.execute("DELETE FROM webchat_messages WHERE session_id=?", (session_id,))
+            conn.execute("DELETE FROM webchat_sessions WHERE id=?", (session_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        self._json(200, {"id": session_id, "deleted": True})
+
     def _handle_creator_interview(self):
         """Choose one bounded next question without polluting chat history.
 
@@ -8164,6 +8243,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_plan_toggle()
         elif path == "/session/new":
             self._handle_new_session()
+        elif path == "/session/archive":
+            self._handle_session_archive()
+        elif path == "/session/delete":
+            self._handle_session_delete()
         elif path == "/creator/interview":
             self._handle_creator_interview()
         elif path == "/upload":
