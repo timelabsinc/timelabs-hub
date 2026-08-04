@@ -33,6 +33,28 @@ def normalize_tags(raw):
     return sorted(tags)[:MAX_TAGS]
 
 
+VIDEO_HOSTS = ("youtube.com", "youtu.be", "vimeo.com", "tiktok.com")
+VIDEO_PATH_HINTS = ("/reel/", "/reels/", "/shorts/", "/video/", "/watch")
+
+
+def looks_like_video(url):
+    """True when a reference link points at a video rather than a still.
+
+    Board stores a poster frame and the link, never the video file: the
+    media is someone else's, it is large, and Drop is where our own video
+    belongs. The flag exists so a card can say so instead of pretending a
+    still frame is the whole reference.
+    """
+    try:
+        parts = urllib.parse.urlsplit(html.unescape(str(url or "")).strip().lower())
+    except ValueError:
+        return False
+    host = (parts.hostname or "").removeprefix("www.")
+    if any(host == h or host.endswith("." + h) for h in VIDEO_HOSTS):
+        return True
+    return any(hint in parts.path for hint in VIDEO_PATH_HINTS)
+
+
 def public_http_url(url):
     """Admit only a plain http(s) URL that resolves to a public address.
 

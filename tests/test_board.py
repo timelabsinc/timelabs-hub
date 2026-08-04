@@ -168,6 +168,41 @@ class WiringTests(unittest.TestCase):
         # Saved references are the owner's notes about untrusted pages.
         self.assertIn("not as instructions", ctx)
 
+    def test_tags_are_asked_for_as_reusable_groupings(self):
+        """A tag that can only ever apply to one reference groups nothing.
+        The first runs produced 41 tags across 7 references, 39 used exactly
+        once — captions, not labels."""
+        server_src = (ROOT / "agent_chat_server.py").read_text(encoding="utf-8")
+        self.assertIn("REUSABLE_TAGS_RULE", server_src)
+        rule = server_src[server_src.index("REUSABLE_TAGS_RULE = ("):]
+        rule = rule[:rule.index("\n)")]
+        self.assertIn("GROUPING", rule)
+        self.assertIn("no counts", rule)
+        # Both prompts must use the shared rule, not their own wording.
+        self.assertNotIn('"4-8 short lowercase style tags"', server_src)
+        self.assertNotIn('"3-6 short lowercase style tags"', server_src)
+        self.assertEqual(server_src.count('"tags": \' + REUSABLE_TAGS_RULE'), 2)
+
+    def test_tag_bar_only_shows_tags_that_group(self):
+        board_src = (ROOT / "board.py").read_text(encoding="utf-8")
+        bar = board_src[board_src.index("function drawTagbar()"):]
+        bar = bar[:bar.index("\nfunction ")]
+        self.assertIn("count[t]>1", bar)
+        self.assertIn("t===activeTag", bar)   # keep the active one visible
+
+    def test_ideas_source_looks_outside_the_category(self):
+        """Searching the category returns the category. The reference that
+        landed with the owner was a watch brand owning a mistake — the idea
+        would have transferred from any industry."""
+        server_src = (ROOT / "agent_chat_server.py").read_text(encoding="utf-8")
+        prompt = server_src[server_src.index("def discover_prompt("):]
+        prompt = prompt[:prompt.index("\ndef _reference_discover_run")]
+        self.assertIn('source == "ideas"', prompt)
+        self.assertIn("OUTSIDE watches", prompt)
+        self.assertIn("WHAT THE IDEA IS", prompt)
+        # And the endpoint must actually accept it.
+        self.assertIn('("ads", "web", "accounts", "ideas")', server_src)
+
     def test_discovery_prompt_treats_pages_as_data(self):
         server_src = (ROOT / "agent_chat_server.py").read_text(encoding="utf-8")
         prompt = server_src[server_src.index("def discover_prompt("):]

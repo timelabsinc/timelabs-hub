@@ -35,6 +35,7 @@ CSS = """
   padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:.15s;}
 .bd-chip:hover{border-color:var(--border-2);}
 .bd-chip.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+.bd-chip .c{margin-left:6px;font-size:10.5px;opacity:.6;font-variant-numeric:tabular-nums;}
 
 .bd-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px;}
 .bd-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
@@ -45,6 +46,9 @@ CSS = """
 .bd-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
 .bd-thumb svg{width:30px;height:30px;stroke:var(--muted);fill:none;stroke-width:1.6;}
 .bd-card.archived{opacity:.55;}
+.bd-play{position:absolute;top:7px;right:7px;width:26px;height:26px;border-radius:50%;
+  background:rgba(0,0,0,.58);display:flex;align-items:center;justify-content:center;}
+.bd-play svg{width:13px;height:13px;fill:#fff;stroke:none;margin-left:1px;}
 .bd-arch-badge{position:absolute;top:7px;left:7px;background:rgba(0,0,0,.55);color:#fff;
   font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.03em;
   padding:2px 7px;border-radius:5px;}
@@ -115,7 +119,11 @@ CSS = """
 }
 .bd-railitem{display:flex;align-items:center;gap:8px;border:none;background:none;
   color:var(--muted);font:inherit;font-size:13px;font-weight:600;text-align:left;
-  padding:8px 10px;border-radius:var(--r-s);cursor:pointer;white-space:nowrap;}
+  padding:8px 10px;border-radius:var(--r-s);cursor:pointer;white-space:nowrap;
+  max-width:100%;overflow:hidden;}
+/* A board name is free text, so it must be allowed to run out of room
+   gracefully instead of pushing the count out of the pill. */
+.bd-railitem>.nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 .bd-railitem:hover{background:var(--card-2);color:var(--ink);}
 .bd-railitem.on{background:var(--accent-bg);color:var(--accent);}
 .bd-railitem .n{margin-left:auto;font-size:11px;opacity:.75;font-variant-numeric:tabular-nums;}
@@ -240,9 +248,10 @@ function schedulePoll(){
 
 function drawRail(){
   var html='<button type="button" class="bd-railitem'+(activeBoard===''?' on':'')
-    +'" data-board="">All</button>';
+    +'" data-board=""><span class="nm">All</span></button>';
   html+='<button type="button" class="bd-railitem'+(activeBoard==='unsorted'?' on':'')
-    +'" data-board="unsorted">Unsorted<span class="n">'+unsortedCount+'</span></button>';
+    +'" data-board="unsorted"><span class="nm">Unsorted</span>'
+    +'<span class="n">'+unsortedCount+'</span></button>';
   if(boards.length)html+='<div class="bd-railhead">Boards</div>';
   html+=boards.map(function(b){
     var busy=b.discover_status==='queued'||b.discover_status==='running';
@@ -252,7 +261,7 @@ function drawRail(){
     return '<button type="button" class="bd-railitem'+(activeBoard===String(b.id)?' on':'')
       +(busy?' finding':'')+'" data-board="'+b.id+'" title="'
       +esc(b.discover_status==='failed'?(b.discover_error||'Search failed'):b.name)
-      +'">'+esc(b.name)+badge+'</button>';
+      +'"><span class="nm">'+esc(b.name)+'</span>'+badge+'</button>';
   }).join('');
   html+='<button type="button" class="bd-railitem bd-newboard" id="bd-newboard">+ New board</button>';
   $('bd-rail').innerHTML=html;
@@ -280,20 +289,38 @@ function drawBoardOptions(){
   sel.value=current;
 }
 
+/* A tag only earns a chip if it actually groups something. Showing every
+   unique tag turned 7 references into 41 chips, 39 of them used exactly
+   once — a wall that filters nothing. Tags on a single reference stay on
+   the card and remain searchable; they just don't clutter the filter bar. */
 function drawTagbar(){
-  var all={};
-  refs.forEach(function(r){(r.tags||[]).forEach(function(t){all[t]=1;});});
-  var tags=Object.keys(all).sort();
-  var html=tags.map(function(t){
-    return '<button type="button" class="bd-chip'+(t===activeTag?' on':'')+'" data-tag="'+esc(t)+'">'+esc(t)+'</button>';
+  var count={};
+  refs.forEach(function(r){
+    (r.tags||[]).forEach(function(t){count[t]=(count[t]||0)+1;});
+  });
+  var shared=Object.keys(count).filter(function(t){
+    return count[t]>1||t===activeTag;});
+  shared.sort(function(a,b){return count[b]-count[a]||a.localeCompare(b);});
+  var html=shared.map(function(t){
+    return '<button type="button" class="bd-chip'+(t===activeTag?' on':'')
+      +'" data-tag="'+esc(t)+'">'+esc(t)
+      +'<span class="c">'+count[t]+'</span></button>';
   }).join('');
   $('bd-tagbar').innerHTML=html;
+  $('bd-tagbar').style.display=shared.length?'':'none';
   $('bd-tagbar').querySelectorAll('.bd-chip').forEach(function(el){
     el.onclick=function(){
       activeTag=(activeTag===el.getAttribute('data-tag'))?'':el.getAttribute('data-tag');
       loadRefs();
     };
   });
+}
+
+/* Board stores a video's poster frame and its link, never the file — so
+   say so on the tile rather than letting a still pose as the reference. */
+function videoBadge(r){
+  return r.is_video?'<span class="bd-play" title="Video — opens at the source">'
+    +'<svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg></span>':'';
 }
 
 function stateBadge(r){
@@ -312,7 +339,7 @@ function drawGrid(){
     var tags=(r.tags||[]).slice(0,4).map(function(t){return '<span class="bd-tag">'+esc(t)+'</span>';}).join('');
     return '<div class="bd-card'+(r.archived?' archived':'')+'" data-id="'+r.id+'">'
       +'<div class="bd-thumb">'+thumb+(r.archived?'<span class="bd-arch-badge">Archived</span>':'')
-      +stateBadge(r)+'</div>'
+      +videoBadge(r)+stateBadge(r)+'</div>'
       +'<div class="bd-body"><div class="bd-title">'+esc(r.title||'(untitled)')+'</div>'
       +(r.category?'<div class="bd-cat">'+esc(r.category)+'</div>':'')
       +'<div class="bd-tags">'+tags+'</div></div></div>';
@@ -540,6 +567,8 @@ function openView(id){
     head+='<div class="bd-analysis"><b>Style read</b>'+esc(r.analysis)+'</div>';
   }
   var rows='';
+  if(r.is_video)rows+='<dt>Type</dt><dd>Video — the frame below is a still; '
+    +'open the source to watch it</dd>';
   rows+='<dt>Board</dt><dd>'+esc(boardName(r.board_id))+'</dd>';
   if(r.category)rows+='<dt>Category</dt><dd>'+esc(r.category)+'</dd>';
   if((r.tags||[]).length)rows+='<dt>Tags</dt><dd>'+r.tags.map(esc).join(', ')+'</dd>';
@@ -573,8 +602,10 @@ async function shareReference(r){
 $('bd-view-x').onclick=function(){$('bd-view-modal').classList.remove('open');};
 
 /* ---------------- find inspiration ---------------- */
-var findSource='ads';
+var findSource='ideas';
 var SOURCE_COPY={
+  ideas:{label:'What do you want the idea to help you do?',
+         ph:'launch a new dial colour without sounding like an ad'},
   ads:{label:'What to search the ad library for',ph:'seiko mod watch'},
   web:{label:'What kind of thing to look for',ph:'pastel minimal watch product pages'},
   accounts:{label:'Which accounts (comma-separated)',ph:'@christopherwardlondon, @sternglasse'}
@@ -702,7 +733,9 @@ def build():
       Takes a few minutes. You keep what's good and delete the rest.</p>
     <label>Where to look</label>
     <div class="bd-sources" id="bd-sources">
-      <button type="button" class="bd-source on" data-source="ads">Competitor ads
+      <button type="button" class="bd-source on" data-source="ideas">Ideas worth stealing
+        <small>Great brand moves from any industry, and how you'd run your own version</small></button>
+      <button type="button" class="bd-source" data-source="ads">Competitor ads
         <small>Live ads from the public Meta Ad Library</small></button>
       <button type="button" class="bd-source" data-source="web">Around the web
         <small>Brand sites, campaigns, design galleries</small></button>

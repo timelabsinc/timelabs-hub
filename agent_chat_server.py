@@ -401,12 +401,23 @@ def _persist_reference_photos(ref_id, photos):
 
 
 def _discover_board_name(source, query, country):
-    """A default board name that says what the run actually looked for."""
-    short = " ".join(query.split())[:40]
+    """A default board name that says what the run actually looked for.
+
+    Cut on a word boundary: a hard slice produced names like
+    "Ideas: announce a new dial colour and involve c".
+    """
+    words, short = " ".join(query.split()).split(" "), ""
+    for word in words:
+        if len(short) + len(word) + 1 > 34:
+            short = (short or word[:34]).rstrip(" ,.") + "…"
+            break
+        short = f"{short} {word}".strip()
     if source == "ads":
         return f"Ads: {short} ({country})"
     if source == "accounts":
         return f"Accounts: {short}"
+    if source == "ideas":
+        return f"Ideas: {short}"
     return f"Inspo: {short}"
 
 
@@ -1101,7 +1112,10 @@ def _ensure_references_schema():
                 ("queued_at", "TEXT"),
                 ("source_caption", "TEXT"),
                 ("source_author", "TEXT"),
-                ("analysis", "TEXT")):
+                ("analysis", "TEXT"),
+                # A video reference stores its poster frame and its link, not
+                # the video file. The flag lets the card say so.
+                ("is_video", "INTEGER")):
             if col not in cols:
                 conn.execute(f"ALTER TABLE design_references ADD COLUMN {col} {decl}")
         # Share tokens. A designer or supplier has no Labs OS account, so the
@@ -1527,6 +1541,20 @@ def _start_reddit_post_worker(alert=None, slot_held=False):
 REFERENCE_FETCH_TOOLSET = "web,browser,vision"
 
 
+# Tags exist to group references, so a tag that can only ever apply to one
+# thing is noise. The first run produced 41 tags across 7 references, 39 of
+# them used exactly once ("11 watches", "wristwatch-grid") — captions, not
+# labels. Ask for few, broad, reusable ones instead.
+REUSABLE_TAGS_RULE = (
+    '["3-4 short lowercase tags"] — tags are for GROUPING references, so use '
+    'broad reusable qualities that will also fit other references (e.g. '
+    '"pastel", "bold type", "cutout", "dark moody", "grid layout", '
+    '"lifestyle", "studio product", "founder voice", "price-led", '
+    '"editorial"). Never describe this one item specifically: no counts, no '
+    'product names, no one-off descriptors'
+)
+
+
 def reference_fetch_prompt(url):
     return (
         "You are retrieving ONE design reference for a private inspiration "
@@ -1553,7 +1581,7 @@ def reference_fetch_prompt(url):
         '  "analysis": "3-5 sentences on the VISUAL STYLE only: palette, '
         'composition, typography, mood, and what makes it work. Concrete and '
         'specific, no marketing language.",\n'
-        '  "tags": ["4-8 short lowercase style tags"]\n'
+        '  "tags": ' + REUSABLE_TAGS_RULE + "\n"
         "}"
     )
 
@@ -1580,6 +1608,27 @@ def discover_prompt(source, query, country, limit):
               "page name, the ad copy, the ad's own permalink "
               "(facebook.com/ads/library/?id=...) and the DIRECT creative image "
               "URL (the scontent/fbcdn .jpg src).")
+    elif source == "ideas":
+        # Searching the category returns the category: ask for "seiko mod" and
+        # you get competitors' price-grid ads, which is the thing to beat, not
+        # inspiration. The reference that actually landed with the owner was a
+        # watch brand publicly admitting a mistake — the IDEA transfers, and it
+        # would have transferred from any industry.
+        where = (
+            "Find brand posts, campaigns or launches whose IDEA is worth "
+            f"stealing for: {query}\n"
+            "Deliberately look OUTSIDE watches and outside India for most of "
+            "these — fashion, food, furniture, tech, skincare, cycling, "
+            "independent makers. A small brand doing something honest, "
+            "specific or genuinely funny is worth more than a big brand doing "
+            "something expensive. Strong examples include: publicly owning a "
+            "mistake and fixing it, showing the build/process, naming the real "
+            "price of something, answering critics in public, a founder "
+            "speaking plainly, turning a customer complaint into a product "
+            "change, restraint where the category shouts.\n"
+            "Reject anything that is just a product photo with a discount on "
+            "it. For each one take the brand, the post/page URL and the DIRECT "
+            "image URL of the actual visual.")
     elif source == "accounts":
         where = (
             "These are social accounts/handles to look at: "
@@ -1593,6 +1642,17 @@ def discover_prompt(source, query, country, limit):
             "Prefer brand sites, campaign pages, editorial and design galleries. "
             "For each example take the page title, the page URL and the DIRECT "
             "image URL of the actual visual.")
+    if source == "ideas":
+        analysis_rule = (
+            '"2-4 sentences: first WHAT THE IDEA IS, then concretely how '
+            'Timelabs could run its own version of it with watch mods. Name '
+            'the mechanic, not the vibe. No marketing talk."')
+        title_rule = '"short 6-word label naming the IDEA, not the product"'
+    else:
+        analysis_rule = (
+            '"2-4 sentences on the VISUAL STYLE and why it works — palette, '
+            'composition, typography, mood. Concrete, no marketing talk."')
+        title_rule = '"short 6-word label"'
     return (
         "You are collecting design/creative references for Timelabs Co, an "
         "India-based direct-to-consumer brand selling Seiko watch-mod parts and "
@@ -1613,14 +1673,13 @@ def discover_prompt(source, query, country, limit):
         '  "error": "short reason if ok is false, else empty",\n'
         '  "items": [\n'
         "    {\n"
-        '      "title": "short 6-word label",\n'
-        '      "author": "advertiser / account / site name",\n'
+        '      "title": ' + title_rule + ",\n"
+        '      "author": "advertiser / account / site / brand name",\n'
         '      "url": "the permalink of this example",\n'
         '      "image_urls": ["direct image URL(s), max 2"],\n'
         '      "caption": "the real ad copy or caption, max 800 chars",\n'
-        '      "analysis": "2-4 sentences on the VISUAL STYLE and why it works "'
-        '— palette, composition, typography, mood. Concrete, no marketing talk.",\n'
-        '      "tags": ["3-6 short lowercase style tags"]\n'
+        '      "analysis": ' + analysis_rule + ",\n"
+        '      "tags": ' + REUSABLE_TAGS_RULE + "\n"
         "    }\n"
         "  ]\n"
         "}"
@@ -1671,15 +1730,16 @@ def _reference_discover_run(board_id):
             cur = conn.execute(
                 "INSERT INTO design_references (created_by, title, note, tags, "
                 "source_url, source_caption, source_author, analysis, "
-                "local_photos, board_id, fetch_status, fetched_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,'done',datetime('now'))",
+                "local_photos, board_id, is_video, fetch_status, fetched_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,'done',datetime('now'))",
                 (actor, title, "",
                  json.dumps(board_lib.normalize_tags(item.get("tags"))),
                  url,
                  str(item.get("caption") or "").strip()[:1200],
                  str(item.get("author") or "").strip()[:120],
                  str(item.get("analysis") or "").strip()[:2000],
-                 "[]", board_id))
+                 "[]", board_id,
+                 1 if board_lib.looks_like_video(url) else 0))
             ref_id = cur.lastrowid
             conn.commit()
         finally:
@@ -4021,11 +4081,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             cur = conn.execute(
                 "INSERT INTO design_references "
                 "(created_by, title, note, category, tags, source_url, local_photos, "
-                "board_id, fetch_status, queued_at) "
+                "board_id, fetch_status, queued_at, is_video) "
                 "VALUES (?,?,?,?,?,?,?,?,?,"
-                "CASE WHEN ? THEN datetime('now') ELSE NULL END)",
+                "CASE WHEN ? THEN datetime('now') ELSE NULL END,?)",
                 (actor, title, note, category, json.dumps(tags), source_url, "[]",
-                 board_id, "queued" if wants_fetch else None, 1 if wants_fetch else 0))
+                 board_id, "queued" if wants_fetch else None, 1 if wants_fetch else 0,
+                 1 if board_lib.looks_like_video(source_url) else 0))
             ref_id = cur.lastrowid
             conn.commit()
         except Exception as e:
@@ -4314,7 +4375,7 @@ footer{{margin-top:34px;color:var(--muted);font-size:12.5px;
             self._json(400, {"error": "bad request"})
             return
         source = str(p.get("source") or "web").strip().lower()
-        if source not in ("ads", "web", "accounts"):
+        if source not in ("ads", "web", "accounts", "ideas"):
             self._json(400, {"error": "unknown source"})
             return
         query = str(p.get("query") or "").strip()[:300]
@@ -4322,6 +4383,7 @@ footer{{margin-top:34px;color:var(--muted);font-size:12.5px;
             self._json(400, {"error": {
                 "ads": "Say what to search the ad library for",
                 "accounts": "Name the accounts to look at",
+                "ideas": "Say what the idea should help you do",
             }.get(source, "Say what to look for")})
             return
         country = re.sub(r"[^A-Za-z]", "", str(p.get("country") or "IN"))[:2].upper() or "IN"
@@ -4443,7 +4505,7 @@ footer{{margin-top:34px;color:var(--muted);font-size:12.5px;
         rows = conn.execute(
             "SELECT id, created_at, created_by, title, note, category, tags, "
             "source_url, local_photos, archived, board_id, fetch_status, "
-            "fetch_error, fetched_at, source_caption, source_author, analysis "
+            "fetch_error, fetched_at, source_caption, source_author, analysis, is_video "
             "FROM design_references "
             + ("" if include_archived else "WHERE COALESCE(archived,0)=0 ")
             + "ORDER BY created_at DESC").fetchall()
