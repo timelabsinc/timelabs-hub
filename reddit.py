@@ -932,6 +932,7 @@ def build():
             <label for="c-kind">What kind of post</label>
             <select id="c-kind">
               <option value="showcase">Build showcase</option>
+              <option value="review">Watch review</option>
               <option value="discussion">Discussion / poll</option>
               <option value="drop">Product drop or restock</option>
             </select>

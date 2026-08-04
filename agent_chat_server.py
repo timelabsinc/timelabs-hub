@@ -1819,6 +1819,7 @@ SAFE_WEB_TOOLSET = "web,memory,skills,session_search,context_engine,clarify,visi
 # Exposing them would let one operator retrieve or persist data in the
 # owner's CLI/WhatsApp sessions despite the SQL session boundary below.
 NONADMIN_TOOLSET = "web,clarify,vision"
+CREATOR_PREVIEW_TOOLSET = NONADMIN_TOOLSET
 
 # Admins additionally get `terminal`, which is what lets the agent actually DO
 # things via the `labs` CLI instead of only describing them. Granted by role,
@@ -7812,6 +7813,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not any(answer["id"] == "source" for answer in answers):
             self._json(200, {**fallback, "planned_by": "fallback"})
             return
+        # Subreddit and post-route defaults are operating data, not a creative
+        # planning decision. Keep these stored choices stable and make our own
+        # r/IndiaWatchMods relationship unambiguous on every new Reddit brief.
+        if channel == "reddit" and fallback.get("id") in ("community", "reddit_route"):
+            self._json(200, {**fallback, "planned_by": "defaults"})
+            return
         if fallback.get("status") == "ready":
             self._json(200, {**fallback, "planned_by": "fallback"})
             return
@@ -7859,7 +7866,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         preview_nonadmin = (caller_email in ADMIN_EMAILS
                             and preview_role in ("full", "creator"))
-        tools_for_caller = (("web", "clarify", "vision") if preview_nonadmin
+        tools_for_caller = (CREATOR_PREVIEW_TOOLSET if preview_nonadmin
                             else toolset_for(caller_email))
         isolate_caller = caller_email not in ADMIN_EMAILS or preview_nonadmin
         email = caller_email

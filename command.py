@@ -128,6 +128,13 @@ html,body{height:100%;overflow:hidden}
   text-transform:uppercase;color:var(--muted);margin:0 0 6px 2px}
 .msg.user .bubble{margin-left:auto;max-width:78%;background:var(--ink);color:var(--bg);border-radius:14px 14px 4px 14px;
   padding:11px 14px;white-space:pre-wrap;font-size:14px;line-height:1.5}
+.sent-media{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.sent-media:first-child{margin-top:0}
+.sent-media-item{width:118px;min-height:42px;margin:0;padding:5px;border:1px solid color-mix(in srgb,currentColor 28%,transparent);
+  border-radius:9px;display:flex;align-items:center;gap:6px;box-sizing:border-box;overflow:hidden}
+.sent-media-item img{width:44px;height:44px;flex:none;border-radius:6px;object-fit:cover;background:var(--bg)}
+.sent-media-icon{width:30px;height:30px;flex:none;border:1px solid color-mix(in srgb,currentColor 28%,transparent);border-radius:6px;
+  display:grid;place-items:center;font-size:8px;font-weight:850;letter-spacing:.06em}
+.sent-media-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:1.2}
 .msg.agent .bubble{background:var(--card);border:1px solid var(--border);border-radius:4px 14px 14px 14px;
   padding:16px 18px;color:var(--ink);font-size:14px;line-height:1.6;box-shadow:var(--shadow)}
 .md h1,.md h2,.md h3{margin:12px 0 6px;line-height:1.25}.md h1{font-size:20px}.md h2{font-size:17px}.md h3{font-size:15px}
@@ -412,6 +419,15 @@ async function loadAccessMode(){
 function syncSendState(){sendBtn.disabled=busy||uploading>0}
 function stored(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function remember(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+function normalizeSubreddit(value){let v=String(value||'').trim();if(!v||/^other subreddit$/i.test(v))return'';
+ v=v.replace(/^https?:\/\/(?:www\.)?reddit\.com\/r\//i,'').replace(/^r\//i,'').replace(/^\/+|\/+$/g,'');
+ return /^[A-Za-z0-9_]{2,21}$/.test(v)?'r/'+v:''}
+function learnedSubreddits(){let data={};try{data=JSON.parse(stored('labs_creator_subreddits')||'{}')||{}}catch(e){}
+ return Object.entries(data).filter(([name,row])=>normalizeSubreddit(name)&&row&&Number(row.count)>0)
+  .sort((a,b)=>(Number(b[1].count)-Number(a[1].count))||(Number(b[1].last)-Number(a[1].last))).map(([name])=>normalizeSubreddit(name)).slice(0,8)}
+function rememberSubreddit(value){let name=normalizeSubreddit(value);if(!name)return value;let data={};try{data=JSON.parse(stored('labs_creator_subreddits')||'{}')||{}}catch(e){}
+ let prior=data[name]||{};data[name]={count:Math.max(0,Number(prior.count)||0)+1,last:Date.now()};remember('labs_creator_subreddits',JSON.stringify(data));return name}
+function communityOptions(options){let out=[];learnedSubreddits().concat(options||[]).forEach(value=>{if(value&&!out.includes(value))out.push(value)});return out}
 function setSessionInUrl(id, push){
   try{
     var u=new URL(location.href);
@@ -427,13 +443,11 @@ function setSessionInUrl(id, push){
     }
   }catch(e){}
 }
-function getStoredSessionId(){
-  let v=parseInt(stored('labs_command_session')||stored('tl_session')||'1',10);
-  return Number.isFinite(v)?v:1;
-}
 function getSessionFromUrl(){
-  let v=parseInt(new URLSearchParams(location.search).get('session')||'',10);
-  return Number.isFinite(v)?v:getStoredSessionId();
+  let raw=new URLSearchParams(location.search).get('session');
+  if(!raw)return null;
+  let v=parseInt(raw,10);
+  return Number.isFinite(v)?v:null;
 }
 function syncSession(id, push){
   let next=Number.isFinite(id)?id:1,changed=next!==sid;
@@ -471,14 +485,23 @@ function renderDocuments(){let el=document.getElementById('documentList');el.inn
 let docTrigger=null;function openDocument(d){docTrigger=document.activeElement;docTitle.textContent=d.title;docBody.innerHTML=md(d.body);docModal.hidden=false;closeMenu(false);document.getElementById('docClose').focus()}
 function closeDocument(){if(docModal.hidden)return;docModal.hidden=true;if(docTrigger&&docTrigger.focus)docTrigger.focus();docTrigger=null}
 function setSidebar(view){let chats=view==='chats';sessionsEl.hidden=!chats;cmoContext.hidden=chats;chatsTab.classList.toggle('on',chats);companyTab.classList.toggle('on',!chats);chatsTab.setAttribute('aria-selected',String(chats));companyTab.setAttribute('aria-selected',String(!chats))}
-function bubble(role,text){if(empty&&empty.parentNode)empty.remove();let m=document.createElement('div');m.className='msg '+role;
+function splitUserMedia(text,live){let media=(live||[]).map(a=>({name:String(a.name||'image'),url:String(a.url||'')})),clean=String(text||'');
+ clean=clean.replace(/\s*\[attached photo:\s*([^\]]+)\]/gi,(all,name)=>{if(!media.some(a=>a.name===name.trim()))media.push({name:name.trim(),url:''});return ''}).trim();
+ return{text:clean,media:media}}
+function bubble(role,text,liveMedia){if(empty&&empty.parentNode)empty.remove();let m=document.createElement('div');m.className='msg '+role;
  m.innerHTML='<div class="msg-label">'+(role==='user'?'You':'Hermes')+'</div><div class="bubble"></div>';let b=m.querySelector('.bubble');
  if(role==='agent'){
   b.innerHTML='<div class="md">'+md(text)+'</div><div class="msg-tools"><button type="button" class="copy-all">Copy full response</button></div>';
   b.querySelector('.copy-all').onclick=async e=>{if(await copyText(text))copiedState(e.target)};
   b.querySelectorAll('.md pre').forEach(pre=>{let code=pre.querySelector('code'),button=document.createElement('button');button.type='button';button.className='block-copy';button.textContent='Copy this text';button.onclick=async()=>{if(await copyText(code.textContent))copiedState(button)};pre.appendChild(button)})
+ }else{
+  let parsed=splitUserMedia(text,liveMedia);
+  if(parsed.text){let copy=document.createElement('div');copy.className='msg-text';copy.textContent=parsed.text;b.appendChild(copy)}
+  if(parsed.media.length){let media=document.createElement('div');media.className='sent-media';parsed.media.forEach(a=>{let item=document.createElement('div');item.className='sent-media-item';item.title=a.name;
+   if(a.url){let img=document.createElement('img');img.src=a.url;img.alt='Uploaded image: '+a.name;item.appendChild(img)}else{let icon=document.createElement('span');icon.className='sent-media-icon';icon.textContent='IMG';item.appendChild(icon)}
+   let name=document.createElement('span');name.className='sent-media-name';name.textContent=a.name;item.appendChild(name);media.appendChild(item)});b.appendChild(media)}
  }
- else b.textContent=text;threadEl.appendChild(m);threadEl.scrollTop=threadEl.scrollHeight;return m}
+ threadEl.appendChild(m);threadEl.scrollTop=threadEl.scrollHeight;return m}
 function thinking(){let creator=document.body.classList.contains('creator-mode'),d=document.createElement('div');d.className='thinking';d.innerHTML='<span class="dots"><i></i><i></i><i></i></span><span>'+(creator?'Hermes is drafting with the TimeLabs writing standard…':'Hermes is working with live business context…')+'</span>';threadEl.appendChild(d);threadEl.scrollTop=threadEl.scrollHeight;return d}
 function notice(text,bad){let n=document.createElement('div');n.className='notice'+(bad?' bad':'');n.textContent=text;threadEl.appendChild(n);threadEl.scrollTop=threadEl.scrollHeight;return n}
 async function api(path,opt){let r=await fetch(API+path,opt);let ct=r.headers.get('content-type')||'';
@@ -523,7 +546,7 @@ async function switchSession(id){
   focusComposer();
 }
 async function newSession(){runToken++;setSidebar('chats');try{let d=await api('/session/new',{method:'POST'});await switchSession(d.id)}catch(e){notice(e.message,true)}}
-async function send(){let text=input.value.trim();if(busy||uploading||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastMessageId,accepted=false;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text||(at.length+' photo'+(at.length===1?'':'s')));let token=++runToken;busy=true;syncSendState();statusEl.textContent='Working';let wait=thinking();
+async function send(){let text=input.value.trim();if(busy||uploading||(!text&&!attachments.length))return;let at=attachments.slice(),runSid=sid,baseline=lastMessageId,accepted=false;attachments=[];renderAttachments();input.value='';autosize();let optimistic=bubble('user',text,at);let token=++runToken;busy=true;syncSendState();statusEl.textContent='Working';let wait=thinking();
  try{let d=await api('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:runSid,message:text,images:at.map(x=>({path:x.path,name:x.name})),preview_role:accessInfo&&accessInfo.preview?accessInfo.role:null})});accepted=true;
   if(d.reply){wait.remove();if(runSid===sid){bubble('agent',d.reply);lastMessageId=Math.max(lastMessageId,Number(d.message_id)||0)}}
   else if(d.pending){await poll(runSid,wait,baseline,token)}
@@ -582,12 +605,13 @@ function renderCreator(){
  let q=creatorState.phase==='source'?creatorSourceQuestion():creatorState.question;if(!q){creatorState.phase='ready';renderCreator();return}
  label.textContent='Question '+(creatorState.answers.length+2)+' · '+(creatorState.phase==='source'?'Source':'Brief');
  step.innerHTML='<h3 class="creator-question">'+esc(q.question)+'</h3><p class="creator-help">'+esc(q.help||'Answer with confirmed information only.')+'</p>'+(q.input==='choice'?'<div class="creator-choices" id="creatorChoices"></div>':'<div class="creator-answer"><textarea id="creatorAnswer" maxlength="2400" placeholder="Type a rough answer…">'+esc(creatorState.draft||'')+'</textarea><div class="creator-actions">'+(q.id==='source'?'<button type="button" class="creator-action" id="creatorMediaBtn">＋ Add media</button>':'')+(q.required===false?'<button type="button" class="creator-action" id="creatorSkipBtn">Skip</button>':'')+'<button type="button" class="creator-action primary" id="creatorContinueBtn">Continue</button></div></div>');
- if(q.input==='choice'){let choices=document.getElementById('creatorChoices');(q.options||[]).forEach(option=>{let b=document.createElement('button');b.type='button';b.className='creator-choice';b.textContent=option;b.onclick=()=>answerCreatorQuestion(option);choices.appendChild(b)})}
+ if(q.input==='choice'){let choices=document.getElementById('creatorChoices'),options=q.id==='community'?communityOptions(q.options):q.options||[];options.forEach(option=>{let b=document.createElement('button');b.type='button';b.className='creator-choice';b.textContent=option;b.onclick=()=>{if(q.id==='community'&&option==='Other subreddit'){creatorState.question={status:'question',id:'community',question:'Which subreddit exactly?',help:'Type the real community name, for example r/SeikoMods. This will be remembered as a future suggestion.',input:'text',options:[],required:true};creatorState.draft='';saveCreatorState();renderCreator();focusComposer();return}answerCreatorQuestion(option)};choices.appendChild(b)})}
  else{let a=document.getElementById('creatorAnswer'),go=document.getElementById('creatorContinueBtn');let sync=()=>{creatorState.draft=a.value;go.disabled=!a.value.trim()&&!(q.id==='source'&&attachments.length);saveCreatorState()};a.oninput=sync;sync();go.onclick=()=>answerCreatorQuestion(a.value);let media=document.getElementById('creatorMediaBtn');if(media)media.onclick=()=>document.getElementById('fileInput').click();let skip=document.getElementById('creatorSkipBtn');if(skip)skip.onclick=()=>answerCreatorQuestion('Not needed')}
  }
 function answerCreatorQuestion(value){
  let q=creatorState.phase==='source'?creatorSourceQuestion():creatorState.question,answer=String(value||'').trim();
  if(q.id==='source'&&attachments.length){let media='Attached media: '+attachments.map(a=>a.name).join(', ');answer=answer?answer+'\n'+media:media}
+ if(q.id==='community'){answer=rememberSubreddit(answer);if(!normalizeSubreddit(answer)){setCreatorStatus('Enter a subreddit such as r/SeikoMods.',true);return}}
  if(!answer){setCreatorStatus('Add a rough answer'+(q.id==='source'?' or attach media':'')+' before continuing.',true);return}
  creatorState.answers=creatorState.answers.filter(a=>a.id!==q.id);creatorState.answers.push({id:q.id,question:q.question,answer:answer});creatorState.draft='';creatorState.notice='';saveCreatorState();requestCreatorQuestion()
 }

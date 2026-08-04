@@ -47,6 +47,25 @@ class CreatorWorkspaceTests(unittest.TestCase):
         ]
         self.assertEqual(creator_interview.next_fallback("reddit", full)["status"], "ready")
 
+    def test_reddit_defaults_name_our_subreddit_and_common_post_routes(self):
+        community = creator_interview.next_fallback("reddit", [{
+            "id": "source", "question": "Source?", "answer": "A watch photo",
+        }])
+        self.assertEqual(community["input"], "choice")
+        self.assertIn("r/IndiaWatchMods", community["options"])
+        self.assertNotEqual(community["options"][0], "r/IndiaWatchMods")
+        self.assertIn("not a default", community["help"])
+        self.assertIn("r/SellSeikoMods", community["options"])
+        self.assertEqual(community["options"][-1], "Other subreddit")
+        route = creator_interview.next_fallback("reddit", [
+            {"id": "source", "question": "Source?", "answer": "A watch photo"},
+            {"id": "community", "question": "Subreddit?",
+             "answer": "r/IndiaWatchMods"},
+        ])
+        self.assertEqual(route["options"][:2], ["Build showcase", "Watch review"])
+        server = (ROOT / "agent_chat_server.py").read_text(encoding="utf-8")
+        self.assertIn('fallback.get("id") in ("community", "reddit_route")', server)
+
     def test_planner_treats_creator_material_as_untrusted_data(self):
         prompt = creator_interview.planner_prompt("instagram", [{
             "id": "source", "question": "Source?",
@@ -91,9 +110,22 @@ class CreatorWorkspaceTests(unittest.TestCase):
         self.assertIn("Visual preview only", shell)
         self.assertIn('params.get("view_as")', server)
         self.assertIn('preview_role in ("full", "creator")', server)
+        self.assertIn('CREATOR_PREVIEW_TOOLSET = NONADMIN_TOOLSET', server)
+        self.assertNotIn('("web", "clarify", "vision") if preview_nonadmin', server)
         self.assertIn("window.LabsAccessPromise", drop)
         self.assertIn("i.role === 'creator'", drop)
         self.assertIn("preview_role:accessInfo&&accessInfo.preview", (ROOT / "command.py").read_text(encoding="utf-8"))
+
+    def test_command_launch_uses_newest_session_and_sent_media_is_visible(self):
+        source = (ROOT / "command.py").read_text(encoding="utf-8")
+        self.assertIn("if(!raw)return null", source)
+        self.assertNotIn("getStoredSessionId", source)
+        self.assertIn("splitUserMedia", source)
+        self.assertIn("bubble('user',text,at)", source)
+        self.assertIn("Uploaded image: ", source)
+        self.assertIn("learnedSubreddits", source)
+        self.assertIn("rememberSubreddit", source)
+        self.assertIn("Which subreddit exactly?", source)
 
 
 if __name__ == "__main__":

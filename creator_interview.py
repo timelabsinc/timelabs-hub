@@ -47,6 +47,26 @@ COMMON_OUTCOME = _q(
     "choice", ("Reply or comment", "Send a DM", "Visit a link", "No action — just read"),
 )
 
+# These are the useful recurring destinations for TimeLabs watch content.
+# Keep the owned community explicit so a creator never has to remember whether
+# r/IndiaWatchMods is a third-party subreddit that needs an outsider posture.
+REDDIT_COMMUNITIES = (
+    "r/SeikoMods",
+    "r/watchmodding",
+    "r/watchesindia",
+    "r/IndiaWatchMods",
+    "r/SellSeikoMods",
+    "Other subreddit",
+)
+
+REDDIT_POST_ROUTES = (
+    "Build showcase",
+    "Watch review",
+    "Build diary",
+    "Question or discussion",
+    "Founder note",
+)
+
 FALLBACKS = {
     "instagram": (
         _q("angle", "What job should this caption do?", "Pick one clear reason for posting.",
@@ -63,9 +83,11 @@ FALLBACKS = {
         COMMON_OUTCOME,
     ),
     "reddit": (
-        _q("community", "Which subreddit is this for?", "Community norms change the useful angle and level of disclosure."),
+        _q("community", "Which subreddit is this for?",
+           "These are suggestions, not a default. Choose the community where this specific post naturally belongs; r/IndiaWatchMods is ours.",
+           "choice", REDDIT_COMMUNITIES),
         _q("reddit_route", "What kind of Reddit post is it?", "Choose the honest route that matches the material.",
-           "choice", ("Build showcase", "Build diary", "Honest review", "Question or discussion", "Founder note")),
+           "choice", REDDIT_POST_ROUTES),
         _q("relationship", "What is our relationship to this post?", "Reddit posts must disclose the TimeLabs connection clearly.",
            "choice", ("TimeLabs team member", "TimeLabs founder", "Customer content with permission")),
     ),
