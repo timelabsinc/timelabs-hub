@@ -884,7 +884,8 @@ def _appnav(active="face", drop_ready=False):
 # Labs Drop, Labs Ledger, Labs Chat, Labs Tools — like Google Drive/Docs. The
 # collective name is "Labs OS" (shown in the footer). One header for every page.
 SECTION_LABEL = {"face": "Home", "drop": "Drop", "ledger": "Ledger",
-                 "chat": "Command", "tools": "Tools", "orders": "Orders"}
+                 "chat": "Command", "tools": "Tools", "orders": "Orders",
+                 "board": "Board"}
 
 
 def role_preview_control():

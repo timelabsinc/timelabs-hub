@@ -40,17 +40,17 @@ ROLES = {
     },
     "full": {
         "label": "Full",
-        "blurb": "Daily operations — dashboard, orders, Drop, Ledger, Command and Reddit. "
+        "blurb": "Daily operations — dashboard, orders, Drop, Ledger, Command, Reddit and Board. "
                  "Live Shopify publishing stays admin-only.",
         "home": "/ops/",
-        "tools": ["face", "drop", "ledger", "chat", "orders", "reddit"],
+        "tools": ["face", "drop", "ledger", "chat", "orders", "reddit", "board"],
     },
     "creator": {
         "label": "Creator",
-        "blurb": "Content drafting in private Command conversations, plus Reddit and Drop. "
+        "blurb": "Content drafting in private Command conversations, plus Reddit, Drop and Board. "
                  "No orders, customers, margins, owner chats, sending or publishing.",
         "home": "/ops/command.html",
-        "tools": ["chat", "reddit", "drop"],
+        "tools": ["chat", "reddit", "drop", "board"],
     },
     "orders": {
         "label": "Orders",
@@ -186,6 +186,7 @@ _OPS_PATH_TO_TOOL = {
     "theme-editor.html": "theme",
     "product-updater.html": "price",
     "product-builder.html": "product",
+    "board.html": "board",
 }
 
 

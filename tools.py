@@ -37,6 +37,8 @@ IC = {
     "supplier": '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
     "reddit": '<circle cx="12" cy="13" r="7"/><circle cx="8.5" cy="13" r="1"/><circle cx="15.5" cy="13" r="1"/><path d="M8.5 16.5c1 .8 2.2 1.2 3.5 1.2s2.5-.4 3.5-1.2"/><path d="M12 6V3M12 3l2.2 1"/>',
     "instagram": '<rect x="4" y="4" width="16" height="16" rx="5"/><circle cx="12" cy="12" r="3.5"/><circle cx="17.2" cy="6.8" r="1"/>',
+    "board": '<rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/>'
+             '<rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/>',
 }
 
 # (key, name, description, href-or-None, status)  status: "live" | "soon" | "admin"
@@ -54,6 +56,7 @@ TOOLS = [
         ("content", "Content updater", "Bulk-refresh product copy &amp; edit store pages in your voice.", "/ops/content-updater.html", "live"),
         ("reddit", "Reddit listener", "Surfaces watch-hobbyist threads worth a genuine reply — read-only, nothing auto-posts.", "/ops/reddit.html", "live"),
         ("instagram", "Instagram audit", "Read-only account performance, content winners and public competitor signals.", "/ops/instagram-audit.html", "live"),
+        ("board", "Board", "Save a design or creative reference you like, tag it, and keep it somewhere you can find it again.", "/ops/board.html", "live"),
     ]),
     ("Shopify", [
         ("theme", "Theme editor", "Describe a look — Claude restyles your storefront, you approve it.", "/ops/theme-editor.html", "live"),
@@ -110,6 +113,9 @@ def _availability(key, declared):
                 else "degraded")
     if key == "reddit":
         return "live" if _service_active("ops-agent-chat") else "degraded"
+    if key == "board":
+        return ("live" if _service_active("ops-agent-chat")
+                and _db_ok("/root/ops-dashboard/data/hermes.db") else "degraded")
     return declared
 
 

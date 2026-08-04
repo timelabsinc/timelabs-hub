@@ -1105,7 +1105,7 @@ def main():
     generators = ("command", "tools", "blog", "product_updater", "product_builder",
                   "content_updater", "theme_editor", "files", "order_form",
                   "supplier", "access", "architecture", "blog_uploader",
-                  "drop_chrome", "reddit", "instagram_audit")
+                  "drop_chrome", "reddit", "instagram_audit", "board")
     for mod in generators:
         try:
             __import__(mod).build()

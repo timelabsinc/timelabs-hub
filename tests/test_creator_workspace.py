@@ -91,7 +91,7 @@ class CreatorWorkspaceTests(unittest.TestCase):
     def test_admin_can_preview_creator_presentation_without_changing_permissions(self):
         payload = access_store.presentation_for(access_store.ADMINS[0], "creator")
         self.assertEqual(payload["role"], "creator")
-        self.assertEqual(payload["tools"], ["chat", "reddit", "drop"])
+        self.assertEqual(payload["tools"], ["chat", "reddit", "drop", "board"])
         self.assertTrue(payload["preview"])
         self.assertTrue(payload["actual_admin"])
         self.assertFalse(payload["admin"])

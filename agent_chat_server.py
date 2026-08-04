@@ -56,6 +56,10 @@ ORDER_PHOTOS = "/root/ops-dashboard/data/order-photos"
 # only through the role-checked endpoint below and backed up with the databases.
 REDDIT_MEDIA = "/root/ops-dashboard/data/reddit-media"
 REDDIT_MEDIA_TRASH = "/root/ops-dashboard/data/.reddit-media-trash"
+# Saved design/creative reference photos (Board). Same rationale as order
+# photos: under /root so nginx can't reach it, served only through the
+# role-checked endpoint below.
+REFERENCE_MEDIA = "/root/ops-dashboard/data/reference-photos"
 # Labs Drop's storage root — a separate service (drop_server.py, :8903) owns
 # this, but it's local disk on the same box, so copying a picked photo into
 # UPLOAD_DIR is a plain file copy rather than a round trip through Drop's own
@@ -178,6 +182,7 @@ def hub_event(kind, detail, actor="?", app="key"):
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(ORDER_PHOTOS, exist_ok=True)
 os.makedirs(REDDIT_MEDIA, exist_ok=True)
+os.makedirs(REFERENCE_MEDIA, exist_ok=True)
 os.makedirs(THEME_BACKUPS, exist_ok=True)
 
 
@@ -350,6 +355,37 @@ def _persist_reddit_photos(post_id, photos):
         shutil.rmtree(post_dir, ignore_errors=True)
         try:
             _fsync_directory(REDDIT_MEDIA)
+        except OSError:
+            pass
+        raise
+
+
+def _persist_reference_photos(ref_id, photos):
+    """Copy staged owner uploads into one durable, private reference directory."""
+    if not photos:
+        return []
+    ref_dir = os.path.join(REFERENCE_MEDIA, str(int(ref_id)))
+    os.makedirs(ref_dir, mode=0o700, exist_ok=False)
+    stored = []
+    try:
+        for index, source in enumerate(photos, 1):
+            ext = os.path.splitext(source)[1].lower()
+            if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+                raise ValueError("unsupported reference photo")
+            destination = os.path.join(ref_dir, f"{index}{ext}")
+            with open(source, "rb") as src, open(destination, "xb") as dst:
+                shutil.copyfileobj(src, dst)
+                dst.flush()
+                os.fsync(dst.fileno())
+            stored.append(destination)
+        _fsync_directory(ref_dir)
+        _fsync_directory(REFERENCE_MEDIA)
+        _fsync_directory(os.path.dirname(REFERENCE_MEDIA))
+        return stored
+    except Exception:
+        shutil.rmtree(ref_dir, ignore_errors=True)
+        try:
+            _fsync_directory(REFERENCE_MEDIA)
         except OSError:
             pass
         raise
@@ -868,6 +904,33 @@ def _ensure_reddit_schema():
         raise
 
 
+def _ensure_references_schema():
+    """Board: a saved library of design/creative references (screenshots,
+    links) the owner wants to keep and browse — tags/notes only for now, no
+    'generate something like this' hook wired up yet (a deliberate, later
+    decision, not an oversight)."""
+    try:
+        conn = sqlite3.connect(DB, timeout=5)
+        conn.execute("""CREATE TABLE IF NOT EXISTS design_references (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            created_by TEXT,
+            title TEXT,
+            note TEXT,
+            category TEXT,
+            tags TEXT,
+            source_url TEXT,
+            local_photos TEXT,
+            archived INTEGER NOT NULL DEFAULT 0)""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_design_references_archived "
+                     "ON design_references(archived)")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[board] schema check: {e}", flush=True)
+        raise
+
+
 def _ensure_stock_schema():
     """A build we are making for ourselves, with no buyer yet.
 
@@ -1315,6 +1378,7 @@ _ensure_reddit_schema()
 _ensure_billing_schema()
 _ensure_stock_schema()
 _ensure_webchat_ownership()
+_ensure_references_schema()
 
 
 def _fs_resolve(p):
@@ -2254,6 +2318,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ).fetchall()
             conn.close()
             self._json(200, {"messages": [dict(r) for r in reversed(rows)]})
+            return
+        if path == "/references/list":
+            self._handle_references_list(query)
+            return
+        if path == "/references/photo":
+            self._handle_reference_photo(query)
             return
         self._json(404, {"error": "not found"})
 
@@ -3234,6 +3304,241 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return False
         import access_store
         return access_store.can_use(email, tool_key)
+
+    # --- Board (saved design/creative references) --------------------------
+
+    def _handle_references_save(self):
+        if not self._has_tool("board"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        actor = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 65536)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        import board_lib
+        title = str(p.get("title") or "").strip()[:200]
+        note = str(p.get("note") or "").strip()[:2000]
+        category = str(p.get("category") or "").strip()[:60]
+        source_url = str(p.get("source_url") or "").strip()[:500]
+        tags = board_lib.normalize_tags(p.get("tags"))
+        raw_photos = p.get("photos") or []
+        photos = []
+        for candidate in raw_photos[:8]:
+            owned = _upload_owned(candidate, actor)
+            if not owned:
+                self._json(400, {
+                    "error": "A photo expired or belongs to another account. "
+                             "Attach it again."})
+                return
+            photos.append(owned)
+        if not title and not photos:
+            self._json(400, {"error": "add a title or at least one photo"})
+            return
+        conn = db()
+        try:
+            cur = conn.execute(
+                "INSERT INTO design_references "
+                "(created_by, title, note, category, tags, source_url, local_photos) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (actor, title, note, category, json.dumps(tags), source_url, "[]"))
+            ref_id = cur.lastrowid
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            print(f"[board] save: {e}", flush=True)
+            self._json(500, {"error": "could not save the reference"})
+            return
+        conn.close()
+        try:
+            durable_photos = _persist_reference_photos(ref_id, photos)
+        except Exception as e:
+            # Roll back the row rather than leave a photoless orphan behind.
+            cleanup = db()
+            cleanup.execute("DELETE FROM design_references WHERE id=?", (ref_id,))
+            cleanup.commit()
+            cleanup.close()
+            print(f"[board] photo persist {ref_id}: {e}", flush=True)
+            self._json(500, {"error": "could not save the reference photos"})
+            return
+        if durable_photos:
+            conn = db()
+            conn.execute("UPDATE design_references SET local_photos=? WHERE id=?",
+                         (json.dumps(durable_photos), ref_id))
+            conn.commit()
+            conn.close()
+        for photo in photos:
+            _forget_upload(photo, remove_data=True)
+        hub_event("reference_add", f"{title or '(untitled)'} ({len(photos)} photo(s))",
+                  actor, app="board")
+        self._json(200, {"ok": True, "id": ref_id})
+
+    def _handle_references_list(self, query):
+        if not self._has_tool("board"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        params = dict(urllib.parse.parse_qsl(query, keep_blank_values=True))
+        tag = params.get("tag", "").strip().lower()
+        category = params.get("category", "").strip()
+        q = params.get("q", "").strip().lower()
+        include_archived = params.get("archived") == "1"
+        conn = db()
+        rows = conn.execute(
+            "SELECT id, created_at, created_by, title, note, category, tags, "
+            "source_url, local_photos, archived FROM design_references "
+            + ("" if include_archived else "WHERE archived=0 ")
+            + "ORDER BY created_at DESC").fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                row_tags = json.loads(d.get("tags") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                row_tags = []
+            try:
+                photos = json.loads(d.get("local_photos") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                photos = []
+            d["tags"] = row_tags
+            d["photo_count"] = len(photos)
+            del d["local_photos"]
+            if tag and tag not in [t.lower() for t in row_tags]:
+                continue
+            if category and d.get("category") != category:
+                continue
+            if q and q not in (d.get("title") or "").lower() \
+                    and q not in (d.get("note") or "").lower():
+                continue
+            out.append(d)
+        self._json(200, {"references": out})
+
+    def _handle_references_update(self):
+        if not self._has_tool("board"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 16384)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            ref_id = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        fields, args = [], []
+        if "title" in p:
+            fields.append("title=?")
+            args.append(str(p["title"]).strip()[:200])
+        if "note" in p:
+            fields.append("note=?")
+            args.append(str(p["note"]).strip()[:2000])
+        if "category" in p:
+            fields.append("category=?")
+            args.append(str(p["category"]).strip()[:60])
+        if "source_url" in p:
+            fields.append("source_url=?")
+            args.append(str(p["source_url"]).strip()[:500])
+        if "tags" in p:
+            import board_lib
+            fields.append("tags=?")
+            args.append(json.dumps(board_lib.normalize_tags(p["tags"])))
+        if "archived" in p:
+            fields.append("archived=?")
+            args.append(1 if p["archived"] else 0)
+        if not fields:
+            self._json(400, {"error": "nothing to update"})
+            return
+        args.append(ref_id)
+        conn = db()
+        cur = conn.execute(
+            f"UPDATE design_references SET {', '.join(fields)} WHERE id=?", args)
+        conn.commit()
+        conn.close()
+        if cur.rowcount != 1:
+            self._json(404, {"error": "no such reference"})
+            return
+        self._json(200, {"ok": True})
+
+    def _handle_references_delete(self):
+        if not self._has_tool("board"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            p = json.loads(self.rfile.read(min(length, 4096)).decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json(400, {"error": "bad request"})
+            return
+        try:
+            ref_id = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        conn = db()
+        cur = conn.execute("DELETE FROM design_references WHERE id=?", (ref_id,))
+        conn.commit()
+        conn.close()
+        if cur.rowcount != 1:
+            self._json(404, {"error": "no such reference"})
+            return
+        shutil.rmtree(os.path.join(REFERENCE_MEDIA, str(ref_id)), ignore_errors=True)
+        hub_event("reference_delete", f"id={ref_id}", self._order_user(), app="board")
+        self._json(200, {"ok": True})
+
+    def _handle_reference_photo(self, query):
+        if not self._has_tool("board"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        params = dict(urllib.parse.parse_qsl(query, keep_blank_values=True))
+        try:
+            ref_id = int(params.get("id") or 0)
+            index = int(params.get("n") or 0)
+        except (TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        conn = db()
+        row = conn.execute(
+            "SELECT local_photos FROM design_references WHERE id=?", (ref_id,)).fetchone()
+        conn.close()
+        if not row:
+            self._json(404, {"error": "no such reference"})
+            return
+        try:
+            photos = json.loads(row["local_photos"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            photos = []
+        if not (0 <= index < len(photos)):
+            self._json(404, {"error": "no such photo"})
+            return
+        path = os.path.realpath(str(photos[index]))
+        ref_root = os.path.realpath(
+            os.path.join(REFERENCE_MEDIA, str(ref_id))) + os.sep
+        if (not path.startswith(ref_root) or not os.path.isfile(path)
+                or os.path.splitext(path)[1].lower()
+                not in (".jpg", ".jpeg", ".png", ".webp")):
+            self._json(404, {"error": "photo missing"})
+            return
+        try:
+            with open(path, "rb") as source:
+                data = source.read()
+        except OSError:
+            self._json(404, {"error": "photo unreadable"})
+            return
+        ext = os.path.splitext(path)[1].lower()
+        content_type = {".png": "image/png", ".webp": "image/webp"}.get(ext, "image/jpeg")
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=3600")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _handle_order_create(self):
         actor = self._order_user()
@@ -8488,6 +8793,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_shopify_media("add")
         elif path == "/shopify/product/media/remove":
             self._handle_shopify_media("remove")
+        elif path == "/references/save":
+            self._handle_references_save()
+        elif path == "/references/update":
+            self._handle_references_update()
+        elif path == "/references/delete":
+            self._handle_references_delete()
         else:
             self._json(404, {"error": "not found"})
 
