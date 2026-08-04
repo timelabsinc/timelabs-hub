@@ -39,6 +39,7 @@ from order_metrics import (
 )
 from shopify_oauth import canonical_hmac_message
 from shopify_scopes import REQUESTED_SCOPE_STRING, normalized_scopes
+import creator_interview
 import writing_quality
 
 HOST, PORT = "127.0.0.1", 8901
@@ -1831,7 +1832,8 @@ def toolset_for(email):
     return ADMIN_TOOLSET if (email or "").strip().lower() in ADMIN_EMAILS else NONADMIN_TOOLSET
 
 
-def run_hermes(prompt, model=None, provider=None, toolset=None, ignore_rules=False):
+def run_hermes(prompt, model=None, provider=None, toolset=None, ignore_rules=False,
+               timeout=None):
     cmd = ["hermes"]
     if model:
         cmd += ["-m", model]
@@ -1844,7 +1846,7 @@ def run_hermes(prompt, model=None, provider=None, toolset=None, ignore_rules=Fal
     cmd += ["-t", toolset or SAFE_WEB_TOOLSET]
     cmd += ["-z", prompt]
     result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=HERMES_HARD_TIMEOUT,
+        cmd, capture_output=True, text=True, timeout=timeout or HERMES_HARD_TIMEOUT,
     )
     reply = result.stdout.strip()
     if result.returncode != 0 or not reply:
@@ -7769,6 +7771,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
         self._json(200, {"id": sid})
 
+    def _handle_creator_interview(self):
+        """Choose one bounded next question without polluting chat history.
+
+        The model is an optional planner, not the controller: its JSON is
+        validated and every failure falls back to the channel question set.
+        The restricted one-shot invocation cannot reach terminal, memory, or
+        another operator's conversation.
+        """
+        if not self._has_tool("chat"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        caller_email = self._order_user()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            payload = json.loads(self.rfile.read(min(length, 32768)).decode())
+            session_id = int(payload.get("session_id") or 1)
+            channel = str(payload.get("channel") or "").strip().lower()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        if channel not in creator_interview.CHANNELS:
+            self._json(400, {"error": "choose a supported destination"})
+            return
+        if not ensure_session(session_id, caller_email):
+            self._json(404, {"error": "no such conversation"})
+            return
+        answers = creator_interview.clean_answers(payload.get("answers"))
+        raw_images = payload.get("images") if isinstance(payload.get("images"), list) else []
+        media_names = []
+        for image in raw_images[:8]:
+            if not isinstance(image, dict):
+                continue
+            owned = _upload_owned(str(image.get("path") or ""), caller_email)
+            if owned:
+                media_names.append(str(image.get("name") or os.path.basename(owned))[:160])
+        fallback = creator_interview.next_fallback(channel, answers)
+        # The source question itself is deterministic and should appear
+        # instantly. AI judgment starts only after real material exists.
+        if not any(answer["id"] == "source" for answer in answers):
+            self._json(200, {**fallback, "planned_by": "fallback"})
+            return
+        if fallback.get("status") == "ready":
+            self._json(200, {**fallback, "planned_by": "fallback"})
+            return
+        if not LOCK.acquire(blocking=False):
+            self._json(200, {**fallback, "planned_by": "fallback",
+                             "notice": "Hermes is busy, so the guided flow kept moving."})
+            return
+        try:
+            prompt = creator_interview.planner_prompt(channel, answers, media_names)
+            reply = run_hermes(
+                prompt, model="claude-sonnet-4-6", provider="anthropic",
+                toolset=NONADMIN_TOOLSET, ignore_rules=True, timeout=90,
+            )
+            planned = creator_interview.normalize_planner_reply(
+                _extract_json_obj(reply), channel, answers)
+            self._json(200, {**planned, "planned_by": "hermes"})
+        except Exception as exc:
+            print(f"[creator-interview] planner fallback: {exc}", flush=True)
+            self._json(200, {**fallback, "planned_by": "fallback",
+                             "notice": "The guided flow used its safe fallback question."})
+        finally:
+            LOCK.release()
+
     def _handle_send(self):
         # Shell access is granted per role, and now so is chat access at
         # all — the PREAMBLE hands every caller a fair amount of business
@@ -8086,6 +8152,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_plan_toggle()
         elif path == "/session/new":
             self._handle_new_session()
+        elif path == "/creator/interview":
+            self._handle_creator_interview()
         elif path == "/upload":
             self._handle_upload()
         elif path == "/export/pdf":

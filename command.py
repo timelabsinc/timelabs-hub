@@ -149,15 +149,32 @@ html,body{height:100%;overflow:hidden}
 .compose-wrap.drag{background:var(--accent-bg);border-top-color:var(--accent)}
 .creator-workbar{max-width:900px;margin:0 auto 8px;padding:10px;border:1px solid color-mix(in srgb,var(--accent) 45%,var(--border));
   border-radius:12px;background:linear-gradient(135deg,var(--accent-bg),var(--card));box-shadow:var(--shadow)}
-.creator-work-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
-.creator-work-head b{display:block;font-size:11.5px;color:var(--ink)}.creator-work-head span{display:block;font-size:10px;color:var(--muted);margin-top:2px}
+.creator-work-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px}
+.creator-work-head b{display:block;font-size:12px;color:var(--ink);margin-top:2px}.creator-kicker{display:block;font-size:9px;
+  color:var(--accent);font-weight:850;letter-spacing:.1em;text-transform:uppercase}
 .creator-new{flex:none;min-height:34px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--ink);
   font:inherit;font-size:10.5px;font-weight:750;padding:5px 9px;cursor:pointer}
-.creator-routes{display:flex;gap:6px;overflow-x:auto;padding:1px 0 3px;scrollbar-width:thin}
-.creator-route{flex:none;min-height:38px;border:1px solid var(--border);border-radius:9px;background:var(--card);color:var(--ink);
-  font:inherit;font-size:11px;font-weight:700;padding:7px 10px;cursor:pointer;white-space:nowrap}
-.creator-route:hover,.creator-route.on{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
-.creator-tip{margin:6px 2px 0;color:var(--muted);font-size:10px;line-height:1.35}
+.creator-progress{height:3px;border-radius:99px;background:var(--border);overflow:hidden;margin-bottom:12px}
+.creator-progress i{display:block;height:100%;width:14%;border-radius:inherit;background:var(--accent);transition:width .2s var(--ease)}
+.creator-question{font-size:16px;line-height:1.3;margin:0;color:var(--ink)}.creator-help{font-size:11px;line-height:1.45;
+  color:var(--muted);margin:5px 0 10px}.creator-choices{display:flex;gap:6px;flex-wrap:wrap}
+.creator-choice{min-height:38px;border:1px solid var(--border);border-radius:9px;background:var(--card);color:var(--ink);
+  font:inherit;font-size:11px;font-weight:700;padding:7px 10px;cursor:pointer;text-align:left}
+.creator-choice:hover{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
+.creator-answer{display:grid;gap:8px}.creator-answer textarea{width:100%;min-height:68px;max-height:150px;resize:vertical;
+  border:1px solid var(--border);border-radius:9px;background:var(--card);color:var(--ink);font:inherit;font-size:13px;
+  line-height:1.45;padding:9px 10px;box-sizing:border-box}.creator-answer textarea:focus{border-color:var(--accent);outline:2px solid var(--accent-bg)}
+.creator-actions,.creator-foot{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.creator-actions{justify-content:flex-end}
+.creator-action{min-height:36px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--ink);
+  font:inherit;font-size:10.5px;font-weight:750;padding:6px 10px;cursor:pointer}.creator-action.primary{border-color:var(--ink);
+  background:var(--ink);color:var(--bg)}.creator-action:disabled{opacity:.45;cursor:default}.creator-foot{justify-content:space-between;
+  border-top:1px solid var(--border);margin-top:11px;padding-top:8px}.creator-link{border:0;background:none;color:var(--muted);
+  font:inherit;font-size:10.5px;padding:5px 2px;cursor:pointer}.creator-link:hover{color:var(--accent)}
+.creator-status{min-height:15px;margin:6px 1px 0;color:var(--muted);font-size:10px}.creator-status.bad{color:var(--bad)}
+.creator-summary{display:grid;gap:5px;max-height:130px;overflow:auto}.creator-summary-row{display:grid;grid-template-columns:minmax(90px,.35fr) 1fr;
+  gap:9px;border-bottom:1px solid var(--border);padding:5px 1px;font-size:10.5px}.creator-summary-row b{color:var(--muted)}
+.creator-direct{display:flex;align-items:center;justify-content:space-between;gap:10px}.creator-direct span{display:block;color:var(--muted);
+  font-size:10.5px;margin-top:2px}.compose-wrap.creator-guided .compose,.compose-wrap.creator-guided .compose-note{display:none}
 .attachments{max-width:900px;margin:0 auto 7px;display:flex;gap:6px;flex-wrap:wrap}
 .attachment{display:flex;align-items:center;gap:6px;padding:5px 7px;border:1px solid var(--border);background:var(--card);
   border-radius:8px;font-size:11px}.attachment img{width:28px;height:28px;border-radius:5px;object-fit:cover}
@@ -215,7 +232,8 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
     transition:transform .18s}.rail.left.open{transform:none}
   .thread{padding:18px 12px}.empty{margin-top:3vh}.starts,.cmo-actions{grid-template-columns:1fr}
   .compose-wrap{padding-left:8px;padding-right:8px}.msg.user .bubble{max-width:90%}
-  .creator-workbar{padding:8px}.creator-work-head span{display:none}.creator-route{min-height:44px;font-size:12px}
+  .creator-workbar{padding:10px}.creator-choice{min-height:44px;font-size:12px;flex:1 1 calc(50% - 6px)}
+  .creator-question{font-size:15px}.creator-answer textarea{font-size:16px}.creator-summary-row{grid-template-columns:1fr}.creator-foot{align-items:flex-end}
   .compose button,.mobile-toggle,.context-toggle{width:44px;height:44px}
   .work-head{height:58px;padding:0 8px}.work-title span{display:none}.status{font-size:0}.status i{width:8px;height:8px}
 }
@@ -274,21 +292,14 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
     </div>
     <div class="compose-wrap">
       <div class="creator-workbar" id="creatorWorkbar" hidden>
-        <div class="creator-work-head"><div><b>Add the source, then choose what you need</b><span>The selected brief opens in the message box. Fill only confirmed facts, send, review and copy.</span></div><button type="button" class="creator-new" id="creatorNewBtn">Start new content</button></div>
-        <div class="creator-routes" role="list" aria-label="Choose a content output">
-          <button type="button" class="creator-route" data-channel="Instagram caption" data-tip="Attach the final media. Add what the image cannot show; do not describe every visible detail." data-fill="/caption&#10;Content goal: showcase / review / product detail&#10;What the photo or video shows: &#10;Confirmed watch facts: &#10;One detail the image cannot show: &#10;Desired next step, if any: &#10;Words or claims to avoid: ">Instagram caption</button>
-          <button type="button" class="creator-route" data-channel="Instagram Story" data-tip="List photos or clips in order. Hermes returns each frame as a separate paste block." data-fill="/story&#10;Purpose of this Story: &#10;Photos or clips, in order: &#10;Confirmed facts to include: &#10;Poll, question or link sticker, if any: &#10;Desired next step: ">Story</button>
-          <button type="button" class="creator-route" data-channel="Reddit" data-tip="Name the subreddit and disclose the TimeLabs relationship. Make the post useful before promotional." data-fill="/reddit&#10;Subreddit: &#10;Route: showcase / build diary / honest review / answer / comparison / founder note&#10;What happened or what the media shows: &#10;Useful details for the community: &#10;Our relationship to the post: &#10;Question to ask, if genuine: ">Reddit</button>
-          <button type="button" class="creator-route" data-channel="WhatsApp" data-tip="Paste the real situation without unnecessary private data. Give one clear next step." data-fill="/whatsapp&#10;Message type: customer reply / community update / follow-up&#10;What happened or what they asked: &#10;Confirmed facts we can state: &#10;One next step: &#10;Tone: calm / warm / direct: ">WhatsApp</button>
-          <button type="button" class="creator-route" data-channel="Sales reply" data-tip="Use only confirmed price, availability, specifications and delivery information." data-fill="/sales&#10;Buyer asked: &#10;Confirmed price: &#10;Confirmed availability: &#10;Relevant specifications: &#10;Confirmed delivery information: &#10;Best next step: ">Sales reply</button>
-          <button type="button" class="creator-route" data-channel="Email" data-tip="Hermes returns subject choices and the body as separate paste blocks." data-fill="/email&#10;Email type: customer / campaign / follow-up&#10;Who it is for: &#10;Why we are writing: &#10;Confirmed facts to include: &#10;Requested next step: &#10;Link, if verified: ">Email</button>
-          <button type="button" class="creator-route" data-channel="Blog" data-tip="Use openable sources. Do not include a statistic or quotation without its source." data-fill="/blog&#10;Question the article must answer: &#10;Reader: &#10;First-party evidence: &#10;Openable source links: &#10;Products or examples that genuinely help: &#10;Desired next step: ">Blog</button>
-          <button type="button" class="creator-route" data-channel="YouTube" data-tip="List the footage you actually have so the script does not request impossible shots." data-fill="/youtube&#10;Video subject: &#10;Who it is for: &#10;Available footage: &#10;Verified facts: &#10;Target length: &#10;Desired next step: ">YouTube</button>
-          <button type="button" class="creator-route" data-channel="Ad" data-tip="Supply proof for every claim. Hermes will not add fake urgency or scarcity." data-fill="/ad&#10;Offer or product: &#10;Audience: &#10;Confirmed proof and facts: &#10;Desired next step: &#10;Claims to avoid: ">Ad</button>
-          <button type="button" class="creator-route" data-channel="Product copy" data-tip="Confirm movement, dimensions, materials, compatibility, warranty and delivery before drafting." data-fill="/product&#10;Product name: &#10;Confirmed distinguishing detail: &#10;Confirmed specifications: &#10;Delivery and warranty facts: &#10;Required disclosure: ">Product</button>
-          <button type="button" class="creator-route" data-channel="Founder or LinkedIn post" data-tip="Start from a real decision, mistake, customer moment or number—not a manufactured lesson." data-fill="/founder&#10;Real event or decision: &#10;What actually happened: &#10;Specific detail or number: &#10;What changed next: &#10;Desired reader action, if any: ">Founder</button>
+        <div class="creator-work-head"><div><span class="creator-kicker">Creator</span><b id="creatorStepLabel">Question 1 · Destination</b></div><button type="button" class="creator-new" id="creatorNewBtn">New content</button></div>
+        <div class="creator-progress" aria-hidden="true"><i id="creatorProgress"></i></div>
+        <div id="creatorStep" aria-live="polite"></div>
+        <div class="creator-foot">
+          <button type="button" class="creator-link" id="creatorDirectBtn">Ask Hermes directly</button>
+          <button type="button" class="creator-link" id="creatorDraftBtn" hidden>Draft now with what I have</button>
         </div>
-        <p class="creator-tip" id="creatorTip">Pick an output above. The tool will show exactly what information to add.</p>
+        <div class="creator-status" id="creatorStatus" role="status"></div>
       </div>
       <div class="attachments" id="attachments"></div>
       <div class="compose">
@@ -305,9 +316,9 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
     <div class="context">
       <div id="creatorContext" hidden>
         <div class="context-block"><h3>Use this screen</h3><div class="cap-list">
-          <div class="cap">Attach media or notes <span>Source</span></div>
-          <div class="cap">Pick an output above the box <span>Brief</span></div>
-          <div class="cap">Fill the known facts and send <span>Draft</span></div>
+          <div class="cap">Answer one question at a time <span>Brief</span></div>
+          <div class="cap">Attach the real media or message <span>Source</span></div>
+          <div class="cap">Let Hermes stop when it has enough <span>Draft</span></div>
           <div class="cap">Use Copy this text <span>Publish</span></div>
         </div></div>
         <div class="context-block"><h3>What Hermes needs</h3><div class="mode"><b>Real material, not polished instructions</b><span>Photos, the actual question or event, confirmed product facts, the audience and the desired next step are enough. If an important fact is missing, Hermes asks instead of guessing.</span></div></div>
@@ -366,6 +377,15 @@ const attachEl=document.getElementById('attachments'), composeWrap=document.quer
 const cmoContext=document.getElementById('cmoContext'), chatsTab=document.getElementById('chatsTab'), companyTab=document.getElementById('companyTab');
 const docModal=document.getElementById('docModal'), docTitle=document.getElementById('docTitle'), docBody=document.getElementById('docBody');
 let busy=false, attachments=[], uploading=0, lastMessageId=0, historyGen=0, sessionsGen=0, runToken=0, accessInfo=null;
+const CREATOR_CHANNELS={
+ instagram:{label:'Instagram caption',route:'/caption'},story:{label:'Instagram Story',route:'/story'},
+ reddit:{label:'Reddit',route:'/reddit'},whatsapp:{label:'WhatsApp',route:'/whatsapp'},
+ sales:{label:'Sales reply',route:'/sales'},email:{label:'Email',route:'/email'},blog:{label:'Blog',route:'/blog'},
+ youtube:{label:'YouTube',route:'/youtube'},meta_ad:{label:'Ad',route:'/ad'},product:{label:'Product copy',route:'/product'},
+ founder:{label:'Founder post',route:'/founder'}
+};
+function freshCreatorState(){return{mode:'guided',phase:'channel',channel:null,answers:[],question:null,notice:''}}
+let creatorState=freshCreatorState(),creatorPlanning=false,creatorRequest=0;
 async function loadAccessMode(){
  try{
   let view='';try{view=new URLSearchParams(location.search).get('view_as')||''}catch(e){}
@@ -376,16 +396,17 @@ async function loadAccessMode(){
   document.getElementById('ownerContext').hidden=creator;
   document.getElementById('creatorContext').hidden=!creator;
   if(creator){
+   restoreCreatorState();renderCreator();
    let emptyTitle=document.getElementById('emptyTitle'),emptyCopy=document.getElementById('emptyCopy');
    if(emptyTitle)emptyTitle.textContent='What are we creating?';
-   if(emptyCopy)emptyCopy.textContent='Add the source, choose the output above the message box and fill the brief. Hermes returns text you can review and copy.';
+   if(emptyCopy)emptyCopy.textContent='Choose where it will go. Hermes asks one useful question at a time, then returns text you can review and copy.';
    document.getElementById('operatorMode').textContent=(i.preview?'Creator preview · ':'')+'Hermes content workspace';
    document.getElementById('leftRailTitle').textContent='Creator workspace';
    document.getElementById('contextRailTitle').textContent='Creator checklist';
    document.getElementById('composeNote').textContent='Use confirmed facts only. Hermes prepares drafts; you review, copy and publish manually.';
-   input.placeholder='Choose a channel above, or paste your content brief…';
+   input.placeholder='Ask Hermes directly, or return to the guided interview…';
    setSidebar('chats');
-  }
+  }else composeWrap.classList.remove('creator-guided')
  }catch(e){}
 }
 function syncSendState(){sendBtn.disabled=busy||uploading>0}
@@ -415,12 +436,18 @@ function getSessionFromUrl(){
   return Number.isFinite(v)?v:getStoredSessionId();
 }
 function syncSession(id, push){
-  sid=Number.isFinite(id)?id:1;
+  let next=Number.isFinite(id)?id:1,changed=next!==sid;
+  if(document.body.classList.contains('creator-mode'))saveCreatorState();
+  if(changed){creatorRequest++;creatorPlanning=false}
+  sid=next;
   rememberSession();
   setSessionInUrl(sid,push);
+  if(document.body.classList.contains('creator-mode')){restoreCreatorState();renderCreator()}
 }
 let selectedSessionButton=null;
-function focusComposer(){if(!matchMedia('(pointer:coarse)').matches&&document.visibilityState==='visible')input.focus()}
+function focusComposer(){if(matchMedia('(pointer:coarse)').matches||document.visibilityState!=='visible')return;
+ if(document.body.classList.contains('creator-mode')&&creatorState.mode==='guided'){let a=document.getElementById('creatorAnswer');if(a)a.focus()}
+ else input.focus()}
 let sid=getSessionFromUrl();
 function rememberSession(){remember('labs_command_session',sid);remember('tl_session',sid)}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -511,14 +538,88 @@ async function upload(f){if(!f)return;if(attachments.length+uploading>=8){notice
  if(f.size>32*1024*1024){notice((f.name||'This image')+' is larger than 32 MB.',true);return}
  if(!/\.(jpe?g|png|webp)$/i.test(f.name||'')){let ext=(f.type||'').includes('png')?'.png':(f.type||'').includes('webp')?'.webp':'.jpg';f=new File([f],'pasted-'+Date.now()+ext,{type:f.type||'image/jpeg'})}
 let form=new FormData();form.append('image',f);uploading++;syncSendState();try{let d=await api('/upload',{method:'POST',body:form}),a={path:d.path,name:f.name,url:''};attachments.push(a);renderAttachments();let rd=new FileReader();rd.onload=e=>{a.url=e.target.result;renderAttachments()};rd.readAsDataURL(f)}catch(e){notice(e.message,true)}finally{uploading--;syncSendState()}}
-function renderAttachments(){attachEl.innerHTML='';attachments.forEach((a,i)=>{let c=document.createElement('div');c.className='attachment';c.innerHTML=(a.url?'<img src="'+a.url+'" alt="">':'')+'<span>'+esc(a.name)+'</span><button type="button" aria-label="Remove">×</button>';c.querySelector('button').onclick=()=>{attachments.splice(i,1);renderAttachments()};attachEl.appendChild(c)})}
+function renderAttachments(){attachEl.innerHTML='';attachments.forEach((a,i)=>{let c=document.createElement('div');c.className='attachment';c.innerHTML=(a.url?'<img src="'+a.url+'" alt="">':'')+'<span>'+esc(a.name)+'</span><button type="button" aria-label="Remove">×</button>';c.querySelector('button').onclick=()=>{attachments.splice(i,1);renderAttachments()};attachEl.appendChild(c)});if(document.body.classList.contains('creator-mode')){saveCreatorState();if(creatorState.mode==='guided'&&!creatorPlanning)renderCreator()}}
 async function loadEvents(){try{let d=await api('/events'),el=document.getElementById('events');el.innerHTML='';(d.events||[]).slice(0,8).forEach(x=>{let v=document.createElement('div');v.className='event';v.innerHTML='<b>'+esc((x.app||'Labs')+' · '+(x.kind||'activity').replace(/_/g,' '))+'</b><p>'+esc(x.detail||'')+'</p><time>'+esc((x.created_at||'').slice(0,16).replace('T',' '))+'</time>';el.appendChild(v)});if(!el.children.length)el.innerHTML='<div class="event"><p>No recent activity.</p></div>'}catch(e){}}
 function autosize(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,150)+'px'}
+function creatorStorageKey(){return'labs_creator_interview_'+sid}
+function saveCreatorState(){
+ try{sessionStorage.setItem(creatorStorageKey(),JSON.stringify({state:creatorState,attachments:attachments.map(a=>({path:a.path,name:a.name}))}))}catch(e){}
+}
+function restoreCreatorState(){
+ let packed=null;try{packed=JSON.parse(sessionStorage.getItem(creatorStorageKey())||'null')}catch(e){}
+ let s=packed&&packed.state;if(!s||typeof s!=='object'){creatorState=freshCreatorState();attachments=[];renderAttachments();return}
+ let channel=CREATOR_CHANNELS[s.channel]?s.channel:null,mode=s.mode==='direct'?'direct':'guided';
+ let phase=['channel','source','question','ready'].includes(s.phase)?s.phase:'channel';if(!channel&&phase!=='channel')phase='channel';
+ let answers=(Array.isArray(s.answers)?s.answers:[]).filter(a=>a&&/^[a-z][a-z0-9_]{0,39}$/.test(String(a.id||''))&&String(a.answer||'').trim()).slice(0,5).map(a=>({id:String(a.id),question:String(a.question||a.id).slice(0,220),answer:String(a.answer).slice(0,2400)}));
+ let q=s.question&&typeof s.question==='object'?{status:'question',id:String(s.question.id||'').slice(0,40),question:String(s.question.question||'').slice(0,220),help:String(s.question.help||'').slice(0,240),input:['choice','text','long_text'].includes(s.question.input)?s.question.input:'text',options:(Array.isArray(s.question.options)?s.question.options:[]).slice(0,5).map(String),required:s.question.required!==false}:null;
+ if(phase==='question'&&(!q||!/^[a-z][a-z0-9_]{0,39}$/.test(q.id)))phase='ready';
+ creatorState={mode:mode,phase:phase,channel:channel,answers:answers,question:q,notice:String(s.notice||'').slice(0,180),draft:String(s.draft||'').slice(0,2400)};
+ attachments=(packed&&Array.isArray(packed.attachments)?packed.attachments:[]).filter(a=>a&&a.path&&a.name).slice(0,8).map(a=>({path:String(a.path),name:String(a.name),url:''}));renderAttachments()
+}
+function creatorSourceQuestion(){return{id:'source',question:'What are we working from?',help:'Attach the real photos or video stills, or describe the message, product, event, or idea. Rough notes are better than polished instructions.',input:'long_text',options:[],required:true}}
+function setCreatorStatus(text,bad){let e=document.getElementById('creatorStatus');e.textContent=text||'';e.classList.toggle('bad',!!bad)}
+function creatorProgress(){if(creatorState.mode==='direct'||creatorState.phase==='ready')return 100;if(creatorState.phase==='channel')return 14;if(creatorState.phase==='source')return 30;return Math.min(88,30+creatorState.answers.length*14)}
+function renderCreator(){
+ if(!document.body.classList.contains('creator-mode'))return;
+ let step=document.getElementById('creatorStep'),label=document.getElementById('creatorStepLabel'),progress=document.getElementById('creatorProgress'),direct=document.getElementById('creatorDirectBtn'),draft=document.getElementById('creatorDraftBtn');
+ progress.style.width=creatorProgress()+'%';composeWrap.classList.toggle('creator-guided',creatorState.mode==='guided');setCreatorStatus(creatorState.notice||'',false);
+ if(creatorState.mode==='direct'){
+  label.textContent='Direct workspace';direct.textContent='Guide me one question at a time';draft.hidden=true;
+  step.innerHTML='<div class="creator-direct"><div><b>Ask Hermes in your own words</b><span>Human-writing rules and channel formatting still apply to every content draft.</span></div></div>';
+  return
+ }
+ direct.textContent='Ask Hermes directly';draft.hidden=creatorState.phase==='channel'||creatorPlanning;
+ if(creatorPlanning){label.textContent='Hermes is choosing the next question';step.innerHTML='<p class="creator-question">One moment…</p><p class="creator-help">Hermes is checking what you already supplied so it only asks what still matters.</p>';return}
+ if(creatorState.phase==='channel'){
+  label.textContent='Question 1 · Destination';step.innerHTML='<h3 class="creator-question">Where will this content go?</h3><p class="creator-help">Choose the final destination. The questions and paste-ready format will adapt to it.</p><div class="creator-choices" id="creatorChoices"></div>';
+  let choices=document.getElementById('creatorChoices');Object.entries(CREATOR_CHANNELS).forEach(([key,c])=>{let b=document.createElement('button');b.type='button';b.className='creator-choice';b.textContent=c.label;b.onclick=()=>{creatorState.channel=key;creatorState.phase='source';creatorState.question=creatorSourceQuestion();creatorState.draft='';creatorState.notice='';saveCreatorState();renderCreator();focusComposer()};choices.appendChild(b)});return
+ }
+ if(creatorState.phase==='ready'){
+  label.textContent='Brief ready · Review';let rows=creatorState.answers.map(a=>'<div class="creator-summary-row"><b>'+esc(a.question)+'</b><span>'+esc(a.answer)+'</span></div>').join('');
+  step.innerHTML='<h3 class="creator-question">Hermes has enough for a first draft.</h3><p class="creator-help">Review the brief, then generate. You can refine the result in the same chat.</p><div class="creator-summary">'+rows+'</div><div class="creator-actions" style="margin-top:9px"><button type="button" class="creator-action" id="creatorBackBtn">Back</button><button type="button" class="creator-action primary" id="creatorGenerateBtn">Generate '+esc(CREATOR_CHANNELS[creatorState.channel].label)+'</button></div>';
+  document.getElementById('creatorGenerateBtn').onclick=generateCreatorDraft;document.getElementById('creatorBackBtn').onclick=()=>{let last=creatorState.answers.pop();creatorState.phase=last&&last.id==='source'?'source':'question';creatorState.question=last&&last.id==='source'?creatorSourceQuestion():{status:'question',id:last.id,question:last.question,help:'Change this answer, then continue.',input:'long_text',options:[],required:true};creatorState.draft=last?last.answer:'';saveCreatorState();renderCreator()};return
+ }
+ let q=creatorState.phase==='source'?creatorSourceQuestion():creatorState.question;if(!q){creatorState.phase='ready';renderCreator();return}
+ label.textContent='Question '+(creatorState.answers.length+2)+' · '+(creatorState.phase==='source'?'Source':'Brief');
+ step.innerHTML='<h3 class="creator-question">'+esc(q.question)+'</h3><p class="creator-help">'+esc(q.help||'Answer with confirmed information only.')+'</p>'+(q.input==='choice'?'<div class="creator-choices" id="creatorChoices"></div>':'<div class="creator-answer"><textarea id="creatorAnswer" maxlength="2400" placeholder="Type a rough answer…">'+esc(creatorState.draft||'')+'</textarea><div class="creator-actions">'+(q.id==='source'?'<button type="button" class="creator-action" id="creatorMediaBtn">＋ Add media</button>':'')+(q.required===false?'<button type="button" class="creator-action" id="creatorSkipBtn">Skip</button>':'')+'<button type="button" class="creator-action primary" id="creatorContinueBtn">Continue</button></div></div>');
+ if(q.input==='choice'){let choices=document.getElementById('creatorChoices');(q.options||[]).forEach(option=>{let b=document.createElement('button');b.type='button';b.className='creator-choice';b.textContent=option;b.onclick=()=>answerCreatorQuestion(option);choices.appendChild(b)})}
+ else{let a=document.getElementById('creatorAnswer'),go=document.getElementById('creatorContinueBtn');let sync=()=>{creatorState.draft=a.value;go.disabled=!a.value.trim()&&!(q.id==='source'&&attachments.length);saveCreatorState()};a.oninput=sync;sync();go.onclick=()=>answerCreatorQuestion(a.value);let media=document.getElementById('creatorMediaBtn');if(media)media.onclick=()=>document.getElementById('fileInput').click();let skip=document.getElementById('creatorSkipBtn');if(skip)skip.onclick=()=>answerCreatorQuestion('Not needed')}
+ }
+function answerCreatorQuestion(value){
+ let q=creatorState.phase==='source'?creatorSourceQuestion():creatorState.question,answer=String(value||'').trim();
+ if(q.id==='source'&&attachments.length){let media='Attached media: '+attachments.map(a=>a.name).join(', ');answer=answer?answer+'\n'+media:media}
+ if(!answer){setCreatorStatus('Add a rough answer'+(q.id==='source'?' or attach media':'')+' before continuing.',true);return}
+ creatorState.answers=creatorState.answers.filter(a=>a.id!==q.id);creatorState.answers.push({id:q.id,question:q.question,answer:answer});creatorState.draft='';creatorState.notice='';saveCreatorState();requestCreatorQuestion()
+}
+function clientCreatorFallback(){
+ if(creatorState.answers.some(a=>a.id==='outcome'))return{status:'ready',reason:'The brief has enough detail.'};
+ return{status:'question',id:'outcome',question:'What should someone do after reading it?',help:'Choose the real next step. No call to action is also valid.',input:'choice',options:['Reply or comment','Send a DM','Visit a link','No action — just read'],required:true}
+}
+async function requestCreatorQuestion(){
+ let token=++creatorRequest,target=sid;creatorPlanning=true;renderCreator();
+ try{let d=await api('/creator/interview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:target,channel:creatorState.channel,answers:creatorState.answers,images:attachments.map(a=>({path:a.path,name:a.name}))})});if(token!==creatorRequest||target!==sid)return;
+  creatorState.notice=d.notice||'';if(d.status==='ready'){creatorState.phase='ready';creatorState.question=null}else{creatorState.phase='question';creatorState.question=d}
+ }catch(e){if(token!==creatorRequest||target!==sid)return;let d=clientCreatorFallback();creatorState.notice='Connection was interrupted, so the guided flow used a safe next question.';if(d.status==='ready'){creatorState.phase='ready';creatorState.question=null}else{creatorState.phase='question';creatorState.question=d}}
+ finally{if(token===creatorRequest&&target===sid){creatorPlanning=false;saveCreatorState();renderCreator();focusComposer()}}
+}
+function draftCreatorNow(){
+ if(creatorState.phase==='source'||creatorState.phase==='question'){
+  let a=document.getElementById('creatorAnswer'),value=a?a.value:'';if(value.trim()||(creatorState.phase==='source'&&attachments.length)){answerCreatorQuestion(value);creatorRequest++;creatorPlanning=false}
+ }
+ if(!creatorState.answers.some(a=>a.id==='source')){setCreatorStatus('Add the source first so Hermes has something real to work from.',true);return}
+ creatorState.phase='ready';creatorState.question=null;creatorState.notice='';saveCreatorState();renderCreator()
+}
+function generateCreatorDraft(){
+ if(busy||uploading){setCreatorStatus('Wait for the current upload or Hermes task to finish.',true);return}
+ let c=CREATOR_CHANNELS[creatorState.channel],lines=[c.route,'Use this completed Creator interview. Draft only from these answers; omit anything unknown.'];creatorState.answers.forEach(a=>{lines.push(a.question+' '+a.answer)});input.value=lines.join('\n');autosize();creatorState.mode='direct';creatorState.notice='';saveCreatorState();renderCreator();send()
+}
 document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{closeMenu(false);input.value=b.dataset.prompt;send()});
-document.querySelectorAll('[data-fill]').forEach(b=>b.onclick=()=>{closeMenu(false);document.querySelectorAll('.creator-route').forEach(x=>x.classList.toggle('on',x===b));input.value=b.dataset.fill;let tip=b.dataset.tip||'Fill what you know. Never guess a missing fact.';document.getElementById('creatorTip').textContent=(b.dataset.channel?b.dataset.channel+': ':'')+tip;document.getElementById('composeNote').textContent='Fill the brief, attach the correct source and send. Hermes will ask if an essential fact is missing.';autosize();focusComposer()});document.getElementById('newBtn').onclick=newSession;
+document.getElementById('newBtn').onclick=newSession;
 chatsTab.onclick=()=>setSidebar('chats');companyTab.onclick=()=>setSidebar('company');document.getElementById('docClose').onclick=closeDocument;
 docModal.onclick=e=>{if(e.target===docModal)closeDocument()};renderDocuments();setSidebar('company');
-document.getElementById('creatorNewBtn').onclick=async()=>{attachments=[];renderAttachments();input.value='';autosize();document.querySelectorAll('.creator-route').forEach(x=>x.classList.remove('on'));document.getElementById('creatorTip').textContent='Pick an output above. The tool will show exactly what information to add.';await newSession()};
+document.getElementById('creatorNewBtn').onclick=async()=>{attachments=[];input.value='';autosize();await newSession();creatorState=freshCreatorState();saveCreatorState();renderAttachments();renderCreator()};
+document.getElementById('creatorDirectBtn').onclick=()=>{creatorState.mode=creatorState.mode==='guided'?'direct':'guided';saveCreatorState();renderCreator();focusComposer()};
+document.getElementById('creatorDraftBtn').onclick=draftCreatorNow;
 document.getElementById('attachBtn').onclick=()=>document.getElementById('fileInput').click();document.getElementById('fileInput').onchange=async e=>{for(let f of e.target.files)await upload(f);e.target.value=''};
 sendBtn.onclick=send;input.oninput=autosize;input.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}};
 document.addEventListener('paste',e=>{for(let x of (e.clipboardData&&e.clipboardData.items)||[])if(x.kind==='file'&&x.type.indexOf('image/')===0)upload(x.getAsFile())});
