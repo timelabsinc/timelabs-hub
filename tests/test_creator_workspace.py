@@ -146,6 +146,34 @@ class CreatorWorkspaceTests(unittest.TestCase):
             server.index('DELETE FROM webchat_sessions WHERE id=?'),
         )
 
+    def test_creator_can_rewind_and_edit_without_stale_dependent_answers(self):
+        command = (ROOT / "command.py").read_text(encoding="utf-8")
+        self.assertIn("function editCreatorAnswer(index)", command)
+        self.assertIn("creatorState.answers=creatorState.answers.slice(0,index)", command)
+        self.assertIn("Later questions will be asked again", command)
+        self.assertIn("data-creator-edit", command)
+        self.assertIn("Back and edit", command)
+        self.assertIn("questionFromAnswer", command)
+        self.assertIn("stripSourceMedia", command)
+        self.assertIn("options:Array.isArray(q.options)?q.options:[]", command)
+
+    def test_chat_menu_exposes_safe_management_and_real_engine_state(self):
+        command = (ROOT / "command.py").read_text(encoding="utf-8")
+        server = (ROOT / "agent_chat_server.py").read_text(encoding="utf-8")
+        for label in ("Open chat", "Rename chat", "Copy chat link",
+                      "Claude Sonnet 4.6", "MiniMax M3", "Hermes Auto"):
+            self.assertIn(label, command)
+        self.assertIn("ChatGPT</b><small>Not connected", command)
+        self.assertIn("last_model", command)
+        self.assertIn("/session/rename", command)
+        self.assertIn("/session/model", command)
+        self.assertIn('"claude": MODEL_ALIASES["claude"]', server)
+        self.assertIn("record_model_use(session_id, model, provider)", server)
+        self.assertIn("p.last_model, p.last_provider, p.last_used_at", server)
+        self.assertIn('(sid, *SESSION_MODEL_CHOICES["claude"])', server)
+        self.assertIn('elif path == "/session/rename"', server)
+        self.assertIn('elif path == "/session/model"', server)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1880,13 +1880,27 @@ MODEL_ALIASES = {
     "free": ("stepfun/step-3.7-flash:free", "nous"),
 }
 
+# Choices exposed by the Command UI. Exact free-form model names remain
+# available to admins through the existing /model command, but the shared UI
+# only offers routes we deliberately support and can describe accurately.
+SESSION_MODEL_CHOICES = {
+    "auto": (None, None),
+    "claude": MODEL_ALIASES["claude"],
+    "minimax": MODEL_ALIASES["minimax"],
+}
+
 
 def _init_prefs():
     conn = db()
     conn.execute(
         "CREATE TABLE IF NOT EXISTS webchat_model_pref ("
-        "session_id INTEGER PRIMARY KEY, model TEXT, provider TEXT)"
+        "session_id INTEGER PRIMARY KEY, model TEXT, provider TEXT, "
+        "last_model TEXT, last_provider TEXT, last_used_at TEXT)"
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(webchat_model_pref)")}
+    for column in ("last_model", "last_provider", "last_used_at"):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE webchat_model_pref ADD COLUMN {column} TEXT")
     conn.commit()
     conn.close()
 
@@ -1901,6 +1915,22 @@ def get_model_pref(session_id):
     ).fetchone()
     conn.close()
     return (row["model"], row["provider"]) if row else (None, None)
+
+
+def record_model_use(session_id, model, provider):
+    """Remember the route that actually produced the latest answer."""
+    conn = db()
+    conn.execute(
+        "INSERT INTO webchat_model_pref "
+        "(session_id, model, provider, last_model, last_provider, last_used_at) "
+        "VALUES (?, NULL, NULL, ?, ?, datetime('now')) "
+        "ON CONFLICT(session_id) DO UPDATE SET "
+        "last_model=excluded.last_model, last_provider=excluded.last_provider, "
+        "last_used_at=excluded.last_used_at",
+        (session_id, model or "hermes-default", provider),
+    )
+    conn.commit()
+    conn.close()
 
 
 VISION_PREFIXES = ("claude",)  # models that can actually see images
@@ -1918,7 +1948,7 @@ def is_vision(model):
 
 def route_models(pref_model, pref_provider, has_image):
     """Return ordered (model, provider, note) candidates: preferred first, then failovers.
-    A None model means 'hermes default routing' (Claude-primary per SOUL)."""
+    A None model means the currently configured Hermes default routing."""
     chain, seen = [], set()
 
     def add(m, p, note=None):
@@ -1945,15 +1975,18 @@ def handle_model_command(session_id, message):
     if len(parts) == 1:
         model, provider = get_model_pref(session_id)
         cur = f"`{model}`" + (f" (provider `{provider}`)" if provider else "") if model \
-            else "Hermes default (Claude-primary routing per its identity)"
+            else "Hermes Auto (the currently configured default with failover)"
         return (f"Current model for this chat: {cur}\n\n"
                 "Switch with `/model claude`, `/model minimax`, `/model free`, "
                 "`/model <exact-model-name> [provider]`, or `/model default` to reset.")
     conn = db()
     if parts[1].lower() in ("default", "reset", "auto"):
-        conn.execute("DELETE FROM webchat_model_pref WHERE session_id=?", (session_id,))
+        conn.execute(
+            "INSERT INTO webchat_model_pref (session_id, model, provider) "
+            "VALUES (?, NULL, NULL) ON CONFLICT(session_id) DO UPDATE SET "
+            "model=NULL, provider=NULL", (session_id,))
         conn.commit(); conn.close()
-        return "Model reset — Hermes decides (Claude-primary routing)."
+        return "Model reset — Hermes Auto will choose the configured default and failovers."
     alias = MODEL_ALIASES.get(parts[1].lower())
     model, provider = alias if alias else (parts[1], parts[2] if len(parts) > 2 else None)
     conn.execute(
@@ -2182,8 +2215,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sql = (
                 "SELECT s.id, s.title, s.updated_at, "
                 "CASE WHEN s.visibility='archived' THEN 1 ELSE 0 END AS archived, "
+                "p.model AS preferred_model, p.provider AS preferred_provider, "
+                "p.last_model, p.last_provider, p.last_used_at, "
                 "(SELECT COUNT(*) FROM webchat_messages m WHERE m.session_id = s.id) AS n "
-                "FROM webchat_sessions s"
+                "FROM webchat_sessions s LEFT JOIN webchat_model_pref p ON p.session_id=s.id"
             )
             args = ()
             if email not in ADMIN_EMAILS:
@@ -7774,10 +7809,97 @@ class Handler(http.server.BaseHTTPRequestHandler):
         cur = conn.execute(
             "INSERT INTO webchat_sessions (title, owner_email, visibility) "
             "VALUES ('New chat', ?, 'private')", (email,))
-        conn.commit()
         sid = cur.lastrowid
+        # Claude Sonnet is the strongest connected writing route and therefore
+        # the deliberate default for new Command/Creator conversations. Older
+        # chats retain their existing preference until someone changes it.
+        conn.execute(
+            "INSERT INTO webchat_model_pref (session_id, model, provider) VALUES (?,?,?)",
+            (sid, *SESSION_MODEL_CHOICES["claude"]),
+        )
+        conn.commit()
         conn.close()
         self._json(200, {"id": sid})
+
+    def _handle_session_rename(self):
+        """Rename one conversation without allowing cross-account changes."""
+        if not self._has_tool("chat"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        email = (self.headers.get("X-User-Email") or "").strip().lower()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            payload = json.loads(self.rfile.read(min(length, 4096)).decode())
+            session_id = int(payload.get("id"))
+            title = re.sub(r"\s+", " ", str(payload.get("title") or "")).strip()[:80]
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+            self._json(400, {"error": "bad request"})
+            return
+        if not title:
+            self._json(400, {"error": "chat name is required"})
+            return
+        conn = db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT owner_email FROM webchat_sessions WHERE id=?", (session_id,)
+            ).fetchone()
+            if not row or (email not in ADMIN_EMAILS and row["owner_email"] != email):
+                conn.rollback()
+                self._json(404, {"error": "no such conversation"})
+                return
+            conn.execute(
+                "UPDATE webchat_sessions SET title=?, updated_at=datetime('now') WHERE id=?",
+                (title, session_id),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        self._json(200, {"id": session_id, "title": title})
+
+    def _handle_session_model(self):
+        """Set one reviewed per-chat inference route for the next message."""
+        if not self._has_tool("chat"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        email = (self.headers.get("X-User-Email") or "").strip().lower()
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            payload = json.loads(self.rfile.read(min(length, 4096)).decode())
+            session_id = int(payload.get("id"))
+            engine = str(payload.get("engine") or "").strip().lower()
+            model, provider = SESSION_MODEL_CHOICES[engine]
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError, KeyError):
+            self._json(400, {"error": "unsupported writing engine"})
+            return
+        conn = db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT owner_email FROM webchat_sessions WHERE id=?", (session_id,)
+            ).fetchone()
+            if not row or (email not in ADMIN_EMAILS and row["owner_email"] != email):
+                conn.rollback()
+                self._json(404, {"error": "no such conversation"})
+                return
+            conn.execute(
+                "INSERT INTO webchat_model_pref (session_id, model, provider) VALUES (?,?,?) "
+                "ON CONFLICT(session_id) DO UPDATE SET model=excluded.model, "
+                "provider=excluded.provider",
+                (session_id, model, provider),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        self._json(200, {
+            "id": session_id, "engine": engine, "model": model, "provider": provider,
+        })
 
     def _handle_session_archive(self):
         """Archive or restore one conversation the caller is allowed to open."""
@@ -8035,6 +8157,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                     ignore_rules=isolate_caller)
                                 if len(writing_quality.lint(revised, content_channel)) <= len(flags):
                                     reply = revised
+                        record_model_use(session_id, model, provider)
                         if note and "auto-switched" in note:
                             reply += f"\n\n*({note} — set `/model claude` to keep it, or `/model default`)*"
                         elif note and model != (pref_model or FAILOVER_CHAIN[0][0]):
@@ -8243,6 +8366,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._handle_plan_toggle()
         elif path == "/session/new":
             self._handle_new_session()
+        elif path == "/session/rename":
+            self._handle_session_rename()
+        elif path == "/session/model":
+            self._handle_session_model()
         elif path == "/session/archive":
             self._handle_session_archive()
         elif path == "/session/delete":

@@ -83,15 +83,20 @@ html,body{height:100%;overflow:hidden}
   background:transparent;color:var(--ink);border-radius:9px;padding:10px 38px 10px 10px;cursor:pointer}
 .session:hover{background:var(--card-2)}.session.on{background:var(--accent-bg);border-color:var(--accent)}
 .session b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.session span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
+.session-meta{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden}
+.session-engine{margin-left:auto;max-width:90px;overflow:hidden;text-overflow:ellipsis;color:var(--accent);font-size:9px;font-style:normal;font-weight:750}
 .session-more{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:30px;height:30px;border:0;border-radius:7px;
   background:transparent;color:var(--muted);font:inherit;font-size:17px;line-height:1;cursor:pointer;opacity:0}
 .session-row:hover .session-more,.session-more:focus-visible,.session-row:focus-within .session-more{opacity:1}.session-more:hover{background:var(--card);color:var(--ink)}
 .session-empty{padding:22px 10px;text-align:center;color:var(--muted);font-size:11px;line-height:1.5}
-.session-menu{position:fixed;z-index:80;width:156px;padding:5px;border:1px solid var(--border);border-radius:10px;background:var(--card);
+.session-menu{position:fixed;z-index:80;width:244px;max-height:calc(100dvh - 16px);overflow:auto;padding:6px;border:1px solid var(--border);border-radius:11px;background:var(--card);
   box-shadow:var(--shadow-lg)}.session-menu button{display:block;width:100%;border:0;border-radius:7px;background:transparent;color:var(--ink);
-  font:inherit;font-size:12px;text-align:left;padding:9px 10px;cursor:pointer}.session-menu button:hover,.session-menu button:focus-visible{background:var(--card-2)}
-.session-menu .danger{color:var(--bad)}
+  font:inherit;font-size:12px;text-align:left;padding:9px 10px;cursor:pointer}.session-menu button:hover:not(:disabled),.session-menu button:focus-visible{background:var(--card-2)}
+.session-menu button:disabled{cursor:not-allowed;opacity:.52}.session-menu .danger{color:var(--bad)}.session-menu .on{background:var(--accent-bg);color:var(--accent)}
+.session-menu-head{padding:8px 9px 7px}.session-menu-head b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.session-menu-head span,.session-menu button small{display:block;color:var(--muted);font-size:9.5px;line-height:1.35;margin-top:2px}
+.session-menu-label{border-top:1px solid var(--border);margin-top:5px;padding:9px 9px 4px;color:var(--muted);font-size:9px;font-weight:850;letter-spacing:.09em;text-transform:uppercase}
+.session-engine-action{min-height:48px}
 .rail-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:8px;border-bottom:1px solid var(--border)}
 .rail-tab{border:0;border-radius:8px;background:transparent;color:var(--muted);font:inherit;font-size:11px;font-weight:700;
   padding:7px;cursor:pointer}.rail-tab.on{background:var(--accent-bg);color:var(--accent)}
@@ -113,6 +118,8 @@ html,body{height:100%;overflow:hidden}
   background:color-mix(in srgb,var(--bg) 88%,transparent)}
 .work-title{min-width:0;flex:1}.work-title b{font-size:14px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .work-title span{font-size:11px;color:var(--muted)}
+.engine-pill{flex:none;max-width:145px;border:1px solid var(--border);border-radius:999px;background:var(--card);color:var(--accent);font:inherit;
+  font-size:10px;font-weight:750;padding:6px 9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}.engine-pill:hover{border-color:var(--accent);background:var(--accent-bg)}
 .status{display:inline-flex;align-items:center;gap:6px;color:var(--good);font-size:11px;font-weight:650}
 .status i{width:7px;height:7px;border-radius:50%;background:currentColor}
 .mobile-toggle,.context-toggle{display:none;width:38px;height:38px;place-items:center}
@@ -189,6 +196,10 @@ html,body{height:100%;overflow:hidden}
   border-top:1px solid var(--border);margin-top:11px;padding-top:8px}.creator-link{border:0;background:none;color:var(--muted);
   font:inherit;font-size:10.5px;padding:5px 2px;cursor:pointer}.creator-link:hover{color:var(--accent)}
 .creator-status{min-height:15px;margin:6px 1px 0;color:var(--muted);font-size:10px}.creator-status.bad{color:var(--bad)}
+.creator-trail{display:grid;gap:4px;margin-bottom:9px}.creator-trail-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;
+  padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb,var(--card) 70%,transparent)}
+.creator-trail-row span{min-width:0;font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.creator-trail-row span b{color:var(--ink)}
+.creator-trail-row button{border:0;background:none;color:var(--accent);font:inherit;font-size:9.5px;font-weight:750;padding:4px;cursor:pointer}
 .creator-summary{display:grid;gap:5px;max-height:130px;overflow:auto}.creator-summary-row{display:grid;grid-template-columns:minmax(90px,.35fr) 1fr;
   gap:9px;border-bottom:1px solid var(--border);padding:5px 1px;font-size:10.5px}.creator-summary-row b{color:var(--muted)}
 .creator-direct{display:flex;align-items:center;justify-content:space-between;gap:10px}.creator-direct span{display:block;color:var(--muted);
@@ -253,7 +264,7 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
   .creator-workbar{padding:10px}.creator-choice{min-height:44px;font-size:12px;flex:1 1 calc(50% - 6px)}
   .creator-question{font-size:15px}.creator-answer textarea{font-size:16px}.creator-summary-row{grid-template-columns:1fr}.creator-foot{align-items:flex-end}
   .compose button,.mobile-toggle,.context-toggle{width:44px;height:44px}
-  .work-head{height:58px;padding:0 8px}.work-title span{display:none}.status{font-size:0}.status i{width:8px;height:8px}
+  .work-head{height:58px;padding:0 8px}.work-title span{display:none}.engine-pill{max-width:102px;padding:6px 8px}.status{font-size:0}.status i{width:8px;height:8px}
 }
 @media(pointer:coarse){.session-more{opacity:1}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}.dots i,.skeleton{animation:none}.rail{transition:none!important}}
@@ -283,7 +294,17 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
     <div class="rail-foot"><a class="fallback" href="/ops/agent/">Open classic Labs Chat</a></div>
   </aside>
   <div class="session-menu" id="sessionMenu" role="menu" hidden>
+    <div class="session-menu-head"><b id="sessionMenuTitle">Chat settings</b><span id="sessionMenuEngine">Writing engine</span></div>
+    <button type="button" id="sessionOpenAction" role="menuitem">Open chat</button>
+    <button type="button" id="sessionRenameAction" role="menuitem">Rename chat</button>
+    <button type="button" id="sessionCopyLinkAction" role="menuitem">Copy chat link</button>
     <button type="button" id="sessionArchiveAction" role="menuitem">Archive</button>
+    <div class="session-menu-label">Writing engine</div>
+    <button type="button" class="session-engine-action" data-engine="claude" role="menuitem"><b>Claude Sonnet 4.6</b><small>Recommended for writing · connected</small></button>
+    <button type="button" class="session-engine-action" data-engine="minimax" role="menuitem"><b>MiniMax M3</b><small>Connected alternative</small></button>
+    <button type="button" class="session-engine-action" data-engine="auto" role="menuitem"><b>Hermes Auto</b><small>Let routing choose and fail over</small></button>
+    <button type="button" disabled><b>ChatGPT</b><small>Not connected to Hermes yet</small></button>
+    <div class="session-menu-label">Danger zone</div>
     <button type="button" class="danger" id="sessionDeleteAction" role="menuitem">Delete permanently</button>
   </div>
   <div class="shade" id="shade" aria-hidden="true"></div>
@@ -291,6 +312,7 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid va
     <div class="work-head">
       <button type="button" class="icon-btn mobile-toggle" id="menuBtn" aria-label="Show conversations" aria-controls="leftRail" aria-expanded="false">☰</button>
       <div class="work-title"><b id="threadTitle">New command</b><span id="operatorMode">Hermes · business operator and CMO</span></div>
+      <button type="button" class="engine-pill" id="currentEngineBtn" aria-label="Change writing engine">Claude Sonnet 4.6</button>
       <span class="status" aria-live="polite"><i></i><span id="agentStatus">Ready</span></span>
       <button type="button" class="icon-btn context-toggle" id="contextBtn" aria-label="Show business context" aria-controls="contextRail" aria-expanded="false">ⓘ</button>
     </div>
@@ -402,6 +424,8 @@ const input=document.getElementById('input'), sendBtn=document.getElementById('s
 const statusEl=document.getElementById('agentStatus'), sessionsEl=document.getElementById('sessions');
 const sessionViewbar=document.getElementById('sessionViewbar'),activeChatsBtn=document.getElementById('activeChatsBtn'),archivedChatsBtn=document.getElementById('archivedChatsBtn');
 const sessionMenu=document.getElementById('sessionMenu'),sessionArchiveAction=document.getElementById('sessionArchiveAction'),sessionDeleteAction=document.getElementById('sessionDeleteAction');
+const sessionOpenAction=document.getElementById('sessionOpenAction'),sessionRenameAction=document.getElementById('sessionRenameAction'),sessionCopyLinkAction=document.getElementById('sessionCopyLinkAction');
+const sessionMenuTitle=document.getElementById('sessionMenuTitle'),sessionMenuEngine=document.getElementById('sessionMenuEngine'),currentEngineBtn=document.getElementById('currentEngineBtn');
 const attachEl=document.getElementById('attachments'), composeWrap=document.querySelector('.compose-wrap');
 const cmoContext=document.getElementById('cmoContext'), chatsTab=document.getElementById('chatsTab'), companyTab=document.getElementById('companyTab');
 const docModal=document.getElementById('docModal'), docTitle=document.getElementById('docTitle'), docBody=document.getElementById('docBody');
@@ -525,20 +549,25 @@ function bubble(role,text,liveMedia){if(empty&&empty.parentNode)empty.remove();l
    let name=document.createElement('span');name.className='sent-media-name';name.textContent=a.name;item.appendChild(name);media.appendChild(item)});b.appendChild(media)}
  }
  threadEl.appendChild(m);threadEl.scrollTop=threadEl.scrollHeight;return m}
-function thinking(){let creator=document.body.classList.contains('creator-mode'),d=document.createElement('div');d.className='thinking';d.innerHTML='<span class="dots"><i></i><i></i><i></i></span><span>'+(creator?'Hermes is drafting with the TimeLabs writing standard…':'Hermes is working with live business context…')+'</span>';threadEl.appendChild(d);threadEl.scrollTop=threadEl.scrollHeight;return d}
+function thinking(){let creator=document.body.classList.contains('creator-mode'),engine=selectedEngine(allSessions.find(s=>s.id===sid)),d=document.createElement('div');d.className='thinking';d.innerHTML='<span class="dots"><i></i><i></i><i></i></span><span>'+(creator?engine+' is drafting with the TimeLabs writing standard…':engine+' is working with live business context…')+'</span>';threadEl.appendChild(d);threadEl.scrollTop=threadEl.scrollHeight;return d}
 function notice(text,bad){let n=document.createElement('div');n.className='notice'+(bad?' bad':'');n.textContent=text;threadEl.appendChild(n);threadEl.scrollTop=threadEl.scrollHeight;return n}
 async function api(path,opt){let r=await fetch(API+path,opt);let ct=r.headers.get('content-type')||'';
  if((r.status===401||r.status===403)&&ct.indexOf('application/json')<0){location.href='/oauth2/start?rd='+encodeURIComponent(location.pathname+location.search);throw new Error('Sign-in required')}
  let d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||('Request failed ('+r.status+')'));return d}
+function engineName(model,short){if(!model||model==='hermes-default')return short?'Auto':'Hermes Auto';if(model==='claude-sonnet-4-6')return short?'Claude 4.6':'Claude Sonnet 4.6';if(model==='MiniMax-M3')return 'MiniMax M3';return String(model)}
+function selectedEngine(s){return engineName(s&&s.preferred_model,false)}
+function engineKey(s){if(!s||!s.preferred_model)return'auto';if(s.preferred_model==='claude-sonnet-4-6')return'claude';if(s.preferred_model==='MiniMax-M3')return'minimax';return''}
+function syncEngineDisplay(s){let selected=selectedEngine(s),last=s&&s.last_model?engineName(s.last_model,false):'';currentEngineBtn.textContent=selected;currentEngineBtn.title='Selected: '+selected+(last?' · Last answer: '+last:'');currentEngineBtn.setAttribute('aria-label','Writing engine: '+selected+'. Change engine')}
 function closeSessionMenu(){sessionMenu.hidden=true;sessionMenuTarget=null}
-function openSessionMenu(s,trigger,x,y){sessionMenuTarget=s;sessionArchiveAction.textContent=s.archived?'Restore chat':'Archive chat';sessionMenu.hidden=false;
- let r=trigger&&trigger.getBoundingClientRect?trigger.getBoundingClientRect():null,left=Number.isFinite(x)?x:(r?r.right-156:12),top=Number.isFinite(y)?y:(r?r.bottom+4:12);
- let box=sessionMenu.getBoundingClientRect();sessionMenu.style.left=Math.max(8,Math.min(left,innerWidth-box.width-8))+'px';sessionMenu.style.top=Math.max(8,Math.min(top,innerHeight-box.height-8))+'px';sessionArchiveAction.focus()}
+function openSessionMenu(s,trigger,x,y){if(!s)return;sessionMenuTarget=s;sessionMenuTitle.textContent=s.title;sessionMenuEngine.textContent='Selected: '+selectedEngine(s)+(s.last_model?' · Last answer: '+engineName(s.last_model,false):'');sessionArchiveAction.textContent=s.archived?'Restore chat':'Archive chat';sessionOpenAction.hidden=s.id===sid;
+ document.querySelectorAll('.session-engine-action').forEach(b=>b.classList.toggle('on',b.dataset.engine===engineKey(s)));sessionMenu.hidden=false;
+ let r=trigger&&trigger.getBoundingClientRect?trigger.getBoundingClientRect():null,left=Number.isFinite(x)?x:(r?r.right-sessionMenu.offsetWidth:12),top=Number.isFinite(y)?y:(r?r.bottom+4:12);
+ let box=sessionMenu.getBoundingClientRect();sessionMenu.style.left=Math.max(8,Math.min(left,innerWidth-box.width-8))+'px';sessionMenu.style.top=Math.max(8,Math.min(top,innerHeight-box.height-8))+'px';(sessionOpenAction.hidden?sessionRenameAction:sessionOpenAction).focus()}
 function renderSessionList(){sessionsEl.innerHTML='';let active=allSessions.filter(s=>!s.archived),archived=allSessions.filter(s=>s.archived),shown=archivedView?archived:active;
  activeChatsBtn.textContent='Active'+(active.length?' · '+active.length:'');archivedChatsBtn.textContent='Archived'+(archived.length?' · '+archived.length:'');activeChatsBtn.classList.toggle('on',!archivedView);archivedChatsBtn.classList.toggle('on',archivedView);
  if(!shown.length){sessionsEl.innerHTML='<div class="session-empty">'+(archivedView?'No archived chats.':'No active chats.')+'</div>';return}
  selectedSessionButton=null;shown.forEach(s=>{let row=document.createElement('div');row.className='session-row';let b=document.createElement('button');b.type='button';b.className='session'+(s.id===sid?' on':'');
-  b.innerHTML='<b>'+esc(s.title)+'</b><span>'+s.n+' messages · '+esc((s.updated_at||'').slice(0,16).replace('T',' '))+'</span>';b.onclick=()=>switchSession(s.id);
+  b.innerHTML='<b>'+esc(s.title)+'</b><span class="session-meta"><span>'+s.n+' messages · '+esc((s.updated_at||'').slice(0,16).replace('T',' '))+'</span><em class="session-engine">'+esc(engineName(s.preferred_model,true))+'</em></span>';b.onclick=()=>switchSession(s.id);
   let more=document.createElement('button');more.type='button';more.className='session-more';more.textContent='⋯';more.setAttribute('aria-label','Chat actions for '+s.title);more.onclick=e=>{e.stopPropagation();openSessionMenu(s,more)};
   row.oncontextmenu=e=>{e.preventDefault();openSessionMenu(s,row,e.clientX,e.clientY)};row.appendChild(b);row.appendChild(more);sessionsEl.appendChild(row);if(s.id===sid)selectedSessionButton=b});
  if(selectedSessionButton)selectedSessionButton.scrollIntoView({block:'nearest'})}
@@ -560,14 +589,17 @@ async function loadSessions(){
   syncSession(sid);
   renderSessionList();
   let cur=allSessions.find(x=>x.id===sid);
-  document.getElementById('threadTitle').textContent=cur?cur.title:'New command';
-}catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
+  document.getElementById('threadTitle').textContent=cur?cur.title:'New command';syncEngineDisplay(cur);
+ }catch(e){sessionsEl.innerHTML='<div class="notice bad">'+esc(e.message)+'</div>'}}
 async function manageSession(action){let target=sessionMenuTarget;if(!target)return;if(busy&&target.id===sid){closeSessionMenu();notice('Wait for Hermes to finish before managing this chat.',false);return}
  if(action==='delete'&&!confirm('Permanently delete “'+target.title+'” and all of its messages? This cannot be undone.'))return;
  closeSessionMenu();try{if(action==='delete')await api('/session/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:target.id})});
   else await api('/session/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:target.id,archived:!target.archived})});
   let wasCurrent=target.id===sid;await loadSessions();if(wasCurrent&&(action==='delete'||!target.archived)){let next=allSessions.find(s=>!s.archived);if(next)await switchSession(next.id);else await newSession()}
  }catch(e){notice(e.message,true)}}
+async function renameSession(){let target=sessionMenuTarget;if(!target)return;let title=prompt('Rename chat',target.title);if(title===null)return;title=title.trim();if(!title){notice('Chat name cannot be empty.',true);return}closeSessionMenu();try{await api('/session/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:target.id,title:title})});await loadSessions()}catch(e){notice(e.message,true)}}
+async function copySessionLink(){let target=sessionMenuTarget;if(!target)return;let url=new URL(location.href);url.searchParams.set('session',target.id);closeSessionMenu();if(await copyText(url.toString()))notice('Chat link copied.',false);else notice('Could not copy the chat link.',true)}
+async function setSessionEngine(engine){let target=sessionMenuTarget;if(!target)return;closeSessionMenu();try{await api('/session/model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:target.id,engine:engine})});await loadSessions();notice('Writing engine set to '+selectedEngine(allSessions.find(s=>s.id===target.id))+'. It applies to the next message.',false)}catch(e){notice(e.message,true)}}
 async function loadHistory(){let gen=++historyGen,target=sid;statusEl.textContent='Loading';try{let d=await api('/history?session='+target);if(gen!==historyGen||target!==sid)return;threadEl.innerHTML='';if(!d.messages.length){threadEl.appendChild(empty)}else d.messages.forEach(m=>bubble(m.role,m.text));lastMessageId=d.messages.reduce((max,m)=>Math.max(max,Number(m.id)||0),0)
  }catch(e){if(gen===historyGen&&target===sid){threadEl.innerHTML='';if((e.message||'').toLowerCase()==='no such conversation'){try{let created=await api('/session/new',{method:'POST'});sid=created.id;syncSession(sid);await loadSessions();await loadHistory();return}catch(e2){notice('Could not load this conversation: '+(e2.message||e.message),true)};return;}notice('Could not load this conversation: '+e.message,true)}}finally{if(gen===historyGen)statusEl.textContent=busy?'Working':'Ready'}}
 async function switchSession(id){
@@ -606,13 +638,20 @@ function restoreCreatorState(){
  let s=packed&&packed.state;if(!s||typeof s!=='object'){creatorState=freshCreatorState();attachments=[];renderAttachments();return}
  let channel=CREATOR_CHANNELS[s.channel]?s.channel:null,mode=s.mode==='direct'?'direct':'guided';
  let phase=['channel','source','question','ready'].includes(s.phase)?s.phase:'channel';if(!channel&&phase!=='channel')phase='channel';
- let answers=(Array.isArray(s.answers)?s.answers:[]).filter(a=>a&&/^[a-z][a-z0-9_]{0,39}$/.test(String(a.id||''))&&String(a.answer||'').trim()).slice(0,5).map(a=>({id:String(a.id),question:String(a.question||a.id).slice(0,220),answer:String(a.answer).slice(0,2400)}));
+ let answers=(Array.isArray(s.answers)?s.answers:[]).filter(a=>a&&/^[a-z][a-z0-9_]{0,39}$/.test(String(a.id||''))&&String(a.answer||'').trim()).slice(0,5).map(a=>({id:String(a.id),question:String(a.question||a.id).slice(0,220),answer:String(a.answer).slice(0,2400),help:String(a.help||'').slice(0,240),input:['choice','text','long_text'].includes(a.input)?a.input:'long_text',options:(Array.isArray(a.options)?a.options:[]).slice(0,5).map(String),required:a.required!==false}));
  let q=s.question&&typeof s.question==='object'?{status:'question',id:String(s.question.id||'').slice(0,40),question:String(s.question.question||'').slice(0,220),help:String(s.question.help||'').slice(0,240),input:['choice','text','long_text'].includes(s.question.input)?s.question.input:'text',options:(Array.isArray(s.question.options)?s.question.options:[]).slice(0,5).map(String),required:s.question.required!==false}:null;
  if(phase==='question'&&(!q||!/^[a-z][a-z0-9_]{0,39}$/.test(q.id)))phase='ready';
  creatorState={mode:mode,phase:phase,channel:channel,answers:answers,question:q,notice:String(s.notice||'').slice(0,180),draft:String(s.draft||'').slice(0,2400)};
  attachments=(packed&&Array.isArray(packed.attachments)?packed.attachments:[]).filter(a=>a&&a.path&&a.name).slice(0,8).map(a=>({path:String(a.path),name:String(a.name),url:''}));renderAttachments()
 }
 function creatorSourceQuestion(){return{id:'source',question:'What are we working from?',help:'Attach the real photos or video stills, or describe the message, product, event, or idea. Rough notes are better than polished instructions.',input:'long_text',options:[],required:true}}
+function questionFromAnswer(a){return{status:'question',id:a.id,question:a.question,help:a.help||'Change this answer, then continue.',input:['choice','text','long_text'].includes(a.input)?a.input:'long_text',options:Array.isArray(a.options)?a.options:[],required:a.required!==false}}
+function stripSourceMedia(value){return String(value||'').split('\n').filter(line=>!/^Attached media:/i.test(line.trim())).join('\n').trim()}
+function creatorTrail(){let rows=[];if(creatorState.channel)rows.push('<div class="creator-trail-row"><span><b>Destination</b> · '+esc(CREATOR_CHANNELS[creatorState.channel].label)+'</span><button type="button" data-creator-destination>Edit</button></div>');creatorState.answers.forEach((a,i)=>rows.push('<div class="creator-trail-row"><span><b>'+esc(a.question)+'</b> · '+esc(a.answer)+'</span><button type="button" data-creator-edit="'+i+'">Edit</button></div>'));return rows.length?'<div class="creator-trail">'+rows.join('')+'</div>':''}
+function bindCreatorTrail(){document.querySelectorAll('[data-creator-edit]').forEach(b=>b.onclick=()=>editCreatorAnswer(Number(b.dataset.creatorEdit)));let destination=document.querySelector('[data-creator-destination]');if(destination)destination.onclick=changeCreatorDestination}
+function changeCreatorDestination(){if(creatorState.answers.length&&!confirm('Changing the destination will re-check the brief from the start. Continue?'))return;creatorRequest++;creatorPlanning=false;creatorState.phase='channel';creatorState.channel=null;creatorState.answers=[];creatorState.question=null;creatorState.draft='';creatorState.notice='';saveCreatorState();renderCreator();focusComposer()}
+function editCreatorAnswer(index){if(!Number.isInteger(index)||index<0||index>=creatorState.answers.length)return;let later=creatorState.answers.length-index-1;if(later&&!confirm('Editing this answer will re-check the '+later+' answer'+(later===1?'':'s')+' after it. Continue?'))return;creatorRequest++;creatorPlanning=false;let answer=creatorState.answers[index];creatorState.answers=creatorState.answers.slice(0,index);creatorState.phase=answer.id==='source'?'source':'question';creatorState.question=answer.id==='source'?creatorSourceQuestion():questionFromAnswer(answer);creatorState.draft=answer.id==='source'?stripSourceMedia(answer.answer):answer.answer;creatorState.notice=later?'Later questions will be asked again so the brief stays consistent.':'';saveCreatorState();renderCreator();focusComposer()}
+function backCreatorStep(){if(creatorState.answers.length){editCreatorAnswer(creatorState.answers.length-1);return}changeCreatorDestination()}
 function setCreatorStatus(text,bad){let e=document.getElementById('creatorStatus');e.textContent=text||'';e.classList.toggle('bad',!!bad)}
 function creatorProgress(){if(creatorState.mode==='direct'||creatorState.phase==='ready')return 100;if(creatorState.phase==='channel')return 14;if(creatorState.phase==='source')return 30;return Math.min(88,30+creatorState.answers.length*14)}
 function renderCreator(){
@@ -625,28 +664,28 @@ function renderCreator(){
   return
  }
  direct.textContent='Ask Hermes directly';draft.hidden=creatorState.phase==='channel'||creatorPlanning;
- if(creatorPlanning){label.textContent='Hermes is choosing the next question';step.innerHTML='<p class="creator-question">One moment…</p><p class="creator-help">Hermes is checking what you already supplied so it only asks what still matters.</p>';return}
+ if(creatorPlanning){label.textContent='Hermes is choosing the next question';step.innerHTML=creatorTrail()+'<p class="creator-question">One moment…</p><p class="creator-help">Hermes is checking what you already supplied so it only asks what still matters.</p><div class="creator-actions"><button type="button" class="creator-action" id="creatorBackBtn">Back and edit</button></div>';bindCreatorTrail();document.getElementById('creatorBackBtn').onclick=backCreatorStep;return}
  if(creatorState.phase==='channel'){
   label.textContent='Question 1 · Destination';step.innerHTML='<h3 class="creator-question">Where will this content go?</h3><p class="creator-help">Choose the final destination. The questions and paste-ready format will adapt to it.</p><div class="creator-choices" id="creatorChoices"></div>';
   let choices=document.getElementById('creatorChoices');Object.entries(CREATOR_CHANNELS).forEach(([key,c])=>{let b=document.createElement('button');b.type='button';b.className='creator-choice';b.textContent=c.label;b.onclick=()=>{creatorState.channel=key;creatorState.phase='source';creatorState.question=creatorSourceQuestion();creatorState.draft='';creatorState.notice='';saveCreatorState();renderCreator();focusComposer()};choices.appendChild(b)});return
  }
  if(creatorState.phase==='ready'){
-  label.textContent='Brief ready · Review';let rows=creatorState.answers.map(a=>'<div class="creator-summary-row"><b>'+esc(a.question)+'</b><span>'+esc(a.answer)+'</span></div>').join('');
-  step.innerHTML='<h3 class="creator-question">Hermes has enough for a first draft.</h3><p class="creator-help">Review the brief, then generate. You can refine the result in the same chat.</p><div class="creator-summary">'+rows+'</div><div class="creator-actions" style="margin-top:9px"><button type="button" class="creator-action" id="creatorBackBtn">Back</button><button type="button" class="creator-action primary" id="creatorGenerateBtn">Generate '+esc(CREATOR_CHANNELS[creatorState.channel].label)+'</button></div>';
-  document.getElementById('creatorGenerateBtn').onclick=generateCreatorDraft;document.getElementById('creatorBackBtn').onclick=()=>{let last=creatorState.answers.pop();creatorState.phase=last&&last.id==='source'?'source':'question';creatorState.question=last&&last.id==='source'?creatorSourceQuestion():{status:'question',id:last.id,question:last.question,help:'Change this answer, then continue.',input:'long_text',options:[],required:true};creatorState.draft=last?last.answer:'';saveCreatorState();renderCreator()};return
+  label.textContent='Brief ready · Review';step.innerHTML='<h3 class="creator-question">Hermes has enough for a first draft.</h3><p class="creator-help">Review or edit any answer. Changing an earlier answer safely re-checks everything after it.</p>'+creatorTrail()+'<div class="creator-actions" style="margin-top:9px"><button type="button" class="creator-action" id="creatorBackBtn">Back</button><button type="button" class="creator-action primary" id="creatorGenerateBtn">Generate '+esc(CREATOR_CHANNELS[creatorState.channel].label)+'</button></div>';
+  bindCreatorTrail();document.getElementById('creatorGenerateBtn').onclick=generateCreatorDraft;document.getElementById('creatorBackBtn').onclick=backCreatorStep;return
  }
  let q=creatorState.phase==='source'?creatorSourceQuestion():creatorState.question;if(!q){creatorState.phase='ready';renderCreator();return}
  label.textContent='Question '+(creatorState.answers.length+2)+' · '+(creatorState.phase==='source'?'Source':'Brief');
- step.innerHTML='<h3 class="creator-question">'+esc(q.question)+'</h3><p class="creator-help">'+esc(q.help||'Answer with confirmed information only.')+'</p>'+(q.input==='choice'?'<div class="creator-choices" id="creatorChoices"></div>':'<div class="creator-answer"><textarea id="creatorAnswer" maxlength="2400" placeholder="Type a rough answer…">'+esc(creatorState.draft||'')+'</textarea><div class="creator-actions">'+(q.id==='source'?'<button type="button" class="creator-action" id="creatorMediaBtn">＋ Add media</button>':'')+(q.required===false?'<button type="button" class="creator-action" id="creatorSkipBtn">Skip</button>':'')+'<button type="button" class="creator-action primary" id="creatorContinueBtn">Continue</button></div></div>');
- if(q.input==='choice'){let choices=document.getElementById('creatorChoices'),options=q.id==='community'?communityOptions(q.options):q.options||[];options.forEach(option=>{let b=document.createElement('button');b.type='button';b.className='creator-choice';b.textContent=option;b.onclick=()=>{if(q.id==='community'&&option==='Other subreddit'){creatorState.question={status:'question',id:'community',question:'Which subreddit exactly?',help:'Type the real community name, for example r/SeikoMods. This will be remembered as a future suggestion.',input:'text',options:[],required:true};creatorState.draft='';saveCreatorState();renderCreator();focusComposer();return}answerCreatorQuestion(option)};choices.appendChild(b)})}
+ step.innerHTML=creatorTrail()+'<h3 class="creator-question">'+esc(q.question)+'</h3><p class="creator-help">'+esc(q.help||'Answer with confirmed information only.')+'</p>'+(q.input==='choice'?'<div class="creator-choices" id="creatorChoices"></div><div class="creator-actions"><button type="button" class="creator-action" id="creatorBackBtn">Back</button>'+(q.required===false?'<button type="button" class="creator-action" id="creatorSkipBtn">Skip</button>':'')+'</div>':'<div class="creator-answer"><textarea id="creatorAnswer" maxlength="2400" placeholder="Type a rough answer…">'+esc(creatorState.draft||'')+'</textarea><div class="creator-actions"><button type="button" class="creator-action" id="creatorBackBtn">Back</button>'+(q.id==='source'?'<button type="button" class="creator-action" id="creatorMediaBtn">＋ Add media</button>':'')+(q.required===false?'<button type="button" class="creator-action" id="creatorSkipBtn">Skip</button>':'')+'<button type="button" class="creator-action primary" id="creatorContinueBtn">Continue</button></div></div>');
+ bindCreatorTrail();document.getElementById('creatorBackBtn').onclick=backCreatorStep;
+ if(q.input==='choice'){let choices=document.getElementById('creatorChoices'),options=q.id==='community'?communityOptions(q.options):q.options||[];options.forEach(option=>{let b=document.createElement('button');b.type='button';b.className='creator-choice';b.textContent=option;b.onclick=()=>{if(q.id==='community'&&option==='Other subreddit'){creatorState.question={status:'question',id:'community',question:'Which subreddit exactly?',help:'Type the real community name, for example r/SeikoMods. This will be remembered as a future suggestion.',input:'text',options:[],required:true};creatorState.draft='';saveCreatorState();renderCreator();focusComposer();return}answerCreatorQuestion(option)};choices.appendChild(b)});let skip=document.getElementById('creatorSkipBtn');if(skip)skip.onclick=()=>answerCreatorQuestion('Not needed')}
  else{let a=document.getElementById('creatorAnswer'),go=document.getElementById('creatorContinueBtn');let sync=()=>{creatorState.draft=a.value;go.disabled=!a.value.trim()&&!(q.id==='source'&&attachments.length);saveCreatorState()};a.oninput=sync;sync();go.onclick=()=>answerCreatorQuestion(a.value);let media=document.getElementById('creatorMediaBtn');if(media)media.onclick=()=>document.getElementById('fileInput').click();let skip=document.getElementById('creatorSkipBtn');if(skip)skip.onclick=()=>answerCreatorQuestion('Not needed')}
  }
 function answerCreatorQuestion(value){
  let q=creatorState.phase==='source'?creatorSourceQuestion():creatorState.question,answer=String(value||'').trim();
- if(q.id==='source'&&attachments.length){let media='Attached media: '+attachments.map(a=>a.name).join(', ');answer=answer?answer+'\n'+media:media}
+ if(q.id==='source'){answer=stripSourceMedia(answer);if(attachments.length){let media='Attached media: '+attachments.map(a=>a.name).join(', ');answer=answer?answer+'\n'+media:media}}
  if(q.id==='community'){answer=rememberSubreddit(answer);if(!normalizeSubreddit(answer)){setCreatorStatus('Enter a subreddit such as r/SeikoMods.',true);return}}
  if(!answer){setCreatorStatus('Add a rough answer'+(q.id==='source'?' or attach media':'')+' before continuing.',true);return}
- creatorState.answers=creatorState.answers.filter(a=>a.id!==q.id);creatorState.answers.push({id:q.id,question:q.question,answer:answer});creatorState.draft='';creatorState.notice='';saveCreatorState();requestCreatorQuestion()
+ creatorState.answers=creatorState.answers.filter(a=>a.id!==q.id);creatorState.answers.push({id:q.id,question:q.question,answer:answer,help:q.help||'',input:q.input||'text',options:Array.isArray(q.options)?q.options:[],required:q.required!==false});creatorState.draft='';creatorState.notice='';saveCreatorState();requestCreatorQuestion()
 }
 function clientCreatorFallback(){
  if(creatorState.answers.some(a=>a.id==='outcome'))return{status:'ready',reason:'The brief has enough detail.'};
@@ -674,6 +713,8 @@ document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{closeMenu(f
 document.getElementById('newBtn').onclick=newSession;
 activeChatsBtn.onclick=()=>{archivedView=false;closeSessionMenu();renderSessionList()};archivedChatsBtn.onclick=()=>{archivedView=true;closeSessionMenu();renderSessionList()};
 sessionArchiveAction.onclick=()=>manageSession('archive');sessionDeleteAction.onclick=()=>manageSession('delete');
+sessionOpenAction.onclick=()=>{let target=sessionMenuTarget;closeSessionMenu();if(target)switchSession(target.id)};sessionRenameAction.onclick=renameSession;sessionCopyLinkAction.onclick=copySessionLink;
+document.querySelectorAll('.session-engine-action').forEach(b=>b.onclick=()=>setSessionEngine(b.dataset.engine));currentEngineBtn.onclick=()=>openSessionMenu(allSessions.find(s=>s.id===sid),currentEngineBtn);
 chatsTab.onclick=()=>setSidebar('chats');companyTab.onclick=()=>setSidebar('company');document.getElementById('docClose').onclick=closeDocument;
 docModal.onclick=e=>{if(e.target===docModal)closeDocument()};renderDocuments();setSidebar('company');
 document.getElementById('creatorNewBtn').onclick=async()=>{attachments=[];input.value='';autosize();await newSession();creatorState=freshCreatorState();saveCreatorState();renderAttachments();renderCreator()};
