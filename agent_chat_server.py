@@ -1588,6 +1588,9 @@ def reference_fetch_prompt(url):
 
 REFERENCE_DISCOVER_TIMEOUT = 1500
 REFERENCE_MAX_DISCOVERED = 8
+# Concurrency stays at one (a browser job measured ~170 MB and climbs once
+# Chromium is up), but several may wait their turn.
+REFERENCE_MAX_PENDING_DISCOVERIES = 5
 
 # The public Ad Library renders without a login and exposes each creative as a
 # signed scontent/fbcdn URL. Those URLs expire, which is exactly why the images
@@ -4394,14 +4397,18 @@ footer{{margin-top:34px;color:var(--muted);font-size:12.5px;
         conn = db()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            busy = conn.execute(
+            # Searches queue rather than being refused: each one drives a real
+            # browser for minutes, so making someone wait and retry just moves
+            # the queue into their head. Still one at a time on the wire — the
+            # cap is on how much can be waiting, not on being allowed to ask.
+            pending = conn.execute(
                 "SELECT COUNT(*) FROM reference_boards "
                 "WHERE discover_status IN ('queued','running')").fetchone()[0]
-            if busy:
+            if pending >= REFERENCE_MAX_PENDING_DISCOVERIES:
                 conn.rollback()
                 self._json(409, {
-                    "error": "Another search is already running. "
-                             "It takes a few minutes — try again once it lands."})
+                    "error": f"{pending} searches are already lined up. "
+                             "Let those land before adding more."})
                 return
             cur = conn.execute(
                 "INSERT INTO reference_boards (name, created_by, discover_status, "

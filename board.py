@@ -165,6 +165,21 @@ CSS = """
 .bd-menu button.danger{color:var(--bad);}
 .bd-menu hr{border:none;border-top:1px solid var(--border);margin:4px 0;}
 
+/* running-jobs strip — the answer to "how do I know it's working" */
+.bd-jobs{display:flex;flex-direction:column;gap:7px;margin-bottom:14px;}
+.bd-job{display:flex;align-items:center;gap:10px;background:var(--card);
+  border:1px solid var(--border);border-left:3px solid var(--accent);
+  border-radius:var(--r-s);padding:10px 13px;font-size:13px;box-shadow:var(--shadow);}
+.bd-job.done{border-left-color:#3f7d4f;}
+.bd-job.err{border-left-color:var(--bad);}
+.bd-job b{font-weight:650;color:var(--ink);}
+.bd-job .sub{color:var(--muted);font-size:12.5px;}
+.bd-job .go{margin-left:auto;border:none;background:none;color:var(--accent);
+  font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;white-space:nowrap;}
+.bd-jobspin{width:12px;height:12px;border:2px solid var(--border-2);
+  border-top-color:var(--accent);border-radius:50%;animation:bdspin .8s linear infinite;
+  flex:none;}
+
 /* find inspiration */
 .bd-findnote{margin:0 0 4px;font-size:13px;color:var(--muted);line-height:1.55;}
 .bd-sources{display:flex;flex-direction:column;gap:8px;}
@@ -217,6 +232,7 @@ async function loadBoards(){
     boards=d.boards||[];unsortedCount=d.unsorted||0;
   }catch(e){boards=[];}
   drawRail();
+  drawJobs();
 }
 
 async function loadRefs(){
@@ -244,6 +260,46 @@ function schedulePoll(){
     return b.discover_status==='queued'||b.discover_status==='running';});
   clearTimeout(pollT);
   if(busy)pollT=setTimeout(function(){loadBoards();loadRefs();},6000);
+}
+
+/* A search runs for minutes in the background, so the page has to say so
+   plainly. A "…" on a rail pill is not an answer to "is it working?". */
+var jobSeen={};
+function drawJobs(){
+  var live=boards.filter(function(b){
+    return b.discover_status==='queued'||b.discover_status==='running';});
+  var recent=boards.filter(function(b){
+    return (b.discover_status==='done'||b.discover_status==='failed')
+      &&jobSeen[b.id]==='running';});
+  recent.forEach(function(b){jobSeen[b.id]='shown';});
+  boards.forEach(function(b){
+    if(b.discover_status==='queued'||b.discover_status==='running')jobSeen[b.id]='running';
+  });
+  var rows=live.map(function(b,i){
+    var running=b.discover_status==='running';
+    return '<div class="bd-job"><span class="bd-jobspin"></span><span>'
+      +'<b>'+esc(b.name)+'</b> — '
+      +(running?'searching the internet now'
+              :'waiting its turn (#'+(i+1)+' in the queue)')
+      +'<br><span class="sub">This takes a few minutes. You can leave the page; '
+      +'it keeps running.</span></span>'
+      +'<button type="button" class="go" data-goboard="'+b.id+'">Open</button></div>';
+  });
+  rows=rows.concat(recent.map(function(b){
+    var ok=b.discover_status==='done';
+    return '<div class="bd-job '+(ok?'done':'err')+'"><span>'
+      +'<b>'+esc(b.name)+'</b> — '
+      +(ok?('found '+(b.discover_found||0)+' references')
+         :('couldn\'t finish: '+esc(b.discover_error||'unknown')))
+      +'</span><button type="button" class="go" data-goboard="'+b.id+'">Open</button></div>';
+  }));
+  var host=$('bd-jobs');
+  host.innerHTML=rows.join('');
+  host.hidden=!rows.length;
+  host.querySelectorAll('[data-goboard]').forEach(function(el){
+    el.onclick=function(){
+      activeBoard=el.getAttribute('data-goboard');drawRail();loadRefs();};
+  });
 }
 
 function drawRail(){
@@ -686,7 +742,8 @@ def build():
     <div class="bd-layout">
       <nav class="bd-rail" id="bd-rail" aria-label="Boards"></nav>
       <div>
-        <div class="bd-tagbar" id="bd-tagbar"></div>
+        <div class="bd-jobs" id="bd-jobs" hidden></div>
+    <div class="bd-tagbar" id="bd-tagbar"></div>
         <div class="bd-grid" id="bd-grid"></div>
         <p class="bd-empty" id="bd-empty" style="display:none">Nothing here yet — add a reference, or paste a link and it'll read itself.</p>
       </div>
