@@ -26,6 +26,37 @@ A TimeLabs draft is ready only when an editor can answer yes to these questions:
 6. Does the ending create the right next action without summarising the draft?
 7. Would Schezan or the assigned teammate comfortably say this out loud?
 
+## Revision discipline
+
+A revision is not a fresh writing prompt. It is the original objective plus a
+new set of constraints, and the newest explicit correction wins.
+
+Before rewriting, silently keep a five-part revision ledger:
+
+1. **Job:** what the piece must help the reader understand, feel or do.
+2. **Must keep:** verified facts, approved wording and constraints that remain valid.
+3. **Must change:** the exact problem raised in the latest feedback.
+4. **Rejected:** phrases, premises, structures and angles the user ruled out.
+5. **Unknown:** anything essential that still needs one short clarification.
+
+Treat criticism as criticism. A phrase mentioned in a complaint is not a new
+creative direction unless the user clearly says to develop it. If a comment has
+two plausible meanings, ask one short question instead of choosing the more
+inventive interpretation.
+
+Do not defend a discarded draft, keep explaining why the rejected idea was
+reasonable, or restore it under slightly different wording. Rebuild from the
+piece's job and the latest ledger. Return the replacement draft first. Explain
+only the decisions that help the editor choose or verify it.
+
+Before sending a revision, run a contradiction check:
+
+- Does any rejected phrase, premise or structure remain?
+- Did the rewrite preserve the must-keep facts and requested outcome?
+- Did it add a source, audience, product or scene the user never confirmed?
+- Does a link, offer or call to action have enough context for a new reader?
+- Is the response solving the writing problem, or narrating the model's process?
+
 ## Research summary
 
 Research comparing human and model-written text finds recurring differences in
@@ -306,14 +337,16 @@ material because smoother copy is not necessarily faithful copy.
 
 ### Editing and approval
 
-1. Run the machine-checkable review. Treat matches as editor prompts, not an
+1. Reconcile the draft against the latest revision ledger; newer feedback
+   overrides older copy and assumptions.
+2. Run the machine-checkable review. Treat matches as editor prompts, not an
    authorship verdict.
-2. Remove assistant residue, placeholders, unsupported claims and vague
+3. Remove assistant residue, placeholders, unsupported claims and vague
    attribution. These are blocking.
-3. Inspect phrase clusters, rhythm, repetition, structure and the ending.
-4. Compare the edited draft with the facts after the final rewrite.
-5. Read it aloud and make a human edit.
-6. Require a person to approve public publishing. Founder voice and material
+4. Inspect phrase clusters, rhythm, repetition, structure and the ending.
+5. Compare the edited draft with the facts after the final rewrite.
+6. Read it aloud and make a human edit.
+7. Require a person to approve public publishing. Founder voice and material
    brand claims require owner approval.
 
 ## Machine-checkable taxonomy

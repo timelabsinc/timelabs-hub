@@ -1,6 +1,10 @@
+import pathlib
 import unittest
 
 import writing_quality
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class WritingQualityTests(unittest.TestCase):
@@ -21,6 +25,22 @@ class WritingQualityTests(unittest.TestCase):
                 prompt = writing_quality.prompt_brief(channel)
                 self.assertIn("Channel rule:", prompt)
                 self.assertNotIn("shortest native shape", prompt)
+
+    def test_latest_feedback_becomes_a_hard_revision_constraint(self):
+        prompt = writing_quality.prompt_brief("whatsapp")
+        self.assertIn("latest explicit user correction overrides", prompt)
+        self.assertIn("criticized phrase, premise, structure or angle as rejected", prompt)
+        self.assertIn("Do not mistake a complaint about wording", prompt)
+        self.assertIn("remove every contradiction", prompt)
+        standard = (ROOT / "docs/human-writing-standard.md").read_text(encoding="utf-8")
+        self.assertIn("five-part revision ledger", standard)
+        self.assertIn("Treat criticism as criticism", standard)
+        self.assertIn("Does any rejected phrase, premise or structure remain?", standard)
+
+    def test_whatsapp_introduces_links_without_inventing_the_entry_source(self):
+        prompt = writing_quality.prompt_brief("whatsapp")
+        self.assertIn("identify what it is and why it is relevant", prompt)
+        self.assertIn("Do not assume where the person came from", prompt)
 
     def test_residue_and_vague_sources_block(self):
         text = "Here is a polished version. Studies show this is better."

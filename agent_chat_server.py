@@ -1619,6 +1619,10 @@ CONTENT_HANDOFF = (
     "guessing; otherwise omit the unknown detail. After the paste blocks, add a "
     "'Final checks' section only when useful, with no more than three brief items the "
     "creator must confirm before publishing. Do not narrate that you followed these rules."
+    " On a revision, the latest explicit correction overrides every earlier draft. "
+    "Return the replacement paste block before commentary. Treat criticized wording or "
+    "angles as rejected, do not defend or repeat them, and silently check that none reappear. "
+    "If criticism has two plausible meanings, ask one short clarification instead of guessing."
 )
 
 # Content routes: a slash command expands into a structured brief and selects

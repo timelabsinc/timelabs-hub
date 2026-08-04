@@ -103,7 +103,9 @@ CHANNEL_GUIDANCE = {
     ),
     "whatsapp": (
         "Use short natural turns, one request at a time and the customer's actual name/details. "
-        "Do not turn a message into an email or hide the answer behind a long preamble."
+        "Do not turn a message into an email or hide the answer behind a long preamble. "
+        "Before presenting a community, group, form or other link, identify what it is and why it is relevant. "
+        "Do not assume where the person came from unless the trigger proves it."
     ),
     "sales": (
         "Answer the buyer's actual question first. Use only supplied price, availability, specification and delivery facts. "
@@ -135,12 +137,22 @@ BASE_BRIEF = (
     "End on the natural next action or unresolved detail, not a summary. After editing, compare every claim with the source and read it aloud."
 )
 
+REVISION_DISCIPLINE = (
+    "Revision discipline: the latest explicit user correction overrides earlier instructions and every prior draft. "
+    "Treat a criticized phrase, premise, structure or angle as rejected unless the user clearly asks you to develop it. "
+    "Do not mistake a complaint about wording for a new creative direction. If the intended correction has two plausible meanings, "
+    "ask one short clarifying question instead of choosing the more inventive interpretation. Before rewriting, silently identify the "
+    "piece's job, must-keep facts, requested change, rejected ideas and unknowns. Rebuild from that ledger; do not defend the old draft, "
+    "repeat the rejected idea in the explanation or smuggle it back into the copy. Then compare the replacement against the latest "
+    "feedback and remove every contradiction before returning it. Give the replacement draft first and explain only what helps the decision."
+)
+
 
 def prompt_brief(channel="general"):
     """Return the concise standard content generators should receive up front."""
     key = (channel or "general").strip().lower()
     guidance = CHANNEL_GUIDANCE.get(key, "Use the shortest native shape that completes the reader's job.")
-    return BASE_BRIEF + "\nChannel rule: " + guidance
+    return BASE_BRIEF + "\n" + REVISION_DISCIPLINE + "\nChannel rule: " + guidance
 
 
 def infer_channel(request):
