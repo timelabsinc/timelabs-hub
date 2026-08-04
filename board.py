@@ -103,6 +103,59 @@ CSS = """
 
 .bd-del{color:var(--bad);border-color:var(--border);}
 .bd-del:hover{background:var(--bad-bg);border-color:var(--bad);}
+
+/* board rail + layout */
+.bd-layout{display:grid;grid-template-columns:190px 1fr;gap:22px;align-items:start;}
+@media(max-width:760px){ .bd-layout{grid-template-columns:1fr;gap:14px;} }
+.bd-rail{display:flex;flex-direction:column;gap:2px;}
+@media(max-width:760px){
+  .bd-rail{flex-direction:row;overflow-x:auto;gap:7px;padding-bottom:4px;
+    -webkit-overflow-scrolling:touch;}
+  .bd-rail::-webkit-scrollbar{display:none;}
+}
+.bd-railitem{display:flex;align-items:center;gap:8px;border:none;background:none;
+  color:var(--muted);font:inherit;font-size:13px;font-weight:600;text-align:left;
+  padding:8px 10px;border-radius:var(--r-s);cursor:pointer;white-space:nowrap;}
+.bd-railitem:hover{background:var(--card-2);color:var(--ink);}
+.bd-railitem.on{background:var(--accent-bg);color:var(--accent);}
+.bd-railitem .n{margin-left:auto;font-size:11px;opacity:.75;font-variant-numeric:tabular-nums;}
+@media(max-width:760px){
+  .bd-railitem{border:1px solid var(--border);border-radius:999px;padding:6px 12px;}
+  .bd-railitem .n{margin-left:5px;}
+}
+.bd-railhead{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);padding:4px 10px;margin-top:6px;}
+@media(max-width:760px){ .bd-railhead{display:none;} }
+.bd-newboard{color:var(--accent);}
+
+/* fetch state */
+.bd-state{position:absolute;left:7px;bottom:7px;display:inline-flex;align-items:center;gap:5px;
+  background:rgba(0,0,0,.62);color:#fff;font-size:10.5px;font-weight:600;
+  padding:3px 8px;border-radius:999px;}
+.bd-state.err{background:var(--bad);}
+.bd-spin{width:9px;height:9px;border:1.5px solid rgba(255,255,255,.4);border-top-color:#fff;
+  border-radius:50%;animation:bdspin .7s linear infinite;}
+@keyframes bdspin{to{transform:rotate(360deg);}}
+.bd-link{font-size:11.5px;color:var(--accent);word-break:break-all;}
+.bd-analysis{background:var(--card-2);border-radius:var(--r-s);padding:11px 13px;
+  font-size:13px;line-height:1.6;color:var(--ink);margin-bottom:12px;}
+.bd-analysis b{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);margin-bottom:5px;}
+.bd-caption{font-size:12.5px;color:var(--muted);line-height:1.55;white-space:pre-line;
+  max-height:150px;overflow:auto;}
+.bd-failbox{background:var(--bad-bg);color:var(--bad);border-radius:var(--r-s);
+  padding:10px 12px;font-size:12.5px;margin-bottom:12px;line-height:1.5;}
+
+/* right-click menu */
+.bd-menu{position:fixed;z-index:80;min-width:190px;background:var(--card);
+  border:1px solid var(--border);border-radius:var(--r-s);box-shadow:var(--shadow-lg);
+  padding:5px;display:none;}
+.bd-menu.open{display:block;}
+.bd-menu button{display:block;width:100%;text-align:left;border:none;background:none;
+  color:var(--ink);font:inherit;font-size:13px;padding:8px 11px;border-radius:6px;cursor:pointer;}
+.bd-menu button:hover{background:var(--card-2);}
+.bd-menu button.danger{color:var(--bad);}
+.bd-menu hr{border:none;border-top:1px solid var(--border);margin:4px 0;}
 """
 
 JS = r"""
@@ -126,18 +179,31 @@ function jpost(path,body){
   return api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 }
 
-var refs=[];
-var activeTag='',activeCategory='',activeQ='';
+var refs=[],boards=[],unsortedCount=0;
+var activeTag='',activeCategory='',activeQ='',activeBoard='';
 var showArchived=false;
 var editingId=null;
+var pollT=null;
 
 function photoUrl(id,n){return API+'/references/photo?id='+id+'&n='+n;}
+/* Grid tiles get a ~640px thumbnail. A fetched Instagram image is often
+   2160px/600KB, and fifty of those is a broken-feeling page, not a slow one. */
+function thumbUrl(id,n){return photoUrl(id,n)+'&thumb=1';}
+
+async function loadBoards(){
+  try{
+    var d=await api('/boards/list');
+    boards=d.boards||[];unsortedCount=d.unsorted||0;
+  }catch(e){boards=[];}
+  drawRail();
+}
 
 async function loadRefs(){
   var qs='?';
   if(activeTag)qs+='tag='+encodeURIComponent(activeTag)+'&';
   if(activeCategory)qs+='category='+encodeURIComponent(activeCategory)+'&';
   if(activeQ)qs+='q='+encodeURIComponent(activeQ)+'&';
+  if(activeBoard)qs+='board='+encodeURIComponent(activeBoard)+'&';
   if(showArchived)qs+='archived=1&';
   try{
     var d=await api('/references/list'+qs);
@@ -145,6 +211,52 @@ async function loadRefs(){
   }catch(e){toast(e.message);refs=[];}
   drawTagbar();
   drawGrid();
+  schedulePoll();
+}
+
+/* A link fetch runs for minutes in the background. Poll only while something
+   is actually in flight, then stop — no permanent timer on an idle page. */
+function schedulePoll(){
+  var busy=refs.some(function(r){
+    return r.fetch_status==='queued'||r.fetch_status==='running';});
+  clearTimeout(pollT);
+  if(busy)pollT=setTimeout(function(){loadRefs();loadBoards();},6000);
+}
+
+function drawRail(){
+  var html='<button type="button" class="bd-railitem'+(activeBoard===''?' on':'')
+    +'" data-board="">All</button>';
+  html+='<button type="button" class="bd-railitem'+(activeBoard==='unsorted'?' on':'')
+    +'" data-board="unsorted">Unsorted<span class="n">'+unsortedCount+'</span></button>';
+  if(boards.length)html+='<div class="bd-railhead">Boards</div>';
+  html+=boards.map(function(b){
+    return '<button type="button" class="bd-railitem'+(activeBoard===String(b.id)?' on':'')
+      +'" data-board="'+b.id+'">'+esc(b.name)+'<span class="n">'+(b.count||0)+'</span></button>';
+  }).join('');
+  html+='<button type="button" class="bd-railitem bd-newboard" id="bd-newboard">+ New board</button>';
+  $('bd-rail').innerHTML=html;
+  $('bd-rail').querySelectorAll('.bd-railitem[data-board]').forEach(function(el){
+    el.onclick=function(){activeBoard=el.getAttribute('data-board');drawRail();loadRefs();};
+  });
+  $('bd-newboard').onclick=async function(){
+    var name=prompt('Name this board');
+    if(!name||!name.trim())return;
+    try{
+      var d=await jpost('/boards/save',{name:name.trim()});
+      toast(d.existing?'That board already exists':'Board created');
+      activeBoard=String(d.id);
+      await loadBoards();loadRefs();
+    }catch(e){toast(e.message);}
+  };
+  drawBoardOptions();
+}
+
+function drawBoardOptions(){
+  var sel=$('bd-boardsel');
+  var current=sel.value;
+  sel.innerHTML='<option value="">Unsorted</option>'+boards.map(function(b){
+    return '<option value="'+b.id+'">'+esc(b.name)+'</option>';}).join('');
+  sel.value=current;
 }
 
 function drawTagbar(){
@@ -163,22 +275,94 @@ function drawTagbar(){
   });
 }
 
+function stateBadge(r){
+  if(r.fetch_status==='queued')return '<span class="bd-state"><i class="bd-spin"></i>Queued</span>';
+  if(r.fetch_status==='running')return '<span class="bd-state"><i class="bd-spin"></i>Reading link…</span>';
+  if(r.fetch_status==='failed')return '<span class="bd-state err">Couldn\'t read link</span>';
+  return '';
+}
+
 function drawGrid(){
   $('bd-empty').style.display=refs.length?'none':'block';
   $('bd-grid').innerHTML=refs.map(function(r){
     var thumb=r.photo_count>0
-      ? '<img src="'+photoUrl(r.id,0)+'" alt="" loading="lazy">'
+      ? '<img src="'+thumbUrl(r.id,0)+'" alt="" loading="lazy" decoding="async">'
       : '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 14l3-3 2 2 3-4"/></svg>';
     var tags=(r.tags||[]).slice(0,4).map(function(t){return '<span class="bd-tag">'+esc(t)+'</span>';}).join('');
     return '<div class="bd-card'+(r.archived?' archived':'')+'" data-id="'+r.id+'">'
-      +'<div class="bd-thumb">'+thumb+(r.archived?'<span class="bd-arch-badge">Archived</span>':'')+'</div>'
+      +'<div class="bd-thumb">'+thumb+(r.archived?'<span class="bd-arch-badge">Archived</span>':'')
+      +stateBadge(r)+'</div>'
       +'<div class="bd-body"><div class="bd-title">'+esc(r.title||'(untitled)')+'</div>'
       +(r.category?'<div class="bd-cat">'+esc(r.category)+'</div>':'')
       +'<div class="bd-tags">'+tags+'</div></div></div>';
   }).join('');
   $('bd-grid').querySelectorAll('.bd-card').forEach(function(el){
-    el.onclick=function(){openView(parseInt(el.getAttribute('data-id'),10));};
+    var id=parseInt(el.getAttribute('data-id'),10);
+    el.onclick=function(){openView(id);};
+    el.oncontextmenu=function(e){e.preventDefault();openMenu(e,id);};
   });
+}
+
+/* ---------------- right-click menu ---------------- */
+var menuId=null;
+function openMenu(e,id){
+  menuId=id;
+  var r=refs.filter(function(x){return x.id===id;})[0];
+  if(!r)return;
+  var canRead=!!r.source_url&&r.fetch_status!=='queued'&&r.fetch_status!=='running';
+  $('bd-menu').innerHTML=
+    '<button type="button" data-act="share">Copy share link</button>'
+    +'<button type="button" data-act="open">Open reference</button>'
+    +(canRead?'<button type="button" data-act="fetch">'
+      +(r.fetch_status?'Read the link again':'Read &amp; analyse link')+'</button>':'')
+    +'<hr>'
+    +'<button type="button" data-act="edit">Edit</button>'
+    +'<button type="button" data-act="archive">'+(r.archived?'Unarchive':'Archive')+'</button>'
+    +'<button type="button" class="danger" data-act="delete">Delete</button>';
+  var m=$('bd-menu');
+  m.classList.add('open');
+  /* keep it on-screen when right-clicked near an edge */
+  var w=m.offsetWidth,h=m.offsetHeight;
+  m.style.left=Math.min(e.clientX,window.innerWidth-w-8)+'px';
+  m.style.top=Math.min(e.clientY,window.innerHeight-h-8)+'px';
+  m.querySelectorAll('button').forEach(function(b){
+    b.onclick=function(){menuAction(b.getAttribute('data-act'),r);};
+  });
+}
+function closeMenu(){$('bd-menu').classList.remove('open');menuId=null;}
+document.addEventListener('click',function(e){
+  if(!$('bd-menu').contains(e.target))closeMenu();
+});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeMenu();});
+window.addEventListener('scroll',closeMenu,{passive:true});
+
+async function menuAction(act,r){
+  closeMenu();
+  if(act==='open'){openView(r.id);return;}
+  if(act==='edit'){openEdit(r);return;}
+  if(act==='share'){shareReference(r);return;}
+  if(act==='fetch'){
+    try{
+      await jpost('/references/fetch',{id:r.id});
+      toast('Reading the link — this takes a few minutes');
+      loadRefs();
+    }catch(e){toast(e.message);}
+    return;
+  }
+  if(act==='archive'){
+    try{
+      await jpost('/references/update',{id:r.id,archived:r.archived?0:1});
+      toast('Updated');loadRefs();loadBoards();
+    }catch(e){toast(e.message);}
+    return;
+  }
+  if(act==='delete'){
+    if(!confirm('Delete "'+(r.title||'this reference')+'" and its photos? This cannot be undone.'))return;
+    try{
+      await jpost('/references/delete',{id:r.id});
+      toast('Deleted');loadRefs();loadBoards();
+    }catch(e){toast(e.message);}
+  }
 }
 
 /* ---------------- add / edit form ---------------- */
@@ -241,7 +425,10 @@ function openAdd(){
   $('bd-form-title').textContent='Add reference';
   $('bd-title').value='';$('bd-catsel').value='';$('bd-tags').value='';
   $('bd-note').value='';$('bd-source').value='';
+  /* default into whichever board you're looking at */
+  $('bd-boardsel').value=(activeBoard&&activeBoard!=='unsorted')?activeBoard:'';
   $('bd-delete').style.display='none';$('bd-archive').style.display='none';
+  $('bd-dz').style.display='';
   shots=[];drawShots();
   $('bd-form-modal').classList.add('open');
   setTimeout(function(){$('bd-title').focus();},50);
@@ -252,6 +439,7 @@ function openEdit(r){
   $('bd-title').value=r.title||'';$('bd-catsel').value=r.category||'';
   $('bd-tags').value=(r.tags||[]).join(', ');
   $('bd-note').value=r.note||'';$('bd-source').value=r.source_url||'';
+  $('bd-boardsel').value=r.board_id?String(r.board_id):'';
   $('bd-delete').style.display='';
   $('bd-archive').style.display='';
   $('bd-archive').textContent=r.archived?'Unarchive':'Archive';
@@ -268,19 +456,24 @@ $('bd-save').onclick=async function(){
   var title=$('bd-title').value.trim();
   var tags=$('bd-tags').value.split(',').map(function(t){return t.trim();}).filter(Boolean);
   var body={title:title,category:$('bd-catsel').value,tags:tags,
-    note:$('bd-note').value.trim(),source_url:$('bd-source').value.trim()};
+    note:$('bd-note').value.trim(),source_url:$('bd-source').value.trim(),
+    board_id:$('bd-boardsel').value||0};
   var btn=$('bd-save');btn.disabled=true;var label=btn.textContent;btn.textContent='Saving…';
   try{
     if(editingId){
       await jpost('/references/update',Object.assign({id:editingId},body));
+      toast('Saved');
     }else{
       body.photos=shots.map(function(s){return s.path;});
-      if(!body.title&&!body.photos.length){toast('add a title or at least one photo');btn.disabled=false;btn.textContent=label;return;}
-      await jpost('/references/save',body);
+      if(!body.title&&!body.photos.length&&!body.source_url){
+        toast('add a title, a link, or at least one photo');
+        btn.disabled=false;btn.textContent=label;return;
+      }
+      var d=await jpost('/references/save',body);
+      toast(d.fetching?'Saved — reading that link now, takes a few minutes':'Saved');
     }
     $('bd-form-modal').classList.remove('open');$('bd-dz').style.display='';
-    toast('Saved');
-    loadRefs();
+    loadRefs();loadBoards();
   }catch(e){toast(e.message);}
   btn.disabled=false;btn.textContent=label;
 };
@@ -304,21 +497,57 @@ $('bd-delete').onclick=async function(){
 };
 
 /* ---------------- lightbox ---------------- */
+function boardName(id){
+  var b=boards.filter(function(x){return x.id===id;})[0];
+  return b?b.name:'Unsorted';
+}
 function openView(id){
   var r=refs.filter(function(x){return x.id===id;})[0];
   if(!r)return;
   $('bd-view-title').textContent=r.title||'(untitled)';
   var shotsHtml='';
   for(var i=0;i<r.photo_count;i++){shotsHtml+='<img src="'+photoUrl(r.id,i)+'" alt="">';}
+  var head='';
+  if(r.fetch_status==='queued'||r.fetch_status==='running'){
+    head+='<div class="bd-analysis"><b>Reading the link</b>Fetching the post and looking at '
+      +'the image. This takes a few minutes — you can close this and come back.</div>';
+  }else if(r.fetch_status==='failed'){
+    head+='<div class="bd-failbox"><b>Couldn\'t read that link.</b> '+esc(r.fetch_error||'')
+      +'<br>Right-click the card to try again, or add a screenshot yourself.</div>';
+  }
+  if(r.analysis){
+    head+='<div class="bd-analysis"><b>Style read</b>'+esc(r.analysis)+'</div>';
+  }
   var rows='';
+  rows+='<dt>Board</dt><dd>'+esc(boardName(r.board_id))+'</dd>';
   if(r.category)rows+='<dt>Category</dt><dd>'+esc(r.category)+'</dd>';
   if((r.tags||[]).length)rows+='<dt>Tags</dt><dd>'+r.tags.map(esc).join(', ')+'</dd>';
   if(r.note)rows+='<dt>Note</dt><dd>'+esc(r.note)+'</dd>';
-  if(r.source_url)rows+='<dt>Source</dt><dd><a href="'+esc(r.source_url)+'" target="_blank" rel="noopener">'+esc(r.source_url)+'</a></dd>';
+  if(r.source_author)rows+='<dt>From</dt><dd>'+esc(r.source_author)+'</dd>';
+  if(r.source_url)rows+='<dt>Source</dt><dd><a class="bd-link" href="'+esc(r.source_url)+'" target="_blank" rel="noopener noreferrer">'+esc(r.source_url)+'</a></dd>';
+  if(r.source_caption)rows+='<dt>Caption</dt><dd><div class="bd-caption">'+esc(r.source_caption)+'</div></dd>';
   rows+='<dt>Added</dt><dd>'+esc(r.created_at||'')+(r.created_by?' by '+esc(r.created_by):'')+'</dd>';
-  $('bd-viewbody').innerHTML='<div class="bd-viewshots">'+shotsHtml+'</div><dl>'+rows+'</dl>';
+  $('bd-viewbody').innerHTML=head+'<div class="bd-viewshots">'+shotsHtml+'</div><dl>'+rows+'</dl>';
   $('bd-view-edit').onclick=function(){openEdit(r);};
+  $('bd-view-share').onclick=function(){shareReference(r);};
   $('bd-view-modal').classList.add('open');
+}
+
+/* ---------------- share ---------------- */
+async function shareReference(r){
+  try{
+    var d=await jpost('/references/share',{id:r.id});
+    var ok=false;
+    try{
+      await navigator.clipboard.writeText(d.url);
+      ok=true;
+    }catch(e){}
+    if(ok){
+      toast('Share link copied — anyone with it can view this reference');
+    }else{
+      prompt('Copy this share link:',d.url);
+    }
+  }catch(e){toast(e.message);}
 }
 $('bd-view-x').onclick=function(){$('bd-view-modal').classList.remove('open');};
 
@@ -331,7 +560,7 @@ $('bd-q').addEventListener('input',function(){
 $('bd-cat').addEventListener('change',function(){activeCategory=this.value;loadRefs();});
 $('bd-showarch').addEventListener('change',function(){showArchived=this.checked;loadRefs();});
 
-loadRefs();
+loadBoards().then(loadRefs);
 """
 
 
@@ -360,13 +589,19 @@ def build():
       <label class="bd-archtoggle"><input type="checkbox" id="bd-showarch"> Show archived</label>
       <button type="button" class="btn primary" id="bd-add">+ Add reference</button>
     </div>
-    <div class="bd-tagbar" id="bd-tagbar"></div>
-
-    <div class="bd-grid" id="bd-grid"></div>
-    <p class="bd-empty" id="bd-empty" style="display:none">No references yet — add the first one.</p>
+    <div class="bd-layout">
+      <nav class="bd-rail" id="bd-rail" aria-label="Boards"></nav>
+      <div>
+        <div class="bd-tagbar" id="bd-tagbar"></div>
+        <div class="bd-grid" id="bd-grid"></div>
+        <p class="bd-empty" id="bd-empty" style="display:none">Nothing here yet — add a reference, or paste a link and it'll read itself.</p>
+      </div>
+    </div>
   </main>
   {footer}
 </div>
+
+<div class="bd-menu" id="bd-menu" role="menu"></div>
 
 <div class="bd-modal" id="bd-form-modal"><div class="bd-sheet">
   <header><b id="bd-form-title">Add reference</b><button type="button" class="x" id="bd-form-x">&times;</button></header>
@@ -376,16 +611,18 @@ def build():
       <span>Drag photos here, paste (⌘V), or <u>choose files</u></span>
     </div>
     <div class="bd-shots" id="bd-shots"></div>
-    <label>Title</label>
+    <label>Source link <span class="bd-hint">paste an Instagram/web link and it reads itself</span></label>
+    <input id="bd-source" placeholder="https://instagram.com/p/…">
+    <label>Title <span class="bd-hint">optional if you pasted a link</span></label>
     <input id="bd-title" maxlength="200" placeholder="e.g. Minimal gold-accent product page">
+    <label>Board</label>
+    <select id="bd-boardsel"><option value="">Unsorted</option></select>
     <label>Category</label>
     <select id="bd-catsel"><option value="">—</option>{category_opts}</select>
     <label>Tags <span class="bd-hint">comma-separated</span></label>
     <input id="bd-tags" placeholder="minimal, gold accent, pinterest">
     <label>Note</label>
     <textarea id="bd-note" placeholder="What you like about it, where it's from…"></textarea>
-    <label>Source link <span class="bd-hint">optional</span></label>
-    <input id="bd-source" placeholder="https://…">
   </div>
   <footer>
     <button type="button" class="btn bd-del" id="bd-delete" style="display:none">Delete</button>
@@ -399,6 +636,7 @@ def build():
   <header><b id="bd-view-title"></b><button type="button" class="x" id="bd-view-x">&times;</button></header>
   <div class="bd-viewbody" id="bd-viewbody"></div>
   <footer>
+    <button type="button" class="btn" id="bd-view-share">Copy share link</button>
     <span class="bd-sp"></span>
     <button type="button" class="btn" id="bd-view-edit">Edit</button>
   </footer>

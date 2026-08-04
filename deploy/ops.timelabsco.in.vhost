@@ -62,6 +62,19 @@ server {
         proxy_read_timeout 300s;
     }
 
+    # --- Board reference shares: token IS the auth, same trade as /s/ above.
+    # X-User-Email is cleared explicitly: this location does not run the auth
+    # gate, so without this an outsider could assert the header themselves and
+    # the backend would read it as a signed-in identity.
+    location /rb/ {
+        proxy_pass http://127.0.0.1:8901;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-User-Email "";
+        proxy_read_timeout 60s;
+    }
+
     # --- Drop (Timelabs file tunnel: custom UI + chunked API), behind Key ---
     location = /drop { return 301 /drop/; }
 

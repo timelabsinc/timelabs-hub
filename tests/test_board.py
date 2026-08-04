@@ -101,13 +101,53 @@ class WiringTests(unittest.TestCase):
         server_src = (ROOT / "agent_chat_server.py").read_text(encoding="utf-8")
         for name in ("_handle_references_save", "_handle_references_list",
                      "_handle_references_update", "_handle_references_delete",
-                     "_handle_reference_photo"):
+                     "_handle_reference_photo", "_handle_references_fetch",
+                     "_handle_references_share", "_handle_references_unshare",
+                     "_handle_boards_list", "_handle_boards_save",
+                     "_handle_boards_delete"):
             start = server_src.index(f"def {name}(")
             # The gate must be the first real statement in the handler, not
             # merely present somewhere in its body.
             body_start = server_src.index(":", start) + 1
             next_lines = server_src[body_start:body_start + 400]
             self.assertIn('self._has_tool("board")', next_lines, name)
+
+    def test_public_share_surface_cannot_inherit_an_identity(self):
+        """The /rb/ location is the only unauthenticated door to this service.
+
+        nginx must blank X-User-Email there, or an outsider could assert an
+        admin address themselves and the backend would believe it — the same
+        class of bug as trusting nginx's page gate to cover the API."""
+        vhost = pathlib.Path("/etc/nginx/sites-available/ops.timelabsco.in")
+        if not vhost.exists():                       # not the production box
+            self.skipTest("nginx vhost not present")
+        conf = vhost.read_text(encoding="utf-8")
+        block = conf[conf.index("location /rb/"):]
+        block = block[:block.index("}")]
+        self.assertIn('proxy_set_header X-User-Email ""', block)
+        self.assertIn("127.0.0.1:8901", block)
+
+    def test_shared_reference_is_resolved_only_by_a_live_token(self):
+        server_src = (ROOT / "agent_chat_server.py").read_text(encoding="utf-8")
+        start = server_src.index("def _shared_reference(")
+        body = server_src[start:start + 900]
+        self.assertIn("revoked=0", body)
+        self.assertIn("re.sub(r\"[^A-Za-z0-9_-]\"", body)
+        # The public route must be matched before anything identity-shaped.
+        get_start = server_src.index("def do_GET(")
+        self.assertLess(server_src.index('path.startswith("/rb/")', get_start),
+                        server_src.index('path == "/access/gate"', get_start))
+
+    def test_fetched_image_urls_are_ssrf_guarded(self):
+        """Image URLs come from a model that just read an untrusted page."""
+        for blocked in ("http://127.0.0.1/x.jpg", "http://localhost/x.jpg",
+                        "http://169.254.169.254/latest/meta-data/",
+                        "http://10.0.0.5/x.jpg", "http://192.168.1.1/x.jpg",
+                        "file:///etc/passwd", "ftp://example.com/x.jpg",
+                        "not a url", ""):
+            with self.subTest(url=blocked):
+                self.assertIsNone(board_lib.public_http_url(blocked))
+        self.assertIsNotNone(board_lib.public_http_url("https://example.com/a.jpg"))
 
     def test_photo_storage_is_private_and_under_root(self):
         server_src = (ROOT / "agent_chat_server.py").read_text(encoding="utf-8")
