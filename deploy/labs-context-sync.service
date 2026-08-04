@@ -1,0 +1,8 @@
+[Unit]
+Description=Labs OS context sync (refresh what Hermes knows about this system)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/ops-dashboard
+ExecStart=/usr/bin/python3 /root/ops-dashboard/context_sync.py
