@@ -8,7 +8,6 @@ and getting three refusals.
 """
 import sqlite3
 import sys
-import time
 
 sys.path.insert(0, "/root/ops-dashboard")
 import reddit_api
@@ -17,40 +16,17 @@ DB = "/root/ops-dashboard/data/hermes.db"
 
 
 def main():
-    # Weighted by repetition, not a scheduler — simplest way to check some
-    # subs more often without adding a new concept. IndiaWatchMods is our own
-    # sub (small, and catching a new post/comment there quickly matters most);
-    # SeikoMods is the biggest realistic opportunity pool. Everything else
-    # once per lap.
-    subs = (["IndiaWatchMods"] * 3 + ["SeikoMods"] * 2 +
-            [s for s in reddit_api.TARGET_SUBS if s != "SeikoMods"])
-    # rotate by the hour so each sub comes round without keeping state
-    sub = subs[int(time.time() // 3600) % len(subs)]
+    state = sqlite3.connect(DB, timeout=30)
+    sub = reddit_api.claim_next_scan_sub(state)
+    state.commit()
+    state.close()
     try:
         threads = reddit_api.fetch_new_threads(subs=[sub], limit=25)
     except Exception as e:
         print(f"[reddit_scan] r/{sub}: {e}", flush=True)
         return 0        # a refused fetch is normal, not a failure worth alerting
     conn = sqlite3.connect(DB, timeout=30)
-    added = 0
-    for t in threads:
-        cur = conn.execute("SELECT id FROM reddit_threads WHERE thread_id=?",
-                           (t["thread_id"],)).fetchone()
-        if cur:
-            conn.execute("UPDATE reddit_threads SET score=COALESCE(?,score), "
-                         "num_comments=COALESCE(?,num_comments), "
-                         "opportunity_score=? WHERE thread_id=?",
-                         (t["score"], t["num_comments"], t["opportunity_score"],
-                          t["thread_id"]))
-        else:
-            conn.execute(
-                "INSERT INTO reddit_threads (thread_id, subreddit, title, permalink, "
-                "author, created_utc, score, num_comments, tag, opportunity_score) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (t["thread_id"], t["subreddit"], t["title"], t["permalink"],
-                 t["author"], t["created_utc"], t["score"], t["num_comments"],
-                 t["tag"], t["opportunity_score"]))
-            added += 1
+    added = reddit_api.upsert_threads(conn, threads)
     conn.commit()
     total = conn.execute("SELECT COUNT(*) FROM reddit_threads").fetchone()[0]
     conn.close()

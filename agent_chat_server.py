@@ -793,6 +793,12 @@ def _ensure_reddit_schema():
                      "ON reddit_threads(thread_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reddit_threads_status "
                      "ON reddit_threads(status)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS reddit_scan_state (
+            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+            next_index INTEGER NOT NULL DEFAULT 0)""")
+        import reddit_api
+        reddit_api.ensure_thread_columns(conn)
+        reddit_api.reclassify_recent_threads(conn)
         conn.execute("""CREATE TABLE IF NOT EXISTS reddit_drafts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             thread_id INTEGER NOT NULL REFERENCES reddit_threads(id),
@@ -6274,17 +6280,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         params = dict(p.split("=", 1) for p in query.split("&") if "=" in p) if query else {}
         tag = urllib.parse.unquote(params.get("tag", "")).strip()
-        sql = "SELECT * FROM reddit_threads"
+        group_sql = ("CASE WHEN lower(subreddit)='indiawatchmods' THEN 'home' "
+                     "WHEN lower(subreddit) IN ('watchesindia','watchenthusiastindia',"
+                     "'watchcollectorsindia','indiawatchexchange') THEN 'india' "
+                     "ELSE 'global' END")
+        sql = ("WITH candidates AS (SELECT *, " + group_sql + " AS group_key, "
+               "(opportunity_score - "
+               "MAX(0,(strftime('%s','now')-created_utc)/86400.0)*0.035) AS rank_score "
+               "FROM reddit_threads WHERE created_utc >= "
+               "CAST(strftime('%s','now','-14 days') AS INTEGER) AND "
+               "(opportunity_score >= 0.55 OR created_utc >= "
+               "CAST(strftime('%s','now','-2 days') AS INTEGER) OR "
+               "lower(subreddit) IN ('indiawatchmods','watchesindia',"
+               "'watchenthusiastindia','watchcollectorsindia','indiawatchexchange'))")
         args = []
         if tag and tag != "all":
-            sql += " WHERE tag=?"
+            sql += " AND tag=?"
             args.append(tag)
-        sql += " ORDER BY opportunity_score DESC, created_utc DESC LIMIT 100"
+        # Reserve space for our own and India-specific communities instead of
+        # letting high-volume r/Watches crowd them out. Within each group,
+        # useful matches decay with age; the multi-year archive never enters.
+        sql += (") , ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY group_key "
+                "ORDER BY rank_score DESC, created_utc DESC) AS group_rank "
+                "FROM candidates) SELECT * FROM ranked WHERE "
+                "(group_key='home' AND group_rank<=50) OR "
+                "(group_key='india' AND group_rank<=120) OR "
+                "(group_key='global' AND group_rank<=120) "
+                "ORDER BY CASE group_key WHEN 'home' THEN 0 WHEN 'india' THEN 1 ELSE 2 END, "
+                "rank_score DESC, created_utc DESC")
         conn = db()
         rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
         conn.close()
         import reddit_api
-        self._json(200, {"mode": reddit_api.mode(), "threads": rows})
+        self._json(200, {"mode": reddit_api.mode(), "window_days": 14,
+                         "selection": "fresh, India-relevant, or strong reply fit",
+                         "threads": rows})
 
     def _handle_reddit_posts(self):
         """Drafts for our own subreddit, newest first, with pipeline state."""
@@ -6888,11 +6918,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             tid = int(p.get("thread_id") or 0)
         except (TypeError, ValueError):
             tid = 0
+        note = str(p.get("note") or "").strip()[:1000]
         conn = db()
-        t = conn.execute("SELECT id FROM reddit_threads WHERE id=?", (tid,)).fetchone()
+        t = conn.execute(
+            "SELECT id, body, post_type FROM reddit_threads WHERE id=?", (tid,)
+        ).fetchone()
         if not t:
             conn.close()
             self._json(404, {"error": "no such thread"})
+            return
+        if not (t["body"] or "").strip() and not note:
+            conn.close()
+            self._json(400, {"error":
+                "This is a title-only image/link post. Open it first, then add the "
+                "relevant visual or discussion detail so Hermes does not guess."})
             return
         if not REDDIT_JOB_SLOT.acquire(blocking=False):
             conn.close()
@@ -6904,7 +6943,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "INSERT INTO reddit_drafts "
                 "(thread_id, draft_text, status, created_by, answer, queued_at) "
                 "VALUES (?,'','queued',?,?,datetime('now'))",
-                (tid, actor, str(p.get("note") or "").strip()[:1000]))
+                (tid, actor, note))
             did = cur.lastrowid
             conn.commit()
             committed = True
@@ -7068,39 +7107,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(403, {"error": "not available for this account"})
             return
         import reddit_api
+        state = db()
+        sub = reddit_api.claim_next_scan_sub(state)
+        state.commit()
+        state.close()
         try:
-            threads = reddit_api.fetch_new_threads()
+            threads = reddit_api.fetch_new_threads(subs=[sub], limit=25)
         except reddit_api.RedditError as e:
             self._json(400, {"error": str(e)})
             return
         conn = db()
-        added = 0
-        for t in threads:
-            cur = conn.execute("SELECT id FROM reddit_threads WHERE thread_id=?",
-                               (t["thread_id"],)).fetchone()
-            if cur:
-                # COALESCE so an RSS re-sync (score/num_comments unknown,
-                # always None) can't blank out real numbers a previous
-                # OAuth sync already recorded for this thread.
-                conn.execute(
-                    "UPDATE reddit_threads SET score=COALESCE(?,score), "
-                    "num_comments=COALESCE(?,num_comments), opportunity_score=? "
-                    "WHERE thread_id=?",
-                    (t["score"], t["num_comments"], t["opportunity_score"], t["thread_id"]))
-            else:
-                conn.execute(
-                    "INSERT INTO reddit_threads (thread_id, subreddit, title, permalink, "
-                    "author, created_utc, score, num_comments, tag, opportunity_score) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (t["thread_id"], t["subreddit"], t["title"], t["permalink"], t["author"],
-                     t["created_utc"], t["score"], t["num_comments"], t["tag"],
-                     t["opportunity_score"]))
-                added += 1
+        added = reddit_api.upsert_threads(conn, threads)
         conn.commit()
         conn.close()
-        hub_event("reddit_sync", f"{added} new thread(s) from {len(reddit_api.TARGET_SUBS)} subs",
+        hub_event("reddit_sync", f"{added} new thread(s) from r/{sub}",
                   actor, "agent")
-        self._json(200, {"ok": True, "fetched": len(threads), "added": added})
+        self._json(200, {"ok": True, "subreddit": sub,
+                         "fetched": len(threads), "added": added})
 
     def _handle_supplier_ledger(self, query):
         """An order-request sheet for a batch of builds, so the supplier can

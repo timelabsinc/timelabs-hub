@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """Reddit listener — admin/full tool. Renders /var/www/ops/reddit.html.
 
-Phase 1 only: a read-only inbox of watch-hobbyist threads worth a genuine
-reply, ranked and tagged. It makes no writes to Reddit — nothing here posts
-or comments on its own. Phase 2 (draft-assist, human-approved) is scoped but
-not built; see the reddit_threads/reddit_drafts schema in
-_ensure_reddit_schema() (agent_chat_server.py) and reference_reddit_timelabs
-memory for the full plan.
+The listening inbox is read-only against Reddit: it ranks and explains fresh
+watch-community threads. A separate draft-assist queue can prepare replies,
+but a person still reviews and manually posts every one.
 
 Data is fetched client-side from /reddit/threads (and synced via
 /reddit/sync) rather than baked in at generate time, since a daily rebuild
@@ -22,11 +19,16 @@ from hub_shell import HUB_STYLE, hub_header, hub_footer, WHOAMI_JS
 OUT = "/var/www/ops/reddit.html"
 
 TAGS = [
-    ("all", "All"),
+    ("priority", "Worth replying"),
+    ("all", "All surfaced"),
     ("buying_intent", "Buying intent"),
+    ("build_help", "Build help"),
     ("answerable_question", "Question"),
+    ("identification", "ID / legit check"),
     ("competitor_complaint", "Complaint"),
     ("style_trend", "Style / trend"),
+    ("experience", "Wear / review"),
+    ("showcase", "Showcase"),
     ("other", "Other"),
 ]
 
@@ -60,17 +62,31 @@ CSS = """
    .rd-reply asks for margin-left:auto and on a plain block .rd-meta that
    computes to 0, which glued "Draft a reply" to the end of the counts with
    no gap and left ~680px of empty card to its right on a desktop. */
-.rd-foot{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;}
+.rd-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px;}
 .rd-tag{font-size:10.5px;font-weight:650;text-transform:uppercase;letter-spacing:.03em;
   padding:2px 7px;border-radius:5px;}
 .rd-tag.buying_intent{color:#3f7d4f;background:var(--good-bg);}
+.rd-tag.build_help{color:#267067;background:#2b9f8d1a;}
 .rd-tag.answerable_question{color:#8a6a2c;background:#f3e4bc33;}
+.rd-tag.identification{color:#7b4ca0;background:#8a55af1a;}
 .rd-tag.competitor_complaint{color:var(--bad);background:var(--bad-bg);}
 .rd-tag.style_trend{color:#5468c4;background:#5468c41a;}
+.rd-tag.experience{color:#98662f;background:#98662f1a;}
+.rd-tag.showcase{color:#39759a;background:#39759a1a;}
 .rd-tag.other{color:var(--muted);background:var(--card-2);}
 .rd-title{font-size:14.5px;color:var(--ink);text-decoration:none;font-weight:600;line-height:1.35;}
 .rd-title:hover{text-decoration:underline;}
 .rd-score{margin-left:auto;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;}
+.rd-context{margin:2px 0 1px;color:var(--ink);font-size:13px;line-height:1.55;white-space:pre-line;}
+.rd-context.missing{color:var(--muted);font-style:italic;}
+.rd-why{display:flex;gap:7px;align-items:flex-start;flex-wrap:wrap;color:var(--muted);font-size:11.5px;line-height:1.45;}
+.rd-why b{color:var(--ink);font-weight:650;white-space:nowrap;}
+.rd-why>span:not(.rd-source){flex:1;min-width:180px;}
+.rd-source{font-size:10.5px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:2px 7px;white-space:nowrap;}
+.rd-open{color:var(--accent);text-decoration:none;font-weight:650;}
+.rd-open:hover{text-decoration:underline;}
+.rd-more{align-self:center;border:1px solid var(--border-2);background:var(--card);color:var(--ink);
+  border-radius:var(--r-s);padding:9px 16px;font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;}
 .rd-empty{color:var(--muted);font-size:13.5px;padding:30px 0;text-align:center;}
 
 /* composer */
@@ -266,17 +282,22 @@ function agoEpoch(sec){
   if(d<2592000)return Math.floor(d/86400)+'d ago';
   return new Date(sec*1000).toLocaleDateString();
 }
-var TAG_LABEL={buying_intent:'Buying intent',answerable_question:'Question',
-  competitor_complaint:'Complaint',style_trend:'Style / trend',other:'Other'};
-var THREADS=[], tagF='all';
+var TAG_LABEL={buying_intent:'Buying intent',build_help:'Build help',
+  answerable_question:'Question',identification:'ID / legit check',
+  competitor_complaint:'Complaint',style_trend:'Style / trend',
+  experience:'Wear / review',showcase:'Showcase',other:'Other'};
+var THREADS=[], tagF='priority', visibleThreads=60;
 
 function draw(){
-  var rows=THREADS.filter(function(t){return tagF==='all'||t.tag===tagF;});
+  var filtered=THREADS.filter(function(t){
+    return tagF==='all'||(tagF==='priority'&&t.opportunity_score>=0.65)||t.tag===tagF;
+  });
+  var rows=filtered.slice(0,visibleThreads);
   $('rd-total').textContent=THREADS.length;
   $('rd-buying').textContent=THREADS.filter(function(t){return t.tag==='buying_intent';}).length;
-  $('rd-question').textContent=THREADS.filter(function(t){return t.tag==='answerable_question';}).length;
-  $('rd-hot').textContent=THREADS.filter(function(t){return t.opportunity_score>=0.7;}).length;
-  if(!rows.length){
+  $('rd-question').textContent=THREADS.filter(function(t){return ['build_help','answerable_question','identification'].indexOf(t.tag)>=0;}).length;
+  $('rd-hot').textContent=THREADS.filter(function(t){return t.opportunity_score>=0.65;}).length;
+  if(!filtered.length){
     $('list').innerHTML='<div class="rd-empty">'+(THREADS.length?'No threads match this filter.':
       'No threads yet — click Sync to pull the first batch.')+'</div>';
     return;
@@ -291,21 +312,41 @@ function draw(){
     if(t.score!=null) counts.push(t.score+' upvotes');
     if(t.num_comments!=null) counts.push(t.num_comments+' comments');
     var countTxt = counts.join(' &middot; ');
+    var body=(t.body||'').trim(), excerpt=body.length>520?body.slice(0,517)+'...':body;
+    var context=excerpt||('No text body was supplied for this '+(t.post_type||'media')+
+      ' post. Open it before drafting; Hermes will not guess from the title.');
+    var priority=t.opportunity_score>=0.82?'High':(t.opportunity_score>=0.65?'Good':'Low');
+    var links='<a class="rd-open" href="'+esc(t.permalink)+'" target="_blank" rel="noopener">Open thread</a>';
+    if(t.content_url)links+=' <a class="rd-open" href="'+esc(t.content_url)+'" target="_blank" rel="noopener">Open media/link</a>';
     return '<div class="rd-card">'
       +'<div class="rd-top">'
       +'<span class="rd-sr">r/'+esc(t.subreddit)+'</span>'
       +'<span class="rd-tag '+esc(t.tag)+'">'+esc(TAG_LABEL[t.tag]||t.tag)+'</span>'
+      +(t.flair?'<span class="rd-source">'+esc(t.flair)+'</span>':'')
       +'<span class="rd-meta">'+agoEpoch(t.created_utc)+' &middot; u/'+esc(t.author)+'</span>'
-      +'<span class="rd-score">score '+ (t.opportunity_score||0).toFixed(2) +'</span>'
+      +'<span class="rd-score">'+priority+' reply fit</span>'
       +'</div>'
       +'<a class="rd-title" href="'+esc(t.permalink)+'" target="_blank" rel="noopener">'+esc(t.title)+'</a>'
-      +'<div class="rd-foot">'+(countTxt?'<span>'+countTxt+'</span>':'')
+      +'<div class="rd-context'+(body?'':' missing')+'">'+esc(context)+'</div>'
+      +'<div class="rd-why"><b>Why surfaced</b><span>'+esc(t.match_reason||'No strong reply signal detected')+'</span>'
+      +'<span class="rd-source">'+(body?'Post text captured':'Title only')+'</span></div>'
+      +'<div class="rd-foot">'+links+(countTxt?'<span>'+countTxt+'</span>':'')
       +'<button class="rd-reply" data-reply="'+t.id+'">Draft a reply</button></div>'
       +'</div>';
-  }).join('');
+  }).join('')+(filtered.length>visibleThreads?
+    '<button type="button" class="rd-more" id="rd-more">Show 60 more ('+
+    (filtered.length-visibleThreads)+' remaining)</button>':'');
+  if($('rd-more'))$('rd-more').onclick=function(){visibleThreads+=60;draw();};
   $('list').querySelectorAll('[data-reply]').forEach(function(b){
     b.onclick=function(){
-      var note=prompt('Anything you want said? Leave blank and it works it out:')||'';
+      var thread=THREADS.find(function(t){return +t.id===+b.dataset.reply;}),
+        missing=!thread||!(thread.body||'').trim();
+      var raw=prompt(missing?
+        'This is a title-only image/link post. Open it first, then paste the relevant visual or discussion detail so Hermes does not guess:':
+        'Anything you want said? Leave blank and Hermes will use the complete post text:');
+      if(raw===null)return;
+      var note=(raw||'').trim();
+      if(missing&&!note){toast('Add the missing image or link context before drafting');return;}
       b.disabled=true; b.textContent='Drafting…';
       jpost('/reddit/reply/create',{thread_id:+b.dataset.reply,note:note})
         .then(function(){
@@ -318,9 +359,9 @@ function draw(){
 }
 
 var BANNER={
-  rss:['Running on Reddit\\u2019s public feed \\u2014 limited data for now',
-    'No Reddit app is connected yet, so threads come from Reddit\\u2019s public RSS feed '
-    +'instead of the full API: real titles and links, but no upvote or comment counts. '
+  rss:['Running on Reddit\\u2019s public feed \\u2014 post text, but no discussion metrics',
+    'No Reddit app is connected yet, so threads come from Reddit\\u2019s public RSS feed. '
+    +'The Listener now captures the full post body when Reddit includes one, but it cannot see vote counts, comment counts, flair or comment text. '
     +'A Developer Support ticket is the way to unlock full data \\u2014 once approved and '
     +'the credentials are added to .env, this switches over automatically.'],
   oauth:['','']
@@ -330,6 +371,7 @@ async function load(){
   try{
     var d=await api('/reddit/threads');
     THREADS=d.threads||[];
+    visibleThreads=60;
     var b=BANNER[d.mode]||BANNER.rss;
     if(d.mode==='oauth'){
       $('rd-banner').classList.remove('on');
@@ -349,14 +391,14 @@ async function load(){
 document.querySelectorAll('.rd-chip').forEach(function(b){
   b.onclick=function(){
     document.querySelectorAll('.rd-chip').forEach(function(x){x.classList.remove('on');});
-    b.classList.add('on'); tagF=b.dataset.tag; draw();
+    b.classList.add('on'); tagF=b.dataset.tag; visibleThreads=60; draw();
   };
 });
 $('rd-sync').onclick=async function(){
   $('rd-sync').disabled=true; $('rd-sync').textContent='Syncing\\u2026';
   try{
     var d=await jpost('/reddit/sync',{});
-    toast(d.added+' new of '+d.fetched+' fetched');
+    toast('r/'+d.subreddit+': '+d.added+' new of '+d.fetched+' fetched');
     await load();
   }catch(e){ toast(e.message); }
   $('rd-sync').textContent='Sync now';
@@ -845,7 +887,7 @@ async function loadDrafts(){
 
 def build():
     chips = "".join(
-        f'<button class="rd-chip{" on" if key == "all" else ""}" data-tag="{key}">{label}</button>'
+        f'<button class="rd-chip{" on" if key == "priority" else ""}" data-tag="{key}">{label}</button>'
         for key, label in TAGS)
     generated = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
     doc = f"""<!doctype html>
@@ -859,15 +901,15 @@ def build():
   <main>
     <div class="page-head">
       <h1 class="page-title">Reddit listener</h1>
-      <p class="page-sub">Genuine watch-hobbyist threads worth a reply. Read-only — nothing here
-        ever posts or comments on its own. Refreshed {generated}.</p>
+      <p class="page-sub">Fresh watch-community threads from the last 14 days, with the post context
+        and reason each one was surfaced. Read-only — nothing here posts or comments. Refreshed {generated}.</p>
     </div>
     <div class="rd-banner" id="rd-banner"><b id="rd-banner-t"></b><p id="rd-banner-p"></p></div>
     <div class="rd-kpirow">
-      <div class="rd-kpi"><div class="v" id="rd-total">&mdash;</div><div class="l">threads tracked</div></div>
+      <div class="rd-kpi"><div class="v" id="rd-total">&mdash;</div><div class="l">surfaced threads</div></div>
       <div class="rd-kpi"><div class="v" id="rd-buying">&mdash;</div><div class="l">buying intent</div></div>
       <div class="rd-kpi"><div class="v" id="rd-question">&mdash;</div><div class="l">answerable questions</div></div>
-      <div class="rd-kpi"><div class="v" id="rd-hot">&mdash;</div><div class="l">high opportunity</div></div>
+      <div class="rd-kpi"><div class="v" id="rd-hot">&mdash;</div><div class="l">worth replying</div></div>
     </div>
     <div class="rd-toolbar">
       {chips}

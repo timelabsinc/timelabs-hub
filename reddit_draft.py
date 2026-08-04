@@ -98,26 +98,41 @@ def our_sub():
 
 
 def evidence():
-    """What the Listener has actually seen do well, rather than a guess about
-    Reddit in general. Falls back to a plain statement of ignorance when the
-    Listener hasn't collected anything yet — an honest 'no data' beats an
-    invented trend, which is the sort of thing that produces confident,
-    wrong advice."""
+    """Current discussion evidence, labelled honestly for RSS versus OAuth.
+
+    RSS contains post text but no engagement counts. Calling those records
+    "what did well" made the content pipeline infer performance that the
+    Listener had never measured.
+    """
     conn = db()
+    known = conn.execute(
+        "SELECT COUNT(*) FROM reddit_threads "
+        "WHERE created_utc >= strftime('%s','now','-30 days') "
+        "AND (score IS NOT NULL OR num_comments IS NOT NULL)").fetchone()[0]
+    order = ("COALESCE(num_comments,0) DESC, COALESCE(score,0) DESC"
+             if known else "created_utc DESC, opportunity_score DESC")
     rows = conn.execute(
-        "SELECT subreddit, title, tag, num_comments, score FROM reddit_threads "
-        "ORDER BY COALESCE(num_comments,0) DESC, opportunity_score DESC "
-        "LIMIT 40").fetchall()
+        "SELECT subreddit, title, body, tag, num_comments, score FROM reddit_threads "
+        "WHERE created_utc >= strftime('%s','now','-30 days') ORDER BY "
+        + order + " LIMIT 40").fetchall()
     conn.close()
     if not rows:
         return ("No collected threads yet — the Listener has not gathered "
                 "engagement data. Do not invent trends; rely on general "
                 "watch-community judgement and say so.")
-    lines = []
+    lines = [
+        ("Measured engagement examples (OAuth counts are available):"
+         if known else
+         "Current discussion themes from RSS. These are not performance winners; "
+         "RSS exposes no vote or comment counts:")
+    ]
     for r in rows[:25]:
         c = r["num_comments"]
+        excerpt = " ".join((r["body"] or "").split())[:120]
         lines.append(f"- r/{r['subreddit']} [{r['tag']}] "
-                     f"{'(' + str(c) + ' comments) ' if c else ''}{r['title'][:110]}")
+                     f"{'(' + str(c) + ' comments) ' if c is not None else ''}"
+                     f"{r['title'][:110]}"
+                     + (f" — {excerpt}" if excerpt else ""))
     return "\n".join(lines)
 
 
