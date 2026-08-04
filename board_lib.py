@@ -7,6 +7,7 @@ tests, the same reason order_numbers.py and order_taxonomy.py are separate.
 
 Stdlib only: the agent server runs on system python and imports this directly.
 """
+import html
 import ipaddress
 import socket
 import urllib.parse
@@ -44,9 +45,15 @@ def public_http_url(url):
     host is free to redirect to 127.0.0.1.
 
     Returns the normalized URL, or None if it must not be fetched.
+
+    Entities are unescaped first. A URL lifted out of page source arrives
+    with `&amp;` between its query parameters, and a signed CDN URL whose
+    parameters are mangled that way is rejected by the CDN with a 403 that
+    looks exactly like a blocked scrape — this cost a real debugging pass
+    on Meta's ad images.
     """
     try:
-        parts = urllib.parse.urlsplit(str(url or ""))
+        parts = urllib.parse.urlsplit(html.unescape(str(url or "")).strip())
     except ValueError:
         return None
     if parts.scheme not in ("http", "https") or not parts.hostname:

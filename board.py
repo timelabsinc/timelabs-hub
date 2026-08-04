@@ -156,6 +156,19 @@ CSS = """
 .bd-menu button:hover{background:var(--card-2);}
 .bd-menu button.danger{color:var(--bad);}
 .bd-menu hr{border:none;border-top:1px solid var(--border);margin:4px 0;}
+
+/* find inspiration */
+.bd-findnote{margin:0 0 4px;font-size:13px;color:var(--muted);line-height:1.55;}
+.bd-sources{display:flex;flex-direction:column;gap:8px;}
+.bd-source{display:block;width:100%;text-align:left;border:1px solid var(--border);
+  background:var(--card);color:var(--ink);font:inherit;font-size:13.5px;font-weight:650;
+  border-radius:var(--r-s);padding:11px 13px;cursor:pointer;transition:.15s;}
+.bd-source:hover{border-color:var(--border-2);}
+.bd-source.on{border-color:var(--accent);background:var(--accent-bg);color:var(--accent);}
+.bd-source small{display:block;font-weight:400;font-size:12px;color:var(--muted);
+  margin-top:2px;}
+.bd-source.on small{color:var(--accent);opacity:.85;}
+.bd-railitem.finding{color:var(--accent);}
 """
 
 JS = r"""
@@ -218,9 +231,11 @@ async function loadRefs(){
    is actually in flight, then stop — no permanent timer on an idle page. */
 function schedulePoll(){
   var busy=refs.some(function(r){
-    return r.fetch_status==='queued'||r.fetch_status==='running';});
+    return r.fetch_status==='queued'||r.fetch_status==='running';})
+    ||boards.some(function(b){
+    return b.discover_status==='queued'||b.discover_status==='running';});
   clearTimeout(pollT);
-  if(busy)pollT=setTimeout(function(){loadRefs();loadBoards();},6000);
+  if(busy)pollT=setTimeout(function(){loadBoards();loadRefs();},6000);
 }
 
 function drawRail(){
@@ -230,8 +245,14 @@ function drawRail(){
     +'" data-board="unsorted">Unsorted<span class="n">'+unsortedCount+'</span></button>';
   if(boards.length)html+='<div class="bd-railhead">Boards</div>';
   html+=boards.map(function(b){
+    var busy=b.discover_status==='queued'||b.discover_status==='running';
+    var badge=busy?'<span class="n">…</span>'
+      :(b.discover_status==='failed'?'<span class="n">!</span>'
+        :'<span class="n">'+(b.count||0)+'</span>');
     return '<button type="button" class="bd-railitem'+(activeBoard===String(b.id)?' on':'')
-      +'" data-board="'+b.id+'">'+esc(b.name)+'<span class="n">'+(b.count||0)+'</span></button>';
+      +(busy?' finding':'')+'" data-board="'+b.id+'" title="'
+      +esc(b.discover_status==='failed'?(b.discover_error||'Search failed'):b.name)
+      +'">'+esc(b.name)+badge+'</button>';
   }).join('');
   html+='<button type="button" class="bd-railitem bd-newboard" id="bd-newboard">+ New board</button>';
   $('bd-rail').innerHTML=html;
@@ -551,6 +572,47 @@ async function shareReference(r){
 }
 $('bd-view-x').onclick=function(){$('bd-view-modal').classList.remove('open');};
 
+/* ---------------- find inspiration ---------------- */
+var findSource='ads';
+var SOURCE_COPY={
+  ads:{label:'What to search the ad library for',ph:'seiko mod watch'},
+  web:{label:'What kind of thing to look for',ph:'pastel minimal watch product pages'},
+  accounts:{label:'Which accounts (comma-separated)',ph:'@christopherwardlondon, @sternglasse'}
+};
+function drawSources(){
+  $('bd-sources').querySelectorAll('.bd-source').forEach(function(b){
+    b.classList.toggle('on',b.getAttribute('data-source')===findSource);
+  });
+  var c=SOURCE_COPY[findSource];
+  $('bd-qlabel').textContent=c.label;
+  $('bd-query').placeholder=c.ph;
+  $('bd-countrywrap').style.display=findSource==='ads'?'':'none';
+}
+$('bd-sources').querySelectorAll('.bd-source').forEach(function(b){
+  b.onclick=function(){findSource=b.getAttribute('data-source');drawSources();};
+});
+$('bd-find').onclick=function(){
+  drawSources();
+  $('bd-find-modal').classList.add('open');
+  setTimeout(function(){$('bd-query').focus();},50);
+};
+$('bd-find-x').onclick=function(){$('bd-find-modal').classList.remove('open');};
+$('bd-findgo').onclick=async function(){
+  var q=$('bd-query').value.trim();
+  if(!q){toast('Say what to look for');return;}
+  var btn=this;btn.disabled=true;var label=btn.textContent;btn.textContent='Starting…';
+  try{
+    var d=await jpost('/boards/discover',{source:findSource,query:q,
+      country:$('bd-country').value,name:$('bd-findname').value.trim()});
+    $('bd-find-modal').classList.remove('open');
+    $('bd-query').value='';$('bd-findname').value='';
+    toast('Searching — "'+d.name+'" will fill in over the next few minutes');
+    activeBoard=String(d.id);
+    await loadBoards();loadRefs();
+  }catch(e){toast(e.message);}
+  btn.disabled=false;btn.textContent=label;
+};
+
 /* ---------------- filters ---------------- */
 var qT;
 $('bd-q').addEventListener('input',function(){
@@ -587,6 +649,7 @@ def build():
       <select id="bd-cat" aria-label="Filter by category"><option value="">All categories</option>{category_opts}</select>
       <span class="bd-sp"></span>
       <label class="bd-archtoggle"><input type="checkbox" id="bd-showarch"> Show archived</label>
+      <button type="button" class="btn" id="bd-find">Find inspiration</button>
       <button type="button" class="btn primary" id="bd-add">+ Add reference</button>
     </div>
     <div class="bd-layout">
@@ -629,6 +692,41 @@ def build():
     <button type="button" class="btn" id="bd-archive" style="display:none">Archive</button>
     <span class="bd-sp"></span>
     <button type="button" class="btn primary" id="bd-save">Save reference</button>
+  </footer>
+</div></div>
+
+<div class="bd-modal" id="bd-find-modal"><div class="bd-sheet">
+  <header><b>Find inspiration</b><button type="button" class="x" id="bd-find-x">&times;</button></header>
+  <div class="bd-formbody">
+    <p class="bd-findnote">Searches the real internet and files what it finds into a new board.
+      Takes a few minutes. You keep what's good and delete the rest.</p>
+    <label>Where to look</label>
+    <div class="bd-sources" id="bd-sources">
+      <button type="button" class="bd-source on" data-source="ads">Competitor ads
+        <small>Live ads from the public Meta Ad Library</small></button>
+      <button type="button" class="bd-source" data-source="web">Around the web
+        <small>Brand sites, campaigns, design galleries</small></button>
+      <button type="button" class="bd-source" data-source="accounts">Named accounts
+        <small>Specific Instagram/social handles you list</small></button>
+    </div>
+    <label id="bd-qlabel">What to search the ad library for</label>
+    <input id="bd-query" maxlength="300" placeholder="seiko mod watch">
+    <div id="bd-countrywrap">
+      <label>Country</label>
+      <select id="bd-country">
+        <option value="IN" selected>India</option>
+        <option value="US">United States</option>
+        <option value="GB">United Kingdom</option>
+        <option value="AE">UAE</option>
+        <option value="SG">Singapore</option>
+      </select>
+    </div>
+    <label>Board name <span class="bd-hint">optional</span></label>
+    <input id="bd-findname" maxlength="80" placeholder="named automatically">
+  </div>
+  <footer>
+    <span class="bd-sp"></span>
+    <button type="button" class="btn primary" id="bd-findgo">Start searching</button>
   </footer>
 </div></div>
 
