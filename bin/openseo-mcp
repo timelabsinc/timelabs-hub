@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""openseo-mcp — install-check for the OpenSEO MCP server.
+
+`.mcp.json` at the repo root points Claude Code at OpenSEO's hosted MCP
+endpoint and reads the key out of the environment. Environment, not the file,
+because .mcp.json is committed and the key is not — same split .env already
+enforces for Shopify and Google.
+
+That split has one failure mode: if OPENSEO_API_KEY isn't exported, the client
+sends `Bearer ` with nothing after it and the tools just quietly aren't there.
+So:
+
+  openseo-mcp                 does the real MCP handshake and lists the tools
+  openseo-mcp env             prints the export line for `eval "$(...)"`
+
+Stdlib only (urllib), so system python runs it — same rule as shopify_api.py.
+"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+ENV_PATH = "/root/ops-dashboard/.env"
+ENDPOINT = "https://app.openseo.so/mcp"
+KEY_NAME = "OPENSEO_API_KEY"
+
+
+def load_env(path):
+    env = {}
+    if not os.path.exists(path):
+        return env
+    for line in open(path):
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        env[k.strip()] = v.strip()
+    return env
+
+
+def api_key():
+    """Process env wins; fall back to .env so the check works before exporting."""
+    key = os.environ.get(KEY_NAME, "").strip()
+    if key:
+        return key, "environment"
+    local = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    for path in (ENV_PATH, local):
+        key = load_env(path).get(KEY_NAME, "").strip()
+        if key:
+            return key, path
+    return "", None
+
+
+def rpc(key, payload, session=None):
+    """One JSON-RPC call over streamable HTTP. Returns (result, headers)."""
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "Authorization": f"Bearer {key}",
+    }
+    if session:
+        headers["Mcp-Session-Id"] = session
+    req = urllib.request.Request(
+        ENDPOINT, data=json.dumps(payload).encode(), headers=headers, method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        body = r.read().decode("utf-8", "replace")
+        got = dict(r.headers)
+    if not payload.get("id"):          # a notification has no reply to parse
+        return None, got
+    return parse(body), got
+
+
+def parse(body):
+    """The endpoint may answer as plain JSON or as an SSE frame."""
+    body = body.strip()
+    if body.startswith("{"):
+        return json.loads(body)
+    for line in body.splitlines():
+        if line.startswith("data:"):
+            chunk = line[5:].strip()
+            if chunk and chunk != "[DONE]":
+                return json.loads(chunk)
+    raise ValueError(f"unreadable response: {body[:200]}")
+
+
+def check():
+    key, source = api_key()
+    if not key:
+        print(f"✗ {KEY_NAME} is not set (looked in the environment, {ENV_PATH}, and ./.env)")
+        print("  Create a key in OpenSEO under Settings → API keys, then add to .env:")
+        print(f"    {KEY_NAME}=oseo_...")
+        return 1
+    print(f"key      {key[:9]}… (from {source})")
+    print(f"endpoint {ENDPOINT}")
+
+    try:
+        init, headers = rpc(key, {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "labs-os-openseo-check", "version": "1.0"},
+            },
+        })
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:200]
+        print(f"✗ handshake failed: HTTP {e.code} {e.reason} {detail}")
+        if e.code in (401, 403):
+            print("  The key was rejected — check it hasn't been rotated or revoked.")
+        return 1
+    except Exception as e:
+        print(f"✗ cannot reach {ENDPOINT}: {e}")
+        return 1
+
+    if "error" in (init or {}):
+        print(f"✗ server refused initialize: {init['error']}")
+        return 1
+
+    session = headers.get("Mcp-Session-Id") or headers.get("mcp-session-id")
+    info = (init.get("result") or {}).get("serverInfo") or {}
+    print(f"server   {info.get('name', 'openseo')} {info.get('version', '')}".rstrip())
+
+    try:
+        rpc(key, {"jsonrpc": "2.0", "method": "notifications/initialized"}, session)
+        listed, _ = rpc(key, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, session)
+    except Exception as e:
+        print(f"✓ authenticated, but listing tools failed: {e}")
+        return 1
+
+    tools = ((listed or {}).get("result") or {}).get("tools") or []
+    print(f"\n{len(tools)} tool(s):")
+    for t in tools:
+        desc = (t.get("description") or "").split("\n")[0][:78]
+        print(f"  · {t['name']:<34} {desc}")
+    print("\n✓ OpenSEO MCP is reachable and authenticated.")
+    return 0
+
+
+def main():
+    arg = sys.argv[1] if len(sys.argv) > 1 else "check"
+    if arg in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    if arg == "env":
+        key, _ = api_key()
+        if not key:
+            print(f"# {KEY_NAME} not found in {ENV_PATH}", file=sys.stderr)
+            return 1
+        print(f"export {KEY_NAME}={key}")
+        return 0
+    if arg != "check":
+        print(f"unknown command: {arg}\n", file=sys.stderr)
+        print(__doc__, file=sys.stderr)
+        return 2
+    return check()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

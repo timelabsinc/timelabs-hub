@@ -65,6 +65,12 @@ If you're a fresh Claude Code session (or a developer) on a **second machine**, 
 - **Live token holds only `drive.file` + `drive.readonly` — and that is sufficient for Sheets**, because `drive.file` covers any file the app itself created and Labs OS created the Orders spreadsheet. Enabling the Sheets API in the Google Cloud project was the only thing needed; **no reconnect was required.**
 - `/gdrive/connect` now also requests `spreadsheets`, which only matters if you ever want to write to a spreadsheet a human created by hand — `drive.file` cannot touch those. That wider scope applies automatically the next time Google is reconnected for any reason.
 
+## MCP servers (external tools for Claude Code sessions)
+`.mcp.json` at the repo root is **project scope** — it is committed, so every Claude Code session that opens this repo (this machine, the server, the Mac launcher) gets the same servers without anyone re-adding them. It is for the *coding* agent; it is not wired into Hermes / "Ask Labs", which still runs on the `hermes` CLI toolset string in `agent_chat_server.py`.
+- **OpenSEO** (`https://app.openseo.so/mcp`, streamable HTTP) — SEO research: keyword, SERP, backlink and Search Console data per OpenSEO's own docs; run `bin/openseo-mcp` for the tool list this account's key actually reaches. Added 2026-08-19 for the Blog builder's topic queue and store copy.
+- **Auth follows the .env rule**: `.mcp.json` sends `Authorization: Bearer ${OPENSEO_API_KEY}` and the key lives in gitignored `.env` (`OPENSEO_API_KEY=oseo_...`, from OpenSEO's Settings → API keys). Never inline a key into `.mcp.json` — it is a tracked file.
+- **Gotcha:** `${OPENSEO_API_KEY}` expands from the **process environment**, not from `.env`. Claude Code does not read `.env`, so an unexported key leaves the header unexpanded and the server never authenticates — `claude mcp list` flags it as `Missing environment variables: OPENSEO_API_KEY`. Export before launching: `set -a; . /root/ops-dashboard/.env; set +a` (or `eval "$(bin/openseo-mcp env)"`).
+- **`bin/openseo-mcp`** verifies the install for real — resolves the key, does the MCP handshake, lists the tools the key can actually reach. Run it after any key rotation, and first if the tools go missing.
 
 ## Driving it from a terminal (and how Hermes acts)
 `labs` (/usr/local/bin/labs -> bin/labs) exposes the whole system to the shell and therefore to the agent. It imports the same shopify_api.py / google_api.py the web tools use, so it reuses the credentials already in .env — never issue new Shopify/Google keys.
