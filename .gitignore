@@ -4,6 +4,18 @@
 .ops_password_hash
 *.secret
 
+# private keys — never commit (delivered to the owner's Mac out-of-band)
+mac-bundle/timelabs_hermes
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
+*.pem
+*.key
+*.ppk
+*.p12
+*.pfx
+
 # data & databases (change constantly, some sensitive)
 data/
 *.db
