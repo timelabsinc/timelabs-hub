@@ -4,8 +4,11 @@
 CA / bookkeeper, kept as the agent's memory of the subject. Companion to `business-context.md`
 (which describes the tooling; this file describes the commerce).*
 
-**Status: DRAFT v0.1 — built from the repo and connected systems. Items marked `[?]` are
-open questions awaiting the owner's explanation; do not treat them as facts yet.**
+**Status: DRAFT v0.3 — repo facts + the business current-account statement (24 May – 24 Aug
+2026). Items marked `[?]` are open questions awaiting the owner. This repo copy is
+deliberately redacted: individual payee names, the proprietor's details, and account
+numbers stay out of git — the full-detail version lives in the CA package the owner shares
+directly. Statement figures cover the one account shared so far, not the whole business.**
 
 *Last updated 2026-08-24.*
 
@@ -23,121 +26,135 @@ The watches are **built by a supplier partner — Hannan (the "TimeLabsCo × Sun
 collaboration)** — not in-house. Timelabs takes the order, the supplier builds and ships,
 Timelabs handles the customer.
 
-`[?]` Legal form of the business (sole proprietorship / partnership / Pvt Ltd), registered
-name, GST registration status, and what exactly the × Sunesra relationship is on paper
-(vendor? profit-share partner?).
+## 2. The entity and the bank account (confirmed)
 
-## 2. How orders (revenue) arrive — three channels
+- Trading brand **Timelabs Co** operates through **Mansuri Global Ventures**, a **sole
+  proprietorship** (proprietor details withheld here — in the CA package).
+- One **business current account** (Yes Bank, Mumbai) receives customer money; it is swept
+  nearly empty on a rolling basis, largely into the operator's personal account.
+- `[?]` GST registration status; whether "Timelabs Co" is a registered trade name; who
+  files the proprietor's ITR today.
+- `[?]` Relationship on paper with the supplier partner (pure vendor vs. profit share).
+
+## 3. How orders (revenue) arrive — three channels
 
 All three land in one unified order database with one running order number.
 
-1. **Shopify website** (`timelabsco.in`) — synced automatically every 5 minutes. Shopify
-   records the price and a `financial_status` per order.
-2. **WhatsApp** — customers message directly; orders are logged manually via the order form.
-3. **Manual order form** (`/ops/order-form.html`) — staff paste customer details; used for
-   WhatsApp and offline orders.
+1. **Shopify website** (`timelabsco.in`) — synced automatically every 5 minutes.
+2. **WhatsApp** — customers message directly; logged manually via the order form.
+3. **Manual order form** (`/ops/order-form.html`) — staff paste customer details.
 
 Order lifecycle: `new → acknowledged → paid → in transit → assembled → shipped → delivered`
-(+ `cancelled`). "Paid" is an explicit, tracked stage. Some builds are **stock builds**
-(built for inventory, not against a customer order) and are deliberately *not* counted as
-sales.
+(+ `cancelled`). "Paid" is an explicit, tracked stage. **Stock builds** (built for inventory,
+not against a customer order) are deliberately *not* counted as sales.
 
-## 3. How the money comes in `[largely ?]`
+## 4. How the money comes in (confirmed rails)
 
-- `[?]` Website orders: which payment gateway sits behind Shopify checkout (Razorpay /
-  Cashfree / PayU / other), and its settlement cycle (T+1/T+2) into which bank account.
-- `[?]` WhatsApp orders: how customers pay — UPI / bank transfer / gateway payment link —
-  and into which account (business or personal).
-- `[?]` Whether COD is offered, and if so who the COD partner is and how remittance works.
-- `[?]` Advance vs. full payment: whether custom builds take an advance/deposit before the
-  supplier starts, with balance later.
-- `[?]` The receiving bank account(s): how many, in whose name, current vs. savings.
+Money reaches the business account through **five rails**. Figures are the 3-month window
+24 May – 24 Aug 2026, this account only.
 
-## 4. How the money goes out
+| Rail | 3-mo total | Count | What it is |
+|---|---|---|---|
+| **MetaCircles Technologies Pvt Ltd** (IMPS via RBL Bank) | **₹12,39,349** | 85 | Per-order-sized credits (₹11k–13k each — exactly watch-priced). The **largest revenue rail by far (~75%)**. `[?]` Which service this is — COD remittance / checkout provider / payment links — and its fee. |
+| **PayU Payments Pvt Ltd** (NEFT settlements) | ₹2,57,280 | 11 | Payment-gateway settlements — presumably behind Shopify checkout `[?]` (settlement cycle, MDR). |
+| **UPI Collection Settlement** (bank CBS) | ₹1,12,900 | 6 | Batched UPI collections settled by the bank — `[?]` which QR/VPA (WhatsApp orders?). |
+| Cheque deposit | ₹40,975 | 1 | `[?]` one-off — what was this? |
+| Direct UPI from a customer | ₹6,500 | 1 | Customer paid the account's UPI handle directly. |
+| **Total in** | **₹16,57,004** | 104 | |
 
-### 4.1 Supplier (cost of goods) — the biggest and most unusual flow
+MetaCircles monthly trend: May (partial) ₹1.24L → Jun ₹3.04L → Jul ₹5.04L → Aug (to 24th)
+₹3.07L — growing.
 
-- The supplier **invoices in USD**, but is paid **from an Indian account**.
-- The number that matters is the **effective rate ≈ ₹100 per USD** — market rate (~₹86 over
-  the 2025-06→2026-06 invoice window) **plus** the bank's forex markup **plus** the
-  wire/transfer fee. That gap (~16% on top of goods) is the real, previously-invisible
-  **cost of banking**, and the Ledger tool tracks it separately from goods cost.
+- `[?]` Advance vs. full payment on custom builds; whether COD is offered.
+
+## 5. How the money goes out
+
+### 5.1 From the business account (confirmed, same window)
+
+Total out ₹16,44,635 — the account nets to roughly zero (+₹12k over the period).
+
+| Destination | 3-mo total | Count | Role |
+|---|---|---|---|
+| **Operator's personal account** | **₹8,51,300** | 23 | `[?]` What it funds — ads/Shopify/supplier wires paid personally, drawings, or both. Critical for the books. |
+| **Supplier partner (Hannan side)** | ₹1,73,450 | 7 | Paid by **domestic INR IMPS** |
+| **Five individual payees** (names in CA package) | ₹6,19,500 | 17 | `[?]` roles — parts suppliers, refunds, family, salaries? |
+| Bank charges + GST on them | ~₹460 | 26 | IMPS fees etc. |
+
+Notably **absent** from this account: Meta ads, Shopify subscription, forex/outward
+remittance, courier bills, rent/salaries. Those must run through another account `[?]` —
+presumably personal (statements to come).
+
+### 5.2 Supplier cost of goods — the USD story (from the Ledger)
+
+- Supplier invoices are raised in **USD**; historically paid from an Indian account at an
+  **effective ≈ ₹100/USD** vs ~₹86 market over 2025-06→2026-06 — i.e. **~16% banking cost**
+  (forex markup + transfer fees) on top of goods, tracked separately in the Ledger.
 - Uploaded supplier invoices are treated as **already paid** (owner's rule).
-- `[?]` The actual payment channel (bank wire / Wise / other), which bank, and the purpose
-  code used for the outward remittance.
-- `[?]` Where the supplier is located and where goods ship from.
+- `[?]` How this squares with the INR IMPS payments to the supplier seen in the statement:
+  did the method change, or do both run in parallel (wires from the personal account)?
+  Which channel carries the USD leg (bank wire / Wise / other), from which account?
+- `[?]` Where goods ship from; customs/IGST treatment of inbound consignments.
 
-### 4.2 Inbound freight (consignments)
+### 5.3 Inbound freight (consignments)
 
 Builds are grouped into **consignments/shipments**; each consignment has a total shipping
-cost, giving a **per-watch freight cost** (total ÷ count). This is part of landed cost.
+cost, giving a **per-watch freight cost** (total ÷ count). Part of landed cost.
 
-- `[?]` Who carries the goods (courier / freight forwarder), and whether customs duty +
-  IGST on import is paid — by whom, and against whose IEC / name.
+### 5.4 Outbound shipping to customers
 
-### 4.3 Outbound shipping to customers
+`[?]` Which courier(s), who pays, COD charges — not visible in this account.
 
-The dashboard tracks a shipping cost per order window.
-`[?]` Which courier(s), who pays (built into price vs. charged separately), COD charges.
+### 5.5 Operating costs
 
-### 4.4 Operating costs
+Shopify subscription (Basic), Meta ads, VPS/domain, AI/API credits. None debit the business
+account — `[?]` confirm they're paid personally and whether they're claimed as business
+expenses today.
 
-- **Shopify subscription** (Basic plan) `[?]` billed in USD or INR.
-- **Marketing**: Meta Ads account exists `[?]` current spend level and payment method.
-- **Infrastructure**: one VPS (Labs OS), domain, `[?]` provider and billing.
-- `[?]` Anything else recurring (tools, AI/API credits, WhatsApp Business, etc.).
+## 6. Margin picture (how the Ledger computes it)
 
-## 5. Margin picture (how the Ledger computes it)
-
-True landed cost per watch = **USD invoice total × effective rate (₹100)** + **per-watch
+True landed cost per watch = **USD invoice total × effective rate (≈₹100)** + **per-watch
 consignment freight**. Margin = selling price − landed cost − outbound shipping − channel
-costs. The Ledger deliberately splits "goods at market rate" from "cost of banking" so the
-banking overhead stays visible.
+costs (gateway/remitter fees). The Ledger deliberately splits "goods at market rate" from
+"cost of banking" so the banking overhead stays visible.
 
-## 6. Refunds, cancellations, edge cases `[?]`
+## 7. Refunds, cancellations, edge cases `[?]`
 
-- `[?]` Refund policy and mechanics (gateway reversal / UPI transfer back).
-- `[?]` What happens to a cancelled order after the supplier has bought parts (specs lock
-  once paid).
+- `[?]` Refund mechanics per rail (and whether any outbound person-payments are refunds).
+- `[?]` A cancelled order after parts are bought (specs lock once paid).
 - `[?]` Warranty/replacement cost handling.
 
-## 7. Draft money-flow diagram
+## 8. Money-flow diagram (current draft)
 
 ```mermaid
 flowchart LR
-  subgraph IN["Money in — customers (India, ₹11k–27k/watch)"]
-    C1[Website order\nShopify checkout] -->|"gateway [?]\nsettlement T+n"| BANK[(Business bank\naccount [?])]
-    C2[WhatsApp order] -->|"UPI / transfer [?]"| BANK
-    C3[Manual order form\noffline] -->|"[?]"| BANK
-  end
+  CUST[Customers\n₹11k–27k/watch] -->|"per-order IMPS ₹12.4L/3mo\nvia MetaCircles [?]"| BIZ[(Business current a/c\nMansuri Global Ventures)]
+  CUST -->|"PayU gateway ₹2.6L/3mo\n(Shopify checkout [?])"| BIZ
+  CUST -->|"UPI collect ₹1.1L/3mo\n+ direct UPI, cheque"| BIZ
 
-  subgraph OUT["Money out"]
-    BANK -->|"USD wire at ~₹100/USD effective\n(₹86 market + ~16% bank cost)"| SUP[Supplier — Hannan\nTimeLabsCo × Sunesra\ninvoices in USD]
-    BANK -->|consignment freight\nper-watch cost| FR[Inbound shipping\n+ customs? [?]]
-    BANK -->|ads| META[Meta Ads]
-    BANK -->|subscription + fees| SHOP[Shopify]
-    BANK -->|couriers| SHIPOUT[Outbound shipping\nto customers]
-    BANK -->|VPS, domain, tools| OPS[Infrastructure]
-  end
+  BIZ -->|"₹8.5L/3mo"| PERS[Operator's\npersonal a/c]
+  BIZ -->|"₹1.7L/3mo INR IMPS"| SUP[Supplier partner\nTimeLabsCo × Sunesra]
+  BIZ -->|"₹6.2L/3mo [?] roles"| OTH[Five individual payees\nnames in CA package]
 
-  SUP -->|builds & ships watches| FR --> CUST[Customer]
+  PERS -.->|"[?] Meta ads, Shopify,\nother opex"| OPEX[Ads · Shopify · infra]
+  PERS -.->|"[?] USD wire at ~₹100/USD eff.\n(₹86 mkt + ~16% bank cost)"| SUP
+
+  SUP -->|"builds watches, ships\nconsignments (per-watch freight)"| CUST
 ```
 
-## 8. Open questions for the owner (answering these completes this doc)
+Dashed lines = suspected but unconfirmed (awaiting the other account statements).
 
-1. **Entity & tax**: legal form and registered name; GST registered or not; who files what
-   today. Is "Timelabs Inc" (the email/GitHub name) the same entity as "Timelabs Co"?
-2. **Money in**: gateway behind Shopify checkout + settlement account; how WhatsApp
-   customers pay and into which account; COD yes/no; advances on custom builds.
-3. **Bank accounts**: which accounts touch business money (business/personal, bank names —
-   no numbers needed), so the CA knows which statements matter.
-4. **Supplier & imports**: payment channel for the USD invoices; where goods ship from;
-   customs/IGST treatment on inbound consignments; the commercial arrangement with
-   Hannan/Sunesra (pure vendor, or revenue/profit share?).
-5. **Recurring costs**: ads spend, subscriptions, and anything paid personally on behalf of
-   the business.
+## 9. Open questions for the owner
+
+1. **MetaCircles Technologies** — what service is this? It's ~75% of money in.
+2. **The five individual payees** (₹6.2L combined) — suppliers, refunds, family, salaries?
+3. **The ₹8.5L to the personal account** — what does it fund?
+4. **Supplier payments now** — INR IMPS, USD wires at ~₹100 effective, or both? From where?
+5. **Entity & tax** — GST registered? Trade name registered? Who files today?
+6. **PayU** — confirm it's the Shopify gateway; settlement cycle and MDR.
+7. **Remaining statements** — personal account(s) for the same window, to complete outflows.
 
 ---
 
-*When the owner explains the workflow, update this file (facts replace `[?]` markers), keep
-the diagram in sync, and regenerate the shareable CA version (PDF, hosted on the domain).*
+*Raw statement parsing and the unredacted detail live outside the repo. When the owner
+answers, facts replace `[?]` markers; keep the diagram in sync; then produce the polished CA
+version (one-pager + chart, PDF hosted on the domain).*
