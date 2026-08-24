@@ -67,6 +67,13 @@ ROLES = {
         "home": "/ops/supplier.html",
         "tools": ["supplier"],
     },
+    "finance": {
+        "label": "Finance",
+        "blurb": "The finance-onboarding brief only — for the CA/bookkeeper. No orders, "
+                 "no customer list, no store tools; just the money-flow document.",
+        "home": "/ops/finance-onboarding.html",
+        "tools": ["finance"],
+    },
 }
 DEFAULT_ROLE = "full"
 
