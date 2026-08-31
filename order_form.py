@@ -303,6 +303,17 @@ OF_CSS = r"""
   .pname:hover{border-color:var(--accent);}
   .pname input{font:inherit;font-size:13.5px;font-weight:650;color:var(--ink);border:1px solid var(--accent);
     border-radius:5px;padding:3px 6px;width:100%;background:var(--bg);}
+
+  /* orders — search + filter chips */
+  .ofilters{display:flex;flex-direction:column;gap:10px;margin:0 0 14px;}
+
+  /* orders — the "where is it?" timeline row */
+  .tlrow>td{background:var(--card-2);}
+  .tl-line{font-size:13px;color:var(--ink);font-weight:600;margin:2px 0 8px;}
+  .tl-ev{position:relative;font-size:12.5px;color:var(--body);line-height:1.5;padding:2px 0 2px 14px;}
+  .tl-ev:before{content:"";position:absolute;left:2px;top:9px;width:6px;height:6px;border-radius:50%;
+    background:var(--accent);}
+  .tl-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
 """
 
 OF_JS = r"""
@@ -706,16 +717,163 @@ function specOf(o){
     .map(function(k){return o[k];}).filter(Boolean).join(' · ');
 }
 function stClass(s){return String(s||'').replace(/[^a-z]/gi,'');}
+
+/* Search + filters run on the client over the full /orders/list payload, so
+   answering "where is Mohan's order?" is a keystroke here — not a trip to
+   the Google Sheet or a message to the supplier. */
+var odRows=[], odQ='', odStatus='', odSource='', odStuck=false, odTL={};
+
+function isStuck(o){
+  var s=String(o.status||'new');
+  if(s==='delivered'||s==='cancelled'||s==='shipped')return false;
+  var raw=String(o.last_move||o.received_at||'');
+  if(!raw)return false;
+  /* SQLite stores UTC with no marker — parse it as such, or every order
+     reads 5.5h staler on an IST phone */
+  var t=Date.parse(raw.replace(' ','T')+(raw.indexOf('Z')>=0?'':'Z'));
+  return !!t&&(Date.now()-t)>7*86400000;
+}
+function odMatches(o,skip){
+  if(skip!=='status'&&odStatus&&String(o.status||'new')!==odStatus)return false;
+  if(skip!=='source'&&odSource&&String(o.source||'')!==odSource)return false;
+  if(skip!=='stuck'&&odStuck&&!isStuck(o))return false;
+  if(!odQ)return true;
+  var hay=('#'+o.id+' '+[o.ref_code,o.customer_name,o.customer_phone,o.customer_email,
+    o.product,o.notes,o.address,o.city,o.state,o.pincode,o.source,o.shopify_name,
+    o.tracking_code,o.status,specOf(o)].join(' ')).toLowerCase();
+  return hay.indexOf(odQ)>=0;
+}
+function odActive(){return !!(odQ||odStatus||odSource||odStuck);}
+
+function renderOrderChips(){
+  /* each chip row's counts are taken with that row's own filter lifted, so
+     picking "shipped" doesn't zero every other stage's count */
+  var counts={};
+  odRows.filter(function(o){return odMatches(o,'status');})
+    .forEach(function(o){var s=String(o.status||'new');counts[s]=(counts[s]||0)+1;});
+  var nStuck=odRows.filter(function(o){return odMatches(o,'stuck')&&isStuck(o);}).length;
+  var h=STATUSES_LIST.map(function(s){
+    var n=counts[s]||0;
+    if(!n&&odStatus!==s)return '';
+    return '<button class="src'+(odStatus===s?' on':'')+'" data-st="'+esc(s)+'">'+esc(s)+' ('+n+')</button>';
+  }).join('');
+  if(nStuck||odStuck)h+='<button class="src'+(odStuck?' on':'')+'" data-stuck>stuck &gt;7d ('+nStuck+')</button>';
+  $('o-status').innerHTML=h;
+  var sc={};
+  odRows.filter(function(o){return odMatches(o,'source');})
+    .forEach(function(o){var s=String(o.source||'');if(s)sc[s]=(sc[s]||0)+1;});
+  var eh=Object.keys(sc).sort().map(function(s){
+    return '<button class="src'+(odSource===s?' on':'')+'" data-src="'+esc(s)+'">'+esc(s)+' ('+sc[s]+')</button>';
+  }).join('');
+  if(odActive())eh+='<button class="src" data-clear>clear</button>';
+  $('o-extra').innerHTML=eh;
+  $('o-status').querySelectorAll('[data-st]').forEach(function(b){
+    b.onclick=function(){odStatus=(odStatus===b.dataset.st)?'':b.dataset.st;renderOrders();};
+  });
+  var sk=$('o-status').querySelector('[data-stuck]');
+  if(sk)sk.onclick=function(){odStuck=!odStuck;renderOrders();};
+  $('o-extra').querySelectorAll('[data-src]').forEach(function(b){
+    b.onclick=function(){odSource=(odSource===b.dataset.src)?'':b.dataset.src;renderOrders();};
+  });
+  var cl=$('o-extra').querySelector('[data-clear]');
+  if(cl)cl.onclick=function(){odQ='';odStatus='';odSource='';odStuck=false;$('o-q').value='';renderOrders();};
+}
+
+/* What the customer hears, per internal stage. Internal "paid" means we've
+   paid the supplier — the customer must never read that word and think it's
+   about their own payment. */
+var CUST_PHRASE={
+  'new':"we've logged your order and it's being lined up for the workshop",
+  'acknowledged':"your build is confirmed and in the workshop queue",
+  'paid':"the parts for your watch have been ordered",
+  'in transit':"the parts are on their way to our workshop",
+  'assembled':"your watch is assembled and going through final checks",
+  'shipped':"your order is on its way to you",
+  'delivered':"your order has been delivered — hope you love it",
+  'cancelled':"this order was cancelled"
+};
+function custMsg(o){
+  var name=String(o.customer_name||'').trim().split(/\s+/)[0];
+  var m='Hi'+(name?' '+name:'')+'! Update on your '+(o.product||'order')+': '+
+    (CUST_PHRASE[o.status]||('current status is "'+(o.status||'new')+'"'))+'.';
+  if(o.status==='shipped'&&o.tracking_code)m+=' Tracking: '+o.tracking_code+'.';
+  return m;
+}
+function waNumber(p){
+  var d=String(p||'').replace(/\D/g,'').replace(/^0+/,'');
+  if(d.length===10&&/^[6-9]/.test(d))d='91'+d;
+  return d.length>=10?d:'';
+}
+function copyText(t){
+  function fallback(){
+    var ta=document.createElement('textarea');
+    ta.value=t;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();
+    try{document.execCommand('copy');toast('Copied — paste it to the customer');}
+    catch(e){toast('Copy failed — long-press the message text instead');}
+    document.body.removeChild(ta);
+  }
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(function(){toast('Copied — paste it to the customer');},fallback);
+  }else fallback();
+}
+
+function tlHtml(d,lo){
+  var o=d.order||{};
+  var line='Status: '+esc(o.status||'new');
+  if(o.tracking_code)line+=' &middot; tracking '+esc(o.tracking_code);
+  if(!o.supplier_visible)line+=' &middot; not yet sent to the supplier';
+  var evs=(d.events||[]).map(function(e){
+    return '<div class="tl-ev">'+esc(when(e.at))+' — '+(e.kind==='note'?'note: ':'')+
+      esc(e.detail||'')+(e.by?' — '+esc(e.by):'')+'</div>';
+  }).join('');
+  if(!evs)evs='<div class="tl-ev">Logged '+esc(when(o.received_at))+' — no movement recorded yet.</div>';
+  var actions='';
+  if(lo&&!lo.is_stock&&lo.customer_name){
+    actions='<div class="tl-actions"><button class="btn sm" data-copy>Copy update for customer</button>';
+    var wa=waNumber(lo.customer_phone);
+    if(wa)actions+='<a class="btn sm" href="https://wa.me/'+wa+'?text='+
+      encodeURIComponent(custMsg(lo))+'" target="_blank" rel="noopener">WhatsApp</a>';
+    actions+='</div>';
+  }
+  return '<div class="tl-line">'+line+'</div>'+evs+actions;
+}
+async function toggleTimeline(b){
+  var id=+b.dataset.tl, tr=b.closest('tr'), next=tr.nextElementSibling;
+  if(next&&next.classList.contains('tlrow')){next.remove();b.textContent='Where?';return;}
+  b.disabled=true;
+  try{
+    var d=odTL[id]||(odTL[id]=await api('/orders/timeline?id='+id));
+    var lo=odRows.filter(function(x){return x.id===id;})[0];
+    var row=document.createElement('tr');
+    row.className='tlrow';
+    row.innerHTML='<td colspan="11" data-l="Where is it?">'+tlHtml(d,lo)+'</td>';
+    tr.parentNode.insertBefore(row,tr.nextSibling);
+    var cp=row.querySelector('[data-copy]');
+    if(cp)cp.onclick=function(){copyText(custMsg(lo));};
+    b.textContent='Hide';
+  }catch(e){toast(e.message);}
+  b.disabled=false;
+}
+
 async function loadOrders(){
   try{
     var d=await api('/orders/list');
     if(d.sheet_url){var a=$('sheet-link');a.href=d.sheet_url;a.style.display='';}
-    var rows=d.orders||[];
-    if(!rows.length){$('list').innerHTML='<div class="empty">No orders yet — the first one you save shows up here.</div>';return;}
-    $('list').innerHTML='<table class="dt"><thead><tr>'+
+    odRows=d.orders||[];
+    renderOrders();
+  }catch(e){$('list').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
+}
+function renderOrders(){
+  renderOrderChips();
+  var shown=odRows.filter(function(o){return odMatches(o);});
+  $('o-count').textContent=odActive()?shown.length+' of '+odRows.length:'';
+  if(!odRows.length){$('list').innerHTML='<div class="empty">No orders yet — the first one you save shows up here.</div>';return;}
+  if(!shown.length){$('list').innerHTML='<div class="empty">No orders match — try clearing the filters.</div>';return;}
+  $('list').innerHTML='<table class="dt"><thead><tr>'+
       '<th>#</th><th>Logged</th><th>Source</th><th>Customer</th><th>Ship to</th><th>Product</th>'+
       '<th>Qty</th><th>Price</th><th>Status</th><th>Photos</th><th></th></tr></thead><tbody>'+
-      rows.map(function(o){
+      shown.map(function(o){
         var st=String(o.status||'new'), spec=specOf(o);
         return '<tr>'+
           '<td data-l="Order" class="o-num">#'+o.id+
@@ -737,7 +895,8 @@ async function loadOrders(){
           '<td data-l="Price" class="o-num">'+esc(money(o.price_inr))+'</td>'+
           '<td data-l="Status"><select class="pill-select '+stClass(st)+'" data-id="'+o.id+'">'+
             STATUSES_LIST.map(function(s){return '<option value="'+esc(s)+'"'+(s===st?' selected':'')+'>'+esc(s)+'</option>';}).join('')+
-            '</select></td>'+
+            '</select>'+
+            '<div style="margin-top:6px"><button class="btn sm" data-tl="'+o.id+'">Where?</button></div></td>'+
           '<td data-l="Photos">'+photoCell(o)+'</td>'+
           '<td data-l=""><button class="rowdel" data-del="'+o.id+'" title="Delete order #'+o.id+'" aria-label="Delete order '+o.id+'">&times;</button></td>'+
         '</tr>';
@@ -753,8 +912,10 @@ async function loadOrders(){
         b.disabled=true;
         try{
           var d=await jpost('/orders/delete',{id:+id});
+          odRows=odRows.filter(function(x){return x.id!==+id;});
+          delete odTL[+id];
           row.style.transition='opacity .18s';row.style.opacity='0';
-          setTimeout(function(){row.remove();},180);
+          setTimeout(renderOrders,180);
           toast('Order #'+id+' deleted'+
             (d.customer_orders_left===0?' — that customer had no other orders, so they were removed too':''));
           loaded={};
@@ -763,19 +924,30 @@ async function loadOrders(){
     });
     $('list').querySelectorAll('.pill-select').forEach(function(sel){
       sel.onchange=async function(){
-        var id=sel.dataset.id, was=sel.dataset.was||sel.value, next=sel.value;
+        var id=sel.dataset.id, next=sel.value;
+        var lo=odRows.filter(function(x){return x.id===+id;})[0];
+        var was=lo?String(lo.status||'new'):next;
         sel.disabled=true;
         try{
           await jpost('/orders/update',{id:+id,status:next});
-          sel.className='pill-select '+stClass(next);
-          sel.dataset.was=next;
+          if(lo)lo.status=next;
+          delete odTL[+id];
           toast('Order #'+id+' → '+next);
-        }catch(e){sel.value=was;toast(e.message);}
-        sel.disabled=false;
+          /* re-render so chip counts follow, and a row that just left a
+             filtered stage leaves the list with it */
+          renderOrders();
+        }catch(e){sel.value=was;sel.disabled=false;toast(e.message);}
       };
     });
-  }catch(e){$('list').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
+    $('list').querySelectorAll('[data-tl]').forEach(function(b){
+      b.onclick=function(){toggleTimeline(b);};
+    });
 }
+var odT;
+$('o-q').addEventListener('input',function(){
+  clearTimeout(odT);var v=this.value;
+  odT=setTimeout(function(){odQ=v.trim().toLowerCase();renderOrders();},140);
+});
 
 /* ---------------- customers ---------------- */
 async function loadCustomers(){
@@ -1165,8 +1337,14 @@ def build():
 
     <section class="pane" id="pane-orders">
       <div class="of-card">
-        <div class="sec-head"><h2>Recent orders</h2><span class="sp"></span>
+        <div class="sec-head"><h2>Orders</h2><span class="o-sub" id="o-count"></span><span class="sp"></span>
           <a id="sheet-link" href="#" target="_blank" rel="noopener" style="display:none">Open the sheet &#8599;</a></div>
+        <div class="ofilters">
+          <input id="o-q" class="pin" type="search" placeholder="Search name, phone, product, #id, tracking"
+            aria-label="Search all orders" autocomplete="off">
+          <div class="srcs" id="o-status"></div>
+          <div class="srcs" id="o-extra"></div>
+        </div>
         <div class="tbl-wrap"><div id="list"><div class="empty">Loading…</div></div></div>
       </div>
     </section>

@@ -1073,6 +1073,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/orders/products":
             self._handle_orders_products()
             return
+        if path == "/orders/timeline":
+            self._handle_orders_timeline(query)
+            return
         if path == "/supplier/orders":
             self._handle_supplier_orders()
             return
@@ -2168,12 +2171,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         conn = db()
         try:
+            # 500, not 100: the Orders tab filters client-side, and a search
+            # box that can't see past the latest hundred rows sends the owner
+            # back to the Google Sheet — the exact trip it exists to remove.
+            # last_move feeds the "stuck" filter (same subquery weekly_brief
+            # uses); indexed by idx_order_events_order.
             rows = conn.execute(
                 "SELECT id, received_at, customer_name, customer_phone, customer_email, "
                 "address, pincode, city, state, source, product, quantity, price_inr, "
                 "notes, status, drive_link, photo_links, local_photos, case_style, "
                 "dial_colour, dial_style, case_colour, movement, watch_size, shopify_name, "
-                "ref_code, is_stock FROM orders ORDER BY id DESC LIMIT 100").fetchall()
+                "ref_code, is_stock, tracking_code, supplier_visible, "
+                "(SELECT MAX(e.created_at) FROM order_events e WHERE e.order_id=o.id) "
+                "AS last_move FROM orders o ORDER BY o.id DESC LIMIT 500").fetchall()
         except sqlite3.OperationalError as e:
             conn.close()
             self._json(500, {"error": str(e)})
@@ -2182,6 +2192,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
         import google_api
         self._json(200, {"orders": [dict(r) for r in rows],
                          "sheet_url": google_api.sheet_url()})
+
+    def _handle_orders_timeline(self, query):
+        """Admin "where is it?" for one order: status, tracking, and the full
+        order_events history. Unlike /supplier/card this isn't limited to
+        supplier_visible rows — an order that was never sent to the supplier
+        is exactly the one whose answer is "it hasn't gone out yet" — and it
+        may name the customer, because it answers the owner, not the
+        supplier."""
+        if not self._has_tool("orders"):
+            self._json(403, {"error": "not available for this account"})
+            return
+        params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+        try:
+            oid = int(params.get("id", ""))
+        except ValueError:
+            self._json(400, {"error": "bad request"})
+            return
+        conn = db()
+        o = conn.execute(
+            "SELECT id, received_at, customer_name, product, quantity, status, "
+            "tracking_code, ref_code, supplier_visible FROM orders WHERE id=?",
+            (oid,)).fetchone()
+        if not o:
+            conn.close()
+            self._json(404, {"error": "no such order"})
+            return
+        events = [{"at": e["created_at"], "kind": e["kind"], "detail": e["detail"],
+                   "by": (e["actor"] or "").split("@")[0]}
+                  for e in conn.execute(
+                      "SELECT created_at, actor, kind, detail FROM order_events "
+                      "WHERE order_id=? ORDER BY id ASC", (oid,))]
+        conn.close()
+        self._json(200, {"order": dict(o), "events": events})
 
     def _handle_orders_parse(self):
         """Live helper for the form: address → city/state, product → attributes.

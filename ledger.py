@@ -18,6 +18,39 @@ from hub_shell import HUB_STYLE, _appnav, hub_header, hub_footer, WHOAMI_JS
 DB = "/root/ops-dashboard/data/suppliers.db"
 OUT = "/var/www/ops/ledger.html"
 
+# Kept out of the doc f-string below so the JS doesn't need every brace doubled.
+LEDGER_JS = r"""
+(function(){
+  /* Filter the three tables by text, per section. The KPI strip stays put —
+     those are totals, and hiding pieces of a sum would misstate it. Each
+     heading shows its hit count, and a section that matches nothing says so
+     instead of going quietly blank. */
+  var q=document.getElementById('q');
+  if(!q)return;
+  var secs=Array.prototype.filter.call(document.querySelectorAll('main section'),
+    function(s){return s.querySelector('tbody');});
+  function run(){
+    var needle=q.value.trim().toLowerCase();
+    secs.forEach(function(sec){
+      var hits=0;
+      sec.querySelectorAll('tbody tr').forEach(function(tr){
+        if(tr.hasAttribute('data-nomatch')||tr.querySelector('td.empty'))return;
+        var hit=!needle||tr.textContent.toLowerCase().indexOf(needle)>=0;
+        tr.classList.toggle('srch-hidden',!hit);
+        if(hit)hits++;
+      });
+      var nm=sec.querySelector('tr[data-nomatch]');
+      if(nm)nm.hidden=!(needle&&!hits);
+      var badge=sec.querySelector('h2 .tabbadge');
+      if(badge)badge.textContent=needle?String(hits):'';
+    });
+  }
+  var t;
+  q.addEventListener('input',function(){clearTimeout(t);t=setTimeout(run,140);});
+  q.addEventListener('search',run);
+})();
+"""
+
 
 def q(conn, sql):
     try:
@@ -51,9 +84,11 @@ def build():
 
     suppliers = q(conn, "SELECT name, invoices, first_order, last_order, total_paid_inr "
                         "FROM v_supplier_summary WHERE invoices > 0 ORDER BY total_paid_inr DESC")
+    # 100, not 20: the page's filter box can only search rows that were
+    # rendered, and the grouped view tops out in the tens anyway.
     parts = q(conn, "SELECT part_category, model_compat, total_qty, avg_unit_inr, total_spend_inr "
                     "FROM v_part_costs WHERE part_category IS NOT NULL "
-                    "ORDER BY total_spend_inr DESC LIMIT 20")
+                    "ORDER BY total_spend_inr DESC LIMIT 100")
     skus = q(conn, "SELECT name, category, price_inr, cost_inr, status FROM planned_skus "
                    "WHERE price_inr IS NOT NULL ORDER BY launch_phase, price_inr DESC")
     conn.close()
@@ -107,23 +142,24 @@ def build():
       <div class="head-controls">
         <button class="btn" id="impBtn">Scan Drop for new invoices</button>
         <span class="refreshed num">refreshed {generated}</span>
+        <input id="q" type="search" placeholder="Filter SKUs, parts, suppliers" aria-label="Filter the ledger tables" autocomplete="off">
       </div>
     </div>
     <section><div class="kpis">{kpis}</div></section>
-    <section><h2>Planned SKU margins</h2><div class="panel tscroll"><table>
+    <section><h2>Planned SKU margins <span class="tabbadge"></span></h2><div class="panel tscroll"><table>
       <thead><tr><th>SKU</th><th>Category</th><th class="n">Price</th><th class="n">Cost</th>
       <th class="n">Margin</th><th>Status</th></tr></thead>
-      <tbody>{sku_rows or '<tr><td colspan="6" class="empty">No planned SKUs priced yet.</td></tr>'}</tbody>
+      <tbody>{sku_rows or '<tr><td colspan="6" class="empty">No planned SKUs priced yet.</td></tr>'}<tr data-nomatch hidden><td colspan="6" class="empty">No rows match.</td></tr></tbody>
     </table></div></section>
-    <section><h2>Cost per part</h2><div class="panel tscroll"><table>
+    <section><h2>Cost per part <span class="tabbadge"></span></h2><div class="panel tscroll"><table>
       <thead><tr><th>Part</th><th>Fits</th><th class="n">Qty</th><th class="n">Avg unit</th>
       <th class="n">Total spend</th></tr></thead>
-      <tbody>{part_rows or '<tr><td colspan="5" class="empty">No invoice lines yet.</td></tr>'}</tbody>
+      <tbody>{part_rows or '<tr><td colspan="5" class="empty">No invoice lines yet.</td></tr>'}<tr data-nomatch hidden><td colspan="5" class="empty">No rows match.</td></tr></tbody>
     </table></div></section>
-    <section><h2>Suppliers</h2><div class="panel tscroll"><table>
+    <section><h2>Suppliers <span class="tabbadge"></span></h2><div class="panel tscroll"><table>
       <thead><tr><th>Supplier</th><th class="n">Invoices</th><th>First</th><th>Last</th>
       <th class="n">Total paid</th></tr></thead>
-      <tbody>{sup_rows or '<tr><td colspan="5" class="empty">No suppliers yet.</td></tr>'}</tbody>
+      <tbody>{sup_rows or '<tr><td colspan="5" class="empty">No suppliers yet.</td></tr>'}<tr data-nomatch hidden><td colspan="5" class="empty">No rows match.</td></tr></tbody>
     </table></div></section>
     {hub_footer()}
   </main>
@@ -145,6 +181,7 @@ def build():
     }} catch(e){{ alert('Scan failed — try again.'); b.disabled=false; b.textContent='Scan Drop for new invoices'; }}
   }});
 </script>
+<script>{LEDGER_JS}</script>
 <script>{WHOAMI_JS}</script>
 </body></html>"""
     tmp = OUT + ".tmp"
