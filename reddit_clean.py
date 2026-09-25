@@ -82,14 +82,21 @@ def strip_dashes(text):
     # makes a price list read as nonsense, which is how this was found.
     text = re.sub(r"(?<=\d)\s*[—–]\s*(?=\d)", "-", text)
 
+    # an em dash opening a line is a bullet; make it the plain "- " kind
+    text = re.sub(r"(?m)^([ \t]*)[—–][ \t]*", r"\1- ", text)
+
     # A matched pair with a short span between them is an aside, and both
     # ends want commas. Handled first, because treating each dash on its own
     # turns "And - honestly - I'd" into "And, honestly. I'd".
-    text = re.sub(r"\s*[—–]\s*(?P<mid>[^—–\n]{1,60}?)\s*[—–]\s*",
+    text = re.sub(r"[ \t]*[—–][ \t]*(?P<mid>[^—–\n]{1,60}?)[ \t]*[—–][ \t]*",
                   lambda m: ", " + m.group("mid").strip() + ", ", text)
-    text = re.sub(r"(?<!\d)\s*[—–]\s*(?P<after>.)", repl, text)
+    # Only horizontal space around a lone dash: a newline before it means a
+    # "- " bullet, and swallowing it folds a list into one comma'd line.
+    text = re.sub(r"(?<!\d)[ \t]*[—–][ \t]*(?P<after>[^\n])", repl, text)
+    # a dash left hanging at the end of a line has nothing to join; drop it
+    text = re.sub(r"(?m)[ \t]*[—–][ \t]*$", "", text)
     # a hyphen doing an em dash's job, " - ", is the same tell
-    text = re.sub(r"(?<!\d)\s+-\s+(?P<after>.)", repl, text)
+    text = re.sub(r"(?<!\d)[ \t]+-[ \t]+(?P<after>[^\n])", repl, text)
     return text
 
 
@@ -111,7 +118,7 @@ def clean(text):
                          f"x{text.count(ch)}")
             text = text.replace(ch, sub)
 
-    dashes = len(re.findall(r"[—–]", text)) + len(re.findall(r"\s-\s", text))
+    dashes = len(re.findall(r"[—–]", text)) + len(re.findall(r"[ \t]-[ \t]", text))
     if dashes:
         notes.append(f"rewrote {dashes} dash break(s)")
         text = strip_dashes(text)

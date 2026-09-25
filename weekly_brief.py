@@ -23,6 +23,13 @@ DB = f"{BASE}/data/hermes.db"
 SDB = f"{BASE}/data/suppliers.db"
 USD_INR = 100.0
 
+# Stock builds are watches made for ourselves, not sales. The dashboard
+# leaves them out of order counts, so the brief has to as well.
+NOT_STOCK = "AND COALESCE(is_stock,0)=0"
+# Supplier bills and payments carry their own currency (USD by default).
+# The brief reports rupees, so each row is converted before it is summed.
+TO_INR = "(CASE WHEN UPPER(COALESCE(currency,'USD'))='USD' THEN ? ELSE 1 END)"
+
 
 def money(n):
     return f"Rs {n:,.0f}"
@@ -35,19 +42,21 @@ def gather():
     f = {}
 
     f["orders_7d"] = conn.execute(
-        "SELECT COUNT(*) FROM orders WHERE received_at >= date('now','-7 day')"
-    ).fetchone()[0]
+        "SELECT COUNT(*) FROM orders WHERE received_at >= date('now','-7 day') "
+        f"{NOT_STOCK}").fetchone()[0]
     f["orders_prev7"] = conn.execute(
         "SELECT COUNT(*) FROM orders WHERE received_at >= date('now','-14 day') "
-        "AND received_at < date('now','-7 day')").fetchone()[0]
+        "AND received_at < date('now','-7 day') "
+        f"{NOT_STOCK}").fetchone()[0]
     f["value_7d"] = conn.execute(
         "SELECT COALESCE(SUM(price_inr),0) FROM orders "
-        "WHERE received_at >= date('now','-7 day')").fetchone()[0]
+        "WHERE received_at >= date('now','-7 day') "
+        f"{NOT_STOCK}").fetchone()[0]
 
     f["selling"] = [dict(r) for r in conn.execute(
         "SELECT product, COUNT(*) n FROM orders "
         "WHERE received_at >= date('now','-30 day') AND product IS NOT NULL "
-        "GROUP BY product ORDER BY n DESC LIMIT 5")]
+        f"{NOT_STOCK} GROUP BY product ORDER BY n DESC LIMIT 5")]
 
     # Builds sitting in one stage for a while. "Stuck" is the useful word:
     # a queue is only a problem when something stops moving through it.
@@ -61,10 +70,11 @@ def gather():
         "ORDER BY last_move ASC LIMIT 8")]
 
     bills = conn.execute(
-        "SELECT COALESCE(SUM(total),0) t, COUNT(*) n FROM supplier_bills "
-        "WHERE status='acknowledged'").fetchone()
+        f"SELECT COALESCE(SUM(total * {TO_INR}),0) t, COUNT(*) n FROM supplier_bills "
+        "WHERE status='acknowledged'", (USD_INR,)).fetchone()
     paid = conn.execute(
-        "SELECT COALESCE(SUM(amount),0) FROM supplier_payments").fetchone()[0]
+        f"SELECT COALESCE(SUM(amount * {TO_INR}),0) FROM supplier_payments",
+        (USD_INR,)).fetchone()[0]
     f["owed"] = round((bills["t"] or 0) - (paid or 0), 2)
     f["bills_open"] = bills["n"] or 0
     f["drafts_unagreed"] = conn.execute(

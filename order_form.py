@@ -1094,8 +1094,8 @@ def build():
         <div class="of-sep"></div>
         <div class="of-legend">Customer</div>
         <div class="of-row">
-          <div class="of-field"><label>Name <span class="req">*</span>
-            <label class="stocktog"><input type="checkbox" id="f-stock">for stock</label></label>
+          <div class="of-field"><label class="stocktog"><input type="checkbox" id="f-stock">for stock</label>
+            <label for="f-cust">Name <span class="req">*</span></label>
             <input id="f-cust" class="pin" autocomplete="off"></div>
           <div class="of-field"><label>Phone</label>
             <input id="f-phone" class="pin" inputmode="tel" autocomplete="off"></div>

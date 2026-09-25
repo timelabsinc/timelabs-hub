@@ -437,7 +437,9 @@ function drawWeek(){
   var out='', today=new Date();
   for(var i=0;i<7;i++){
     var d=new Date(today.getFullYear(),today.getMonth(),today.getDate()+i);
-    var key=d.toISOString().slice(0,10);
+    /* local date, not toISOString: that is UTC, and Indian midnight is the
+       previous day in UTC, so every column showed yesterday's posts */
+    var key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
     var list=byDay[key]||[];
     var names=list.map(function(p){return p.assigned_to||'unassigned';});
     out+='<div class="rd-day'+(i===0?' today':'')+'">'+

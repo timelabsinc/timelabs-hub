@@ -2261,11 +2261,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
         defaults = ["CC", "TLC", "Offkicks"]
         sources = defaults + [s for s in used if s not in defaults]
+        # SUM over no rows is NULL, not 0, so an empty table would crash here
         website = totals["website"] or 0
+        n_orders = totals["n"] or 0
         self._json(200, {"sources": sources, "selling": sold,
                          "vocab": order_taxonomy.vocab(), "top_products": top_products,
-                         "channels": {"logged": totals["n"] - website, "website": website},
-                         "totals": {"orders": totals["n"] or 0,
+                         "channels": {"logged": n_orders - website, "website": website},
+                         "totals": {"orders": n_orders,
                                     "stock": totals["stock"] or 0,
                                     "revenue": totals["revenue"] or 0,
                                     "customers": ncust}})
@@ -3693,6 +3695,51 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 r["passes"] = {}
         self._json(200, {"posts": rows, "subreddit": "IndiaWatchMods"})
 
+    def _run_reddit_job(self, script, table, rid, timeout):
+        """Run a Reddit pipeline script and return its row's final status.
+
+        The scripts mark themselves failed when they raise, but not when the
+        server kills them for running long, which left the row at "running"
+        and the page polling forever. Anything still in flight once the
+        script is gone is marked failed here."""
+        try:
+            subprocess.run(["python3", f"/root/ops-dashboard/{script}", str(rid)],
+                           capture_output=True, text=True, timeout=timeout)
+            why = "stopped before it finished"
+        except subprocess.TimeoutExpired:
+            why = f"timed out after {timeout // 60} minutes"
+        except Exception as e:
+            print(f"[{script}] runner: {e}", flush=True)
+            why = f"could not run: {e}"[:400]
+        c = db()
+        c.execute(f"UPDATE {table} SET status='failed', error=?, "
+                  "finished_at=datetime('now') "
+                  "WHERE id=? AND status IN ('queued','running')", (why, rid))
+        c.commit()
+        row = c.execute(f"SELECT * FROM {table} WHERE id=?", (rid,)).fetchone()
+        c.close()
+        return row
+
+    # Up to ten Hermes calls of up to 7 minutes each, plus research. The old
+    # 40-minute cap could kill a run that was still making progress.
+    _REDDIT_DRAFT_TIMEOUT = 4800
+
+    def _report_reddit_draft(self, pid, row, actor):
+        """Tell the owner how a draft run ended. Stopping to ask a question
+        is not a failure and must not be reported as one."""
+        status = row["status"] if row else "failed"
+        hub_event("reddit_post", f"draft #{pid} {status}", actor, "agent")
+        if status == "ready":
+            self._alert(f"*Reddit draft ready*\n{row['title']}\n\nReview it at "
+                        f"ops.timelabsco.in/ops/reddit.html")
+        elif status == "needs_input":
+            self._alert(f"*Reddit draft #{pid} has a question for you*\n"
+                        f"{row['question'] or ''}\n\n"
+                        f"Answer it at ops.timelabsco.in/ops/reddit.html")
+        else:
+            self._alert(f"Reddit draft #{pid} failed to build."
+                        + (f"\n{row['error']}" if row and row["error"] else ""))
+
     def _handle_reddit_post_create(self):
         """Queue a draft and run the five-pass pipeline in the background.
 
@@ -3725,21 +3772,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
 
         def _work():
-            try:
-                subprocess.run(["python3", "/root/ops-dashboard/reddit_draft.py",
-                                str(pid)], capture_output=True, text=True, timeout=2400)
-            except Exception as e:
-                print(f"[reddit_draft] runner: {e}", flush=True)
-            c = db()
-            row = c.execute("SELECT status, title FROM reddit_posts WHERE id=?",
-                            (pid,)).fetchone()
-            c.close()
-            ok = row and row["status"] == "ready"
-            hub_event("reddit_post",
-                      f"draft #{pid} " + ("ready" if ok else "failed"), actor, "agent")
-            self._alert(f"*Reddit draft ready*\n{row['title']}\n\nReview it at "
-                        f"ops.timelabsco.in/ops/reddit.html" if ok else
-                        f"Reddit draft #{pid} failed to build.")
+            row = self._run_reddit_job("reddit_draft.py", "reddit_posts", pid,
+                                       self._REDDIT_DRAFT_TIMEOUT)
+            self._report_reddit_draft(pid, row, actor)
 
         threading.Thread(target=_work, daemon=True).start()
         self._json(200, {"ok": True, "id": pid, "status": "queued"})
@@ -3800,18 +3835,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
 
         def _work():
-            try:
-                subprocess.run(["python3", "/root/ops-dashboard/reddit_draft.py",
-                                str(pid)], capture_output=True, text=True, timeout=2400)
-            except Exception as e:
-                print(f"[reddit_draft] resume: {e}", flush=True)
-            c = db()
-            r = c.execute("SELECT status, title FROM reddit_posts WHERE id=?",
-                          (pid,)).fetchone()
-            c.close()
-            if r and r["status"] == "ready":
-                self._alert(f"*Reddit draft ready*\n{r['title']}\n\n"
-                            f"ops.timelabsco.in/ops/reddit.html")
+            row = self._run_reddit_job("reddit_draft.py", "reddit_posts", pid,
+                                       self._REDDIT_DRAFT_TIMEOUT)
+            self._report_reddit_draft(pid, row, actor)
 
         threading.Thread(target=_work, daemon=True).start()
         self._json(200, {"ok": True})
@@ -3971,14 +3997,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
 
         def _work():
-            try:
-                subprocess.run(["python3", "/root/ops-dashboard/reddit_reply.py",
-                                str(did)], capture_output=True, text=True, timeout=1800)
-            except Exception as e:
-                print(f"[reddit_reply] runner: {e}", flush=True)
-            c = db()
-            r = c.execute("SELECT status FROM reddit_drafts WHERE id=?", (did,)).fetchone()
-            c.close()
+            r = self._run_reddit_job("reddit_reply.py", "reddit_drafts", did, 1800)
             if r and r["status"] == "ready":
                 self._alert("*Reddit reply ready*\nops.timelabsco.in/ops/reddit.html")
 
@@ -4017,8 +4036,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
 
             def _resume():
-                subprocess.run(["python3", "/root/ops-dashboard/reddit_reply.py",
-                                str(did)], capture_output=True, text=True, timeout=1800)
+                self._run_reddit_job("reddit_reply.py", "reddit_drafts", did, 1800)
             threading.Thread(target=_resume, daemon=True).start()
             self._json(200, {"ok": True})
             return
