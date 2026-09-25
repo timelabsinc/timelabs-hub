@@ -220,7 +220,7 @@ OF_CSS = r"""
   @media(max-width:520px){.bar{grid-template-columns:96px 1fr 36px;gap:8px;}}
   .bar .nm{font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .bar .tr{background:var(--card-2);border-radius:5px;height:9px;overflow:hidden;}
-  .bar .fl{height:100%;background:var(--accent);border-radius:5px;}
+  .bar .fl{display:block;height:100%;background:var(--accent);border-radius:5px;}
   .bar .vl{font-size:12.5px;color:var(--muted);text-align:right;}
 
   /* Product combobox — a suggestion overlay, never a locked-in enum.
