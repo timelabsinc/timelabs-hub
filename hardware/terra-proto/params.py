@@ -69,9 +69,11 @@ class Params:
     ring_dial_clearance: float = 0.40  # dial recess = dial_d + this (diametral); >= 2x pocket clearance so the dial never binds
     ring_pocket_clearance: float = 0.15  # per side around the movement outline
     ring_stem_slot_w: float = 2.4      # slot in the ring wall for the stem, open toward the back
-    # anti-rotation: a RIB on the case's movement-bore wall at 9 o'clock (-X) engages a SLOT in the ring's OD
-    # that is open at the ring bottom. Nothing reaches the back face, so the caseback thread and the gasket
-    # seating face stay uninterrupted (v0.2's open keyway was a leak path).
+    # anti-rotation: a RIB on the case's movement-bore wall at 9 o'clock (-X) engages a THROUGH-SLOT in the
+    # ring's OD (open at both ends: the ring's top rim has to travel past the rib during insertion from the
+    # back, so a slot closed at the top cannot work). The slot notches the rehaut lip at 9 o'clock, hidden
+    # under the ledge. Nothing reaches the case back face, so the caseback thread and the gasket seating
+    # face stay uninterrupted (v0.2's open keyway was a leak path).
     key_w: float = 2.0                 # rib width (Y)
     key_h: float = 0.6                 # rib radial height, inward from the movement bore
     key_slot_clear_w: float = 0.2      # ring slot width = key_w + this
@@ -255,8 +257,12 @@ class Params:
         return self.key_h + self.key_slot_clear_h
 
     @property
-    def key_slot_z1(self) -> float:           # slot runs from the ring bottom up to here
-        return self.key_z1 + self.key_z_margin
+    def key_slot_z1(self) -> float:           # slot runs from below the ring bottom to above the ring top (through)
+        return self.z_ledge_bottom + 0.5
+
+    @property
+    def key_slot_lip_notch_hidden(self) -> bool:  # slot floor radius must stay under the ledge (>= aperture/2 + 0.2)
+        return (self.ring_od / 2 - self.key_slot_depth) >= self.dial_aperture_d / 2 + 0.2
 
     @property
     def ring_pocket_w(self) -> float:
@@ -407,7 +413,7 @@ class Params:
             "strap_bar_end_h", "y_strap_open_inner", "y_strap_open_outer", "ring_dial_recess_d",
             "ring_lip_wall", "dial_ledge_overlap", "flange_to_strap_margin", "cb_seal", "gasket_id",
             "gasket_od", "gasket_fill", "key_z0", "key_z1", "key_r_in", "key_slot_w", "key_slot_depth",
-            "key_slot_z1", "z_crystal_top",
+            "key_slot_z1", "key_slot_lip_notch_hidden", "z_crystal_top",
         ]
         d = self.as_dict()
         return "\n".join(f"{k:>24s} = {d[k]:.3f}" if isinstance(d[k], float) else f"{k:>24s} = {d[k]}" for k in keys)

@@ -130,9 +130,12 @@ R ≤ 0.5 (cutter radius); the M27 × 0.5 blind thread gets a 0.3 wide relief gr
 * Stem slot at +X: width `ring_stem_slot_w`, through the wall, from the bottom up to
   `z_stem + 1.2` (open toward the back so the movement drops in with its stem).
 * Anti-rotation slot at −X in the OD: width `key_slot_w` (2.2), radial depth `key_slot_depth` (0.75),
-  from the ring bottom up to `key_slot_z1` (3.88, the step level), open at the bottom so the ring
-  slides over the case rib (section 3.7) when inserted from the back. The slot stays in the thick lower
-  wall (5.35 at −X); the lip above it is untouched.
+  running THROUGH the full ring height (open at both ends, `key_slot_z1` lies above the ring top).
+  It has to be through: the ring is inserted from the back and its top rim must travel past the rib,
+  so a slot closed anywhere above the ring bottom would collide. The slot therefore notches the
+  rehaut lip at 9 o'clock; the notch floor (r 12.40 Ti) stays under the ledge (aperture r 12.1), so it
+  is invisible (`key_slot_lip_notch_hidden` must be true). Below the step the slot sits in the thick
+  wall (4.6 to the pocket flat).
 * Height tolerance (drawing): `ring_h` +`ring_axial_preload`/+0.08, so the POM ring is always clamped
   between caseback and ledge; caseback boss height and ledge depth ±0.02.
 * Battery access: none needed (movement lifts out).
@@ -188,9 +191,9 @@ R ≤ 0.5 (cutter radius); the M27 × 0.5 blind thread gets a 0.3 wide relief gr
    The gasket's 0.1 protrusion past z = 0 is likewise excluded (check the gasket against the case
    only inside the recess).
 3b. Ring insertion sweep: the assembled spacer ring translated toward the back in 0.25 mm steps until
-   it is fully outside the case must never intersect the case (the ring slot is open at the bottom,
-   the rib sits above the caseback boss, and the thread minor Ø exceeds `ring_od`). Also probe that
-   the rib exists (solid at (−`key_r_in` − 0.1, 0, mid-z)) and that the ring slot is void there. Axial float: ring top = `z_ledge_bottom` exactly and
+   it is fully outside the case must never intersect the case (the ring slot is a through-slot, the rib sits above the caseback boss, and the thread minor Ø
+   exceeds `ring_od`). Also probe that the rib exists (solid at (−`key_r_in` − 0.1, 0, mid-z)), that
+   the ring slot is void there over the full ring height, and assert `key_slot_lip_notch_hidden`. Axial float: ring top = `z_ledge_bottom` exactly and
    caseback inner face = ring bottom, so the ring is clamped and the movement/dial cannot float more
    than `mvt_axial_clearance`. Assert `ring_lip_wall ≥ 0.3`, `dial_ledge_overlap ≥ 0.25`,
    `flange_to_strap_margin ≥ 0.3`, `strap_bar_end_h ≥ 2.5`.
@@ -227,8 +230,8 @@ repo's system python (CadQuery 2.8, trimesh, numpy, matplotlib installed).
 2. Fit hands on the movement, then the dial (feet into the movement).
 3. Drop the movement + dial into the spacer ring from the ring's top: the dial settles in the Ø 25.4
    recess, the movement passes through it into the pocket below.
-4. Slide the ring assembly into the case from the back, its slot at 9 o'clock riding over the case
-   rib, until the ring's lip touches the ledge underside. No stem is fitted yet.
+4. Slide the ring assembly into the case from the back, its through-slot at 9 o'clock riding over
+   the case rib, until the ring's lip touches the ledge underside. No stem is fitted yet.
 5. Push the cut stem with its crown in through the tube until the movement's setting lever clicks.
 6. Seat the I-ring in the crystal bore, press the crystal in from the front.
 7. Lay the flat gasket in the caseback recess, screw the caseback in with a pin spanner until the
