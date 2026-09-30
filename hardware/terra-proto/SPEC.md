@@ -1,6 +1,6 @@
 # Terra-style GL32 case prototype — engineering spec
 
-Status: v0.1 design intent, derived from published DWC Terra figures (32 × 44 mm, lug-less
+Status: v0.2 design intent (v0.1 reviewed: ring lip, keyway, strap bar, seal and chamfer corrected), derived from published DWC Terra figures (32 × 44 mm, lug-less
 titanium slab, screw-in 316L back, angled through-slots for a ≤22 mm single-pass strap) and
 the Miyota GL32 catalogue values. Everything marked **UNVERIFIED** must be measured on the real
 parts before titanium is cut. `params.py` is the single source of truth; this file explains it.
@@ -45,21 +45,30 @@ Build in this order (each step names the parameters it uses):
 3. **Crystal bore**: from the front face down `crystal_engagement` (1.3), Ø `crystal_bore_d` (27.7),
    with a `crystal_bore_lead_chamfer` (0.2) at the front edge. Floor of this bore = crystal seat
    at `z_crystal_seat` (7.0). The Hytrel I-ring sits here.
-4. **Dial aperture**: through the ledge, Ø `dial_aperture_d` (25.2), from `z_crystal_seat` down to
-   `z_ledge_bottom` (5.5). Ledge is therefore `ledge_t` (1.5) thick.
+4. **Dial aperture**: through the ledge, Ø `dial_aperture_d` (24.4), from `z_crystal_seat` down to
+   `z_ledge_bottom` (5.5). Ledge is therefore `ledge_t` (1.5) thick and the Ø 25.0 dial hides
+   `dial_ledge_overlap` (0.3) per side under it.
 5. **Movement bore**: Ø `mvt_bore_d` (26.5) from `z_ledge_bottom` down to `z_cb_inner` (1.5).
 6. **Caseback thread zone**: z 0 → `cb_thread_len` (1.5). Titanium: `threads.cut_internal_cosmetic`
    (plain bore at the minor Ø, lead chamfer 0.2). Resin: `threads.cut_internal(...)` with
    `cb_thread_clearance`. Requirement: thread minor Ø ≥ `mvt_bore_d` − 0.05 so the ring inserts
    from the back (params guarantee it; verify.py asserts it).
 7. **Ring keyway**: at 9 o'clock (−X) in the movement bore wall: width `ring_key_w`+0.1, radial
-   depth `ring_key_h`+0.1, from `z_cb_inner` to `z_cb_inner + ring_key_len + 0.2`.
+   depth `ring_key_h`+0.1, an open slot from the back face (z 0) through the thread zone up to
+   `z_cb_inner + ring_key_len + 0.2`. It must start at the back face: the ring is inserted from the
+   back and its key tip (`ring_od`/2 + `ring_key_h`) is larger than the thread minor and major radii,
+   so a keyway starting at `z_cb_inner` would be a blind pocket behind the thread; the slot interrupts
+   the M27 × 0.5 thread over its width (2.1). Helix profile: when the floor would land within 0.3 of
+   the thread groove root (major/2 + `cb_thread_clearance`) it is pushed out to root + 0.3 (the floor
+   is not a locating surface).
 8. **Strap channels** (both ends, mirror in Y): in the YZ section a straight band of perpendicular
    thickness `strap_gap` whose axis crosses z = 0 at y = `y_strap_axis_back` and climbs toward the
    end face at `strap_angle_deg` above the back plane. Extrude it over x ∈ ±`strap_slot_w`/2 and
    extend it well past both faces so it cuts cleanly. Results (titanium defaults): back-face opening
-   y 16.2 → 19.0, end-face opening z 2.52 → 4.87, bar 3.0 wide on the back face and 2.52 tall on the
-   end face, 3.43 of solid above the exit. Round the four channel edges (`strap_fillet` 0.4) and the
+   y 15.2 → 18.0, end-face opening z 3.36 → 5.71, bar 4.0 wide on the back face and 3.36 tall on the
+   end face (≈ 6.7 mm² wedge section; the v0.1 3.0 mm bar reached Ti Gr 2 yield at ≈ 100 N of strap
+   pull), 2.59 of solid above the exit. The caseback flange (Ø 29.4) stays `flange_to_strap_margin`
+   (0.5) inside the back-face opening. Round the four channel edges (`strap_fillet` 0.4) and the
    bar's outer edge, i.e. the back-face/end-face edge, over the full width (`strap_bar_round` 0.8).
 9. **Crown pocket**: rectangular notch in the +X flank, y ∈ ±`crown_pocket_w`/2, from
    x = `x_pocket_floor` (15.2) outward, full height, vertical corner radii `crown_pocket_corner_r`.
@@ -75,7 +84,7 @@ Build in this order (each step names the parameters it uses):
     * back groove (`back_groove`): stadium on the back face, width `back_groove_w`, depth
       `back_groove_depth`, running parallel to Y at x = sx·(W/2 − `back_groove_inboard`), from
       y = sy·(L/2 − corner_chamfer − 0.5) toward the centre for `back_groove_len`.
-12. **Edge breaks**: front outline `edge_chamfer_front` (0.4); back outline `edge_chamfer_back`
+12. **Edge breaks**: front outline `edge_chamfer_front` (0.3); back outline `edge_chamfer_back`
     (0.3) except the two end edges which already carry the `strap_bar_round`.
     If CadQuery's fillet/chamfer selection fails on a complex edge, skip that edge break, log it,
     and keep the solid valid — a missing 0.3 chamfer is not a blocker, an invalid solid is.
@@ -83,17 +92,25 @@ Build in this order (each step names the parameters it uses):
 Sanity values (titanium): wall at crystal bore on the crown side 2.15 → 1.35 inside the pocket;
 wall at the thread on the crown side 2.5 → 1.7 inside the pocket; tube engagement 1.95;
 tube-hole bottom sits 0.18 above the thread zone (`tube_to_thread_margin`) — small, driven by the
-UNVERIFIED `stem_below_dial_seat`.
+UNVERIFIED `stem_below_dial_seat`; the tube hole is allowed to break into the thread relief if the
+measured stem sits lower (drawing note), the thread simply loses 2 mm of one turn there.
+Machining notes for the drawing: internal corners of the strap channel and the chamfer notch may carry
+R ≤ 0.5 (cutter radius); the M27 × 0.5 blind thread gets a 0.3 wide relief groove at its floor.
 
 ## 4. Caseback (`caseback`)
 
-* Flange disc Ø `cb_flange_d` (30.0) × `cb_flange_t` (0.8), from z = −0.8 to 0 (outside the case).
+* Flange disc Ø `cb_flange_d` (29.4) × `cb_flange_t` (0.8), from z = −0.8 to 0 (outside the case).
 * Threaded boss Ø `cb_thread_major` × `cb_thread_len` from z = 0 to 1.5, inner face flat at
   z = `z_cb_inner`. Titanium: `threads.boss_cosmetic` (plain cylinder at major Ø); resin:
   `threads.boss(..., clearance=cb_thread_clearance)`.
-* Face-seal O-ring groove on the flange's inner face (z = 0 plane): mean Ø `oring_groove_mean_d`
-  (28.6), width `oring_groove_w` (0.7), depth `oring_groove_depth` (0.35) cut downward into the
-  flange. O-ring CS 0.5. A 0.5 mm flat gasket 28 × 29.5 is the pragmatic alternative.
+* Seal, selected by `cb_seal`:
+  * `"flat_gasket"` (default): annular recess in the flange's inner face (the z = 0 side), from the
+    boss (Ø `cb_thread_major`) out to Ø `gasket_recess_od` (29.0), `gasket_recess_depth` (0.35) deep,
+    leaving a 0.2 wide seating land at the rim. Flat gasket `gasket_id` × `gasket_od` × `gasket_t`
+    (27.2 × 28.8 × 0.45) sits in it and is squeezed ≈ 22 % when the land seats on the case.
+  * `"oring"`: face-seal O-ring groove on the same face, mean Ø `oring_groove_mean_d` (28.2), width
+    `oring_groove_w` (0.6), depth `oring_groove_depth` (0.28), O-ring CS `oring_cs` (0.4).
+  The 27.0 → 29.4 annulus is too narrow for a 0.5 CS O-ring with proper lands, hence the default.
 * `cb_tool_holes` (6) × Ø `cb_tool_hole_d` blind holes `cb_tool_hole_depth` deep from the outer
   face on PCD `cb_tool_pcd`, one at 12 o'clock; plus the optional centre dimple. Opens with a pin
   spanner / 2-pin caseback wrench.
@@ -105,7 +122,10 @@ UNVERIFIED `stem_below_dial_seat`.
 * Movement pocket from the bottom up `ring_step_h` (2.38): the GL32 outline = circle Ø
   `ring_pocket_l` ∩ strip of width `ring_pocket_w` (flats at ±`ring_pocket_w`/2 in X), open at
   the bottom (movement rests on the caseback).
-* Above the step: dial recess Ø `ring_dial_recess_d` (26.2) up to the top → the visible rehaut.
+* Above the step: dial recess Ø `ring_dial_recess_d` (25.4 = dial + 0.4) up to the top → the visible
+  rehaut lip, `ring_lip_wall` (0.45 Ti / 0.35 resin) thick. The lip must be ≥ 0.3 (params guarantee it;
+  the module raises if not — no silent fallback). The dial's radial clearance (0.2/side) exceeds the
+  movement-pocket clearance (0.15/side) so the dial, which is carried by the movement, never binds.
 * Stem slot at +X: width `ring_stem_slot_w`, through the wall, from the bottom up to
   `z_stem + 1.2` (open toward the back so the movement drops in with its stem).
 * Anti-rotation key at −X on the OD: `ring_key_w` × `ring_key_h` × `ring_key_len` from the bottom.
@@ -113,7 +133,7 @@ UNVERIFIED `stem_below_dial_seat`.
 
 ## 6. Dial blank, purchased placeholders
 
-* Dial: Ø `dial_d` × `dial_t`, centre hole `dial_center_hole_d`, feet holes per `dial_feet`
+* Dial: Ø `dial_d` (25.0) × `dial_t`, centre hole `dial_center_hole_d`, feet holes per `dial_feet`
   (**UNVERIFIED** positions), placed z = `z_dial_seat` → `z_dial_face`.
 * Crystal: Ø `crystal_d` × `crystal_t` at z = `z_crystal_seat` → `z_crystal_top`.
 * I-ring: tube Ø_i = crystal_d, wall `iring_wall`, height `iring_h`, sitting on the crystal seat.
@@ -123,7 +143,9 @@ UNVERIFIED `stem_below_dial_seat`.
 * Tube: Ø `tube_od` × `tube_len` from x = `x_bore_wall` outward at (0, `z_stem`).
 * Crown: octagonal prism (across-flats `crown_d`) × `crown_len` from x = `x_crown_start`.
 * Battery: Ø 6.8 × 2.15 inside the movement envelope (cosmetic).
-* O-ring: torus in the caseback groove.
+* Gasket: flat annulus `gasket_id` × `gasket_od` × `gasket_t` in the caseback recess (its uncompressed
+  0.1 protrusion past z = 0 is expected and excluded from interference checks); or, when
+  `cb_seal == "oring"`, a torus in the groove. The assembly includes whichever `cb_seal` selects.
 
 ## 7. Stack-up (titanium defaults)
 
@@ -151,6 +173,19 @@ UNVERIFIED `stem_below_dial_seat`.
 3. Assembly interference: pairwise intersection volumes < 0.01 mm³ for case/caseback, case/ring,
    case/movement, case/crystal, case/tube, case/crown, ring/movement, ring/dial, caseback/movement,
    caseback/tube, crystal/hands envelope, crystal/iring (iring is inside the bore, outside the crystal).
+   Two documented exceptions: (a) with `thread_model == "plain"` the case/caseback pair is scored
+   outside the thread-zone envelope (z 0 → `cb_thread_len`, r ≤ major/2), and the overlap inside it
+   must equal the cosmetic tooth annulus π/4·(D² − D1²)·L minus the lead chamfer within 1 % (that is
+   the material the machinist turns into thread); (b) the resin case/tube pair is checked after the
+   1.9 tube hole is reamed to `tube_od`; the as-printed overlap must equal the ream allowance.
+   The gasket's 0.1 protrusion past z = 0 is likewise excluded (check the gasket against the case
+   only inside the recess).
+3b. Ring insertion sweep: the assembled spacer ring translated toward the back in 0.25 mm steps until
+   it is fully outside the case must never intersect the case (the keyway is open to the back face
+   and the thread minor Ø exceeds `ring_od`). Axial float: ring top = `z_ledge_bottom` exactly and
+   caseback inner face = ring bottom, so the ring is clamped and the movement/dial cannot float more
+   than `mvt_axial_clearance`. Assert `ring_lip_wall ≥ 0.3`, `dial_ledge_overlap ≥ 0.25`,
+   `flange_to_strap_margin ≥ 0.3`, `strap_bar_end_h ≥ 2.5`.
 4. Thread screw-in test (resin profile): boss rotated θ about Z and translated θ/360·pitch for
    θ ∈ {0, 120, 240} → zero interference with the case.
 5. Probe points: a point inside each strap channel, each front slot, the crown pocket and the tube
@@ -178,7 +213,22 @@ overlay the dimensions with matplotlib; label UNVERIFIED values with an asterisk
 (from `Params.as_dict()`), and prints the volumes. Must run from this directory with the
 repo's system python (CadQuery 2.8, trimesh, numpy, matplotlib installed).
 
-## 11. Known unknowns (measure before cutting titanium)
+## 11. Assembly order (matches the geometry; README repeats it)
+
+1. Press the Ø 2.0 tube into the case from the crown pocket side, flush with the movement bore.
+2. Fit hands on the movement, then the dial (feet into the movement).
+3. Drop the movement + dial into the spacer ring from the ring's top: the dial settles in the Ø 25.4
+   recess, the movement passes through it into the pocket below.
+4. Slide the ring assembly into the case from the back, key at 9 o'clock into the open keyway, until
+   the ring's lip touches the ledge underside. No stem is fitted yet.
+5. Push the cut stem with its crown in through the tube until the movement's setting lever clicks.
+6. Seat the I-ring in the crystal bore, press the crystal in from the front.
+7. Lay the flat gasket in the caseback recess, screw the caseback in with a pin spanner until the
+   rim land seats; the caseback clamps ring → ledge and movement → dial.
+8. Thread the single-pass strap through the channels: in at one end face, under the case over the
+   caseback, out the other end face.
+
+## 12. Known unknowns (measure before cutting titanium)
 
 * `stem_below_dial_seat` (1.20) — sets `z_stem`; tolerance stack against the thread zone is 0.18.
 * GL32 outline length 18.2 vs 18.5 — pocket uses 18.5 + 0.15/side; a 18.2 movement will have
@@ -188,3 +238,8 @@ repo's system python (CadQuery 2.8, trimesh, numpy, matplotlib installed).
 * Terra's own slot angle, bar size, corner "gate" cuts and crown recess — reconstructed from photos.
 * Crystal stock: confirm a 27.0 × 2.0 flat sapphire and a 0.45 × 0.9 Hytrel I-ring are purchasable;
   otherwise change `crystal_d` and rebuild.
+* Strap bar strength: a 4.0 × 3.36 mm Ti Gr 2 wedge yields at roughly 190 N of straight strap pull
+  (estimate); if a wearable must survive snagging, widen `strap_bar_back_w` further and shrink
+  `cb_flange_d` to keep `flange_to_strap_margin`.
+* Dial depth: the dial face sits 2.72 below the crystal seat (deep rehaut, crown axis at 32 % of the
+  case height). Raising the stack needs a taller `H` or a shorter `cb_thread_len`; left as is for v0.2.

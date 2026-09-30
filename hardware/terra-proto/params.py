@@ -30,7 +30,7 @@ class Params:
     L: float = 44.0                    # Y, 6 -> 12 o'clock
     H: float = 8.3                     # Z, back face (0) -> front face (H)
     corner_chamfer: float = 4.0        # plan-view 45 deg chamfer leg on the 4 vertical corners
-    edge_chamfer_front: float = 0.4    # perimeter chamfer on the front face outline
+    edge_chamfer_front: float = 0.3    # perimeter chamfer on the front face outline (0.4 cannot run around the crown pocket)
     edge_chamfer_back: float = 0.3     # perimeter chamfer on the back face outline
 
     # ------------------------------------------- crystal: flat sapphire + I-ring
@@ -43,9 +43,9 @@ class Params:
     crystal_bore_lead_chamfer: float = 0.2
 
     # ------------------------------------------------------------ ledge / dial
-    dial_aperture_d: float = 25.2      # what you see through the crystal
+    dial_aperture_d: float = 24.4      # what you see through the crystal; dial overlaps the ledge by 0.3/side
     ledge_t: float = 1.5               # solid ledge between crystal seat and dial cavity
-    dial_d: float = 26.0
+    dial_d: float = 25.0               # must leave a >= 0.3 lip in the spacer ring: dial_d + 0.4 <= ring_od - 0.6
     dial_t: float = 0.4
     dial_center_hole_d: float = 1.6
     # dial feet: (angle in degrees clockwise from 12, radius). UNVERIFIED placeholder for GL32.
@@ -66,6 +66,7 @@ class Params:
     # ---------------------------------------------- movement bore & spacer ring
     mvt_bore_d: float = 26.5           # >= caseback thread minor dia so the ring inserts from the back
     ring_od_clearance: float = 0.20    # ring OD = mvt_bore_d - this  (diametral)
+    ring_dial_clearance: float = 0.40  # dial recess = dial_d + this (diametral); >= 2x pocket clearance so the dial never binds
     ring_pocket_clearance: float = 0.15  # per side around the movement outline
     ring_stem_slot_w: float = 2.4      # slot in the ring wall for the stem, open toward the back
     ring_key_w: float = 2.0            # anti-rotation key on the ring OD (at 9 o'clock)
@@ -77,7 +78,7 @@ class Params:
     cb_thread_pitch: float = 0.5
     cb_thread_len: float = 1.5         # thread engagement, inside the case: z 0 -> cb_thread_len
     cb_thread_clearance: float = 0.05  # radial clearance on the external thread (resin: 0.15)
-    cb_flange_d: float = 30.0          # protruding flange behind the back face
+    cb_flange_d: float = 29.4          # protruding flange behind the back face; must clear the strap opening (y_strap_open_inner)
     cb_flange_t: float = 0.8
     cb_tool_holes: int = 6
     cb_tool_hole_d: float = 1.5
@@ -87,10 +88,16 @@ class Params:
     cb_center_hole_d: float = 1.5
     cb_center_hole_depth: float = 0.4
     cb_engrave_depth: float = 0.05     # for the drawing note only, text not modelled
-    oring_cs: float = 0.5              # face-seal O-ring on the flange underside
-    oring_groove_w: float = 0.7
-    oring_groove_depth: float = 0.35
-    oring_groove_mean_d: float = 28.6  # centred in the 27.0-30.0 annulus
+    cb_seal: str = "flat_gasket"       # "flat_gasket" (default) | "oring"
+    gasket_recess_depth: float = 0.35  # annular recess in the flange's inner face (z=0 side), from the boss outward
+    gasket_recess_od: float = 29.0     # leaves a 0.2 seating land at the flange rim
+    gasket_t: float = 0.45             # flat gasket, ~22 % squeeze when the land seats
+    gasket_id: float = 27.2
+    gasket_od: float = 28.8
+    oring_cs: float = 0.4              # "oring" option: face-seal O-ring on the flange underside
+    oring_groove_w: float = 0.6
+    oring_groove_depth: float = 0.28
+    oring_groove_mean_d: float = 28.2  # centred in the 27.0-29.4 annulus
 
     # ----------------------------------------------------------------- crown
     crown_d: float = 4.0               # generic waterproof push-pull crown, tap 10
@@ -101,14 +108,14 @@ class Params:
     tube_protrusion: float = 1.2       # beyond the crown-pocket floor
     crown_pocket_w: float = 7.0        # Y width of the recess in the 3 o'clock flank
     crown_pocket_depth: float = 0.8    # X depth into the flank
-    crown_pocket_corner_r: float = 0.5
+    crown_pocket_corner_r: float = 0.3 # small enough for the 0.3 front chamfer to run around the pocket
 
     # --------------------------------------------------------- strap channels
     strap_w: float = 22.0
     strap_slot_w: float = 22.4         # X width of the through channel
     strap_gap: float = 1.8             # channel thickness measured perpendicular to its axis
     strap_angle_deg: float = 40.0      # channel axis angle from the back-face plane
-    strap_bar_back_w: float = 3.0      # bar width on the back face, measured from the end face
+    strap_bar_back_w: float = 4.0      # bar width on the back face, measured from the end face (3.0 yielded at ~100 N pull)
     strap_fillet: float = 0.4          # round on the channel edges (strap contact)
     strap_bar_round: float = 0.8       # round on the bar's outer edge (back face / end face), full width
 
@@ -138,6 +145,7 @@ class Params:
     density_case: float = 4.51         # g/cm3 Ti Grade 2 (resin ~1.15)
     density_caseback: float = 8.00     # g/cm3 316L
     density_ring: float = 1.41         # g/cm3 POM
+    density_dial: float = 8.50         # g/cm3 brass
 
     # ================================================================ derived
     # -- crystal / ledge
@@ -217,7 +225,19 @@ class Params:
 
     @property
     def ring_dial_recess_d(self) -> float:    # dial sits inside the ring's upper lip
-        return self.dial_d + 0.2 + self.fit_extra
+        return self.dial_d + self.ring_dial_clearance + self.fit_extra
+
+    @property
+    def ring_lip_wall(self) -> float:         # radial lip between dial recess and ring OD; must be >= 0.3
+        return (self.ring_od - self.ring_dial_recess_d) / 2
+
+    @property
+    def dial_ledge_overlap(self) -> float:    # how far the dial hides under the ledge, per side
+        return (self.dial_d - self.dial_aperture_d) / 2
+
+    @property
+    def flange_to_strap_margin(self) -> float:  # caseback flange edge to the strap opening on the back face
+        return self.y_strap_open_inner - self.cb_flange_d / 2
 
     # -- caseback thread
     @property
@@ -341,7 +361,8 @@ class Params:
             "mvt_bore_d", "ring_od", "ring_h", "ring_step_h", "cb_thread_major", "cb_thread_pitch",
             "cb_thread_minor", "cb_flange_d", "tube_len", "tube_engagement", "strap_open_w_back",
             "strap_open_h_end", "z_strap_exit_low", "z_strap_exit_high", "strap_front_wall",
-            "strap_bar_end_h", "y_strap_open_inner", "y_strap_open_outer",
+            "strap_bar_end_h", "y_strap_open_inner", "y_strap_open_outer", "ring_dial_recess_d",
+            "ring_lip_wall", "dial_ledge_overlap", "flange_to_strap_margin", "cb_seal",
         ]
         d = self.as_dict()
         return "\n".join(f"{k:>24s} = {d[k]:.3f}" if isinstance(d[k], float) else f"{k:>24s} = {d[k]}" for k in keys)
@@ -365,6 +386,7 @@ def resin() -> Params:
         density_case=1.15,
         density_caseback=1.15,
         density_ring=1.15,
+        density_dial=1.15,
     )
 
 
