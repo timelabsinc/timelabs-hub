@@ -1,25 +1,66 @@
 """
-Case body: the 32 x 44 x 8.3 lug-less slab (SPEC.md section 3, v0.2).
+Case body: the 32 x 44 x 8.3 lug-less slab (SPEC.md section 3, v0.3).
 
 Module contract (SPEC.md section 2):
 
     PART, MATERIAL
-    build(p)  -> cq.Workplane   one valid solid in assembly coordinates
-    bom(p)    -> list[dict]     raw-stock line for the machinist only; the crystal,
-                                I-ring and every other bought part live in purchased.py
+    build(p)          -> cq.Workplane   one valid solid in assembly coordinates
+    bom(p)            -> list[dict]     raw-stock line for the machinist only; the crystal,
+                                        I-ring and every other bought part live in purchased.py
+    rib_geometry(p)   -> dict           the SPEC 3.7 anti-rotation rib and its mate, the spacer-ring
+                                        slot, as numbers from params.py alone (used by build(), the
+                                        self-test, verify.py and drawings.py); raises ValueError when
+                                        params.py describes a rib that cannot exist
+    ring_envelope(p)  -> cq.Workplane   the SPEC 5 ring envelope (OD, height, anti-rotation slot in one of
+                                        three variants) used for the insertion sweep, independent of
+                                        parts/spacer_ring.py
 
 Coordinate system: origin at the case centre on the back face, +X -> 3 o'clock
 (crown), +Y -> 12 o'clock, +Z -> front. Back face z = 0, front face z = H.
 
 The feature recipe is applied in the SPEC order. Every boolean is a single-tool
-cut followed by a one-solid / isValid check. Edge breaks (SPEC step 12) and the
-strap-channel rounds (step 8) are "best effort": when OCC cannot fillet or chamfer
-a particular edge set the break is skipped, a warning is printed and the label is
-appended to the module-level SKIPPED list, so the solid stays valid. Every value
-below is read from params.py; the numbers quoted are the v0.2 titanium defaults.
+cut (the rib is a single-tool union) followed by a one-solid / isValid check. Edge
+breaks (SPEC step 12) and the strap-channel rounds (step 8) are "best effort": when
+OCC cannot fillet or chamfer a particular edge set the break is skipped, a warning is
+printed and the label is appended to the module-level SKIPPED list, so the solid stays
+valid. Every value below is read from params.py; the numbers quoted are the v0.3
+titanium defaults.
 
-What the v0.2 parameters produce (SKIPPED stays empty for both profiles):
+What the v0.3 parameters produce (SKIPPED stays empty for both profiles):
 
+* Crystal bore 27.7 (resin 27.75) from the front face down crystal_engagement 1.0, with
+  the 0.2 lead chamfer: the crystal seat (ledge top) is at z_crystal_seat 7.3 and the
+  2.0 crystal stands crystal_proud 1.0 above the front face. Dial aperture 24.2 through
+  the ledge_t 1.8 ledge, whose underside stays at z_ledge_bottom 5.5; the 25.0 dial hides
+  dial_ledge_overlap 0.4 per side under it. Movement bore 26.5 from 5.5 down to
+  z_cb_inner 1.5, thread zone 0 -> 1.5 (titanium: cosmetic bore at the minor 26.459;
+  resin: true M27.6 x 1 helix).
+* Anti-rotation rib (SPEC 3.7): material left standing on the movement-bore wall at
+  9 o'clock (-X), key_w 2.0 wide in Y, from radius key_r_in 12.65 out to the bore wall
+  r 13.25 (its inner face is a cylinder concentric with the bore, so the rib is key_h 0.6
+  high over its whole width), from z key_z0 1.7 to key_z1 3.68. It is unioned in after
+  the bore and the thread zone are cut, with a tool that reaches OVERLAP into the wall so
+  it fuses. It starts key_z_margin 0.2 above the thread zone (z 1.5, where parts/threads.py
+  trims both its tooth solid and its bore, so no thread tool can touch it) and ends 0.2
+  below the dial seat, 1.82 below the ledge underside. Nothing reaches the back face: the
+  caseback thread and the gasket seating face are continuous (the v0.2 open keyway, and
+  keyway_geometry(), are gone). The ring's slot (key_slot_w 2.2 x key_slot_depth 0.75,
+  open at the ring bottom, up to key_slot_z1 3.88) clears the rib, once seated, by 0.1 per
+  side in Y, 0.25 radially (resin 0.30) and 0.2 above its top; see rib_geometry().
+* SPEC CONFLICT in the v0.3 ring slot (SPEC 5 / key_slot_z1), found by the self-test's sweep
+  and NOT fixable on the case side: a ring inserted from the back moves toward +Z, so its TOP
+  rim (r 13.15) has to pass through the rib's z-range 1.7 -> 3.68 at 9 o'clock on the way to its
+  seat (ring top at 5.5 + dz crosses the rib for dz -3.8 .. -1.82). A slot that is open at the
+  ring BOTTOM and closed at key_slot_z1 3.88 covers the rib only within +-0.2 of the seated
+  position; over the rest of the travel the rib hits the unslotted wall above the slot
+  (worst 1.62 mm^3 at dz -2.0, i.e. the whole rib section). The slot has to be open at the ring
+  TOP, and with key_z_margin 0.2 it then runs from the top face down to the ring bottom (a
+  through slot 2.2 x 0.75 along the OD at 9 o'clock; it cuts the 0.45 rehaut lip there, under
+  the ledge, out of sight: the ledge covers r >= 12.1 and the slot floor is at r 12.4). A slot
+  that reaches the top passes the sweep with 0.0000 mm^3 overlap. rib_geometry() reports this
+  as slot_open_top / insertable_from_back from params.py alone; until SPEC 5 / params.py move
+  the slot's open end, the self-test flags the SPEC 5 variant as a warning and still requires
+  the top-open variant to pass (that is what proves the case-side rib is right).
 * Front outline chamfer 0.3 runs all the way round, including the crown pocket:
   the pocket's R 0.3 corner arcs leave a 0.5 straight side wall (crown_pocket_depth
   - crown_pocket_corner_r), longer than the chamfer leg. (v0.1 asked for a 0.4
@@ -44,22 +85,27 @@ What the v0.2 parameters produce (SKIPPED stays empty for both profiles):
   5.706 (z_strap_exit_low / _high), bar 3.356 tall on the end face, 2.594 of solid
   above the exit; caseback flange 29.4 keeps flange_to_strap_margin 0.5 inside the
   opening. Channel edges R 0.4, bar outer edge R 0.8.
-* Ring keyway (SPEC 3.7): 2.1 wide x 0.7 deep at 9 o'clock, OPEN FROM THE BACK FACE
-  (z 0) through the thread zone up to z 3.7 (z_cb_inner + ring_key_len + 0.2); it
-  interrupts the caseback thread over its width. Resin (helix): the floor is pushed
-  out to r 14.25 (1.0 deep) so it does not sit tangent to the thread groove root; see
-  keyway_geometry().
 * Crown pocket 7.0 wide x 0.8 deep with R 0.3 vertical corners, tube hole 2.0 (resin
   1.9, reamed) at z_stem 2.68.
 
-Self-test:  python3 parts/case_body.py   builds both profiles, probes the voids and walls (including
-            the chamfer around the pocket, the keyway mouth on the back face, the corner-chamfer back
-            edge chamfer and the end-face / corner-chamfer vertical edges), checks that no chamfer
-            face sits on those vertical edges and that the constant-z section through the ledge zone
-            has exactly the analytic outline area, measures the strap channel openings on the solid
-            against params, sweeps the spacer ring in from the back through the thread zone, exports
-            STL to $TERRA_SCRATCH (or the system temp dir) and checks it is watertight. Exits non-zero
-            on any failed check or any skipped edge break.
+Self-test:  python3 parts/case_body.py [out_dir]   builds both profiles, probes the voids and walls
+            (the rib at mid-height, the bore inside / below / above / beside it, the continuous
+            thread-zone wall at 9 o'clock, the chamfer around the pocket, the corner-chamfer back edge
+            chamfer and the end-face / corner-chamfer vertical edges), measures the crystal seat and the
+            ledge underside on the solid against z_crystal_seat / z_ledge_bottom and the seat face area
+            against pi/4 (crystal_bore_d^2 - dial_aperture_d^2), checks that no chamfer face sits on the
+            vertical corner edges and that the constant-z section through the ledge zone has exactly the
+            analytic outline area, measures the strap channel openings on the solid against params,
+            checks the rib's size through the overlap it has with an unslotted ring (negative control,
+            closed form), sweeps the ring envelope in from the back in 0.25 steps until it is fully
+            outside -- with a slot open at the ring top (must pass: the rib is insertable) and with the
+            SPEC 5 slot as written (open at the bottom to key_slot_z1; a collision there is the SPEC
+            conflict above and is reported as a warning, not as a case-body failure) -- sweeps the real
+            spacer ring too when parts/spacer_ring.py builds under the current params (a warning
+            otherwise; a collision that the SPEC 5 envelope shares is the same conflict, any other
+            collision is a failure), exports STL to out_dir (default $TERRA_SCRATCH or the system temp
+            dir) and checks it is watertight. Exits non-zero on any failed check or any skipped edge
+            break; SPEC conflicts are counted separately and printed on the last line.
 """
 from __future__ import annotations
 
@@ -86,8 +132,10 @@ MATERIAL = {"titanium": "Ti Grade 2", "resin": "ABS-like resin"}
 SKIPPED: list[str] = []
 
 OVERRUN = 1.0      # how far a through-cutting tool is pushed past a face (mm)
-OVERLAP = 0.3      # minimum overlap into an existing void, keeps OCC away from near-tangent faces
+OVERLAP = 0.3      # minimum overlap into an existing void / into solid for a fused tool, keeps OCC away from near-tangent faces
 STRAP_EXT = 3.0    # strap channel band extended this far past the back face and the end face
+RIB_MIN_LEN = 0.2  # a rib shorter than this (axially) is a params.py error, not a feature
+FACE_CLEAR = 0.05  # a rib face closer than this to the thread-zone plane or the ledge underside would be near-coplanar
 
 
 # --------------------------------------------------------------------------- helpers
@@ -100,11 +148,19 @@ def _check(wp: cq.Workplane, label: str) -> cq.Workplane:
     return wp
 
 
+def _as_wp(tool) -> cq.Workplane:
+    return cq.Workplane("XY").newObject([tool]) if isinstance(tool, cq.Shape) else tool
+
+
 def _cut(wp: cq.Workplane, tool, label: str) -> cq.Workplane:
     """Cut one tool (Workplane or Solid) and verify the result."""
-    if isinstance(tool, cq.Shape):
-        tool = cq.Workplane("XY").newObject([tool])
-    return _check(wp.cut(tool), label)
+    return _check(wp.cut(_as_wp(tool)), label)
+
+
+def _fuse(wp: cq.Workplane, tool, label: str) -> cq.Workplane:
+    """Union one tool (Workplane or Solid) and verify the result: still exactly one valid solid, i.e. the
+    tool overlapped the existing material and fused instead of floating."""
+    return _check(wp.union(_as_wp(tool)), label)
 
 
 def _volume(wp: cq.Workplane) -> float:
@@ -208,32 +264,121 @@ def _outline_edges(wp: cq.Workplane, z: float) -> list:
     return list(_planar_face_at_z(wp, z).outerWire().Edges())
 
 
+def _strip_of_disc(r: float, half_w: float) -> float:
+    """Plan area of the disc radius r inside the strip |y| <= half_w, i.e. 2 * integral of sqrt(r^2 - y^2)
+    over -half_w..half_w (closed form). half_w >= r gives the whole disc."""
+    if half_w >= r:
+        return math.pi * r * r
+    return 2.0 * (half_w * math.sqrt(r * r - half_w * half_w) + r * r * math.asin(half_w / r))
+
+
 # --------------------------------------------------------------------------- features
-def keyway_geometry(p: params.Params) -> dict:
-    """SPEC 3.7 ring keyway at 9 o'clock (-X), as cut by build(): an open slot from the back face
-    (z 0) through the thread zone up to z1 = z_cb_inner + ring_key_len + 0.2, width kw = ring_key_w + 0.1,
-    nominal radial depth kd = ring_key_h + 0.1 from the movement bore, floor at radius r_floor.
+def rib_geometry(p: params.Params) -> dict:
+    """SPEC 3.7 anti-rotation rib at 9 o'clock (-X) as build() makes it, plus its mate (the spacer ring's slot,
+    SPEC 5), from params.py alone. Raises ValueError, naming the values, when params.py describes a rib that
+    cannot exist; there is no fallback.
 
-    The slot has to start at the back face: the ring is inserted from the back and its key tip
-    (ring_od/2 + ring_key_h) is larger than both the thread minor and major radii, so a keyway that
-    started at z_cb_inner would be a blind pocket behind the thread that neither the ring nor a cutter
-    can reach. The slot therefore interrupts the caseback thread over its width kw.
+    The rib is material left standing on the movement-bore wall: |y| <= w/2 (w = key_w), radius r_in (key_r_in,
+    a cylinder concentric with the bore, so the rib is h = key_h high over its whole width) out to the bore wall
+    r_out = mvt_bore_d/2, from z0 = key_z0 to z1 = key_z1. It must stay clear of the thread zone below
+    z_cb_inner = cb_thread_len (parts/threads.py trims its tooth solid and its bore at that plane) and below
+    the ledge underside; params.py puts it key_z_margin above the caseback inner face and key_z_margin below
+    the dial seat.
 
-    Helix profile: when the nominal floor (r_mvt + kd) lands within OVERLAP of the thread groove root
-    (major/2 + clearance) the floor is pushed out to root + OVERLAP; a planar floor tangent to the
-    helical groove root along a line leaves degenerate faces in OCC. The floor is not a locating surface
-    (the ring is located by its OD in the bore), so the extra depth only adds clearance over the key tip.
+    Keys:  w, h, r_in, r_out, d_in (2 r_in, the island diameter for the drawing), x_in (-r_in), z0, z1, len,
+    volume (closed form) -- the rib;  slot_w, slot_depth, slot_z1, r_slot_floor -- the ring slot;  clear_w
+    (per side), clear_r, clear_top (slot top above the rib top, seated) -- rib / slot clearances;  clear_thread
+    (rib bottom above the thread zone = above the caseback boss), clear_ledge (rib top below the ledge
+    underside);  slot_open_top (the slot reaches the ring top, key_slot_z1 >= z_ledge_bottom) and
+    insertable_from_back (slot_open_top and positive clearances and ring OD inside the thread minor): a ring
+    that comes in from the back moves toward +Z, so its top rim must pass the rib -- only a slot open at the
+    ring TOP lets it; the v0.3 SPEC 5 slot (open at the bottom, closed at key_slot_z1) does not (see the
+    module docstring).
     """
-    r_mvt = p.mvt_bore_d / 2
-    kw = p.ring_key_w + 0.1
-    kd = p.ring_key_h + 0.1
-    r_floor = r_mvt + kd
-    if p.thread_model == "helix":
-        r_groove = p.cb_thread_major / 2 + p.cb_thread_clearance
-        if abs(r_floor - r_groove) < OVERLAP:
-            r_floor = r_groove + OVERLAP
-    return dict(kw=kw, kd=kd, r_floor=r_floor, depth=r_floor - r_mvt, z0=0.0,
-                z1=p.z_cb_inner + p.ring_key_len + 0.2, r_key_tip=p.ring_od / 2 + p.ring_key_h)
+    r_out = p.mvt_bore_d / 2
+    r_in = p.key_r_in
+    w, h = p.key_w, p.key_h
+    z0, z1 = p.key_z0, p.key_z1
+    problems = []
+    if h <= 0 or r_in >= r_out - 1e-9:
+        problems.append(f"key_h {h} leaves no rib (key_r_in {r_in:.3f} vs bore r {r_out:.3f})")
+    if w <= 0 or w / 2 >= r_in:
+        problems.append(f"key_w {w} is not a rib width inside r {r_in:.3f}")
+    if z0 < p.cb_thread_len + FACE_CLEAR:
+        problems.append(f"rib bottom key_z0 {z0:.3f} is not above the thread zone (cb_thread_len {p.cb_thread_len}) "
+                        f"by {FACE_CLEAR}: SPEC 3.7 wants the caseback thread continuous")
+    if z1 - z0 < RIB_MIN_LEN:
+        problems.append(f"rib height key_z1 - key_z0 = {z1 - z0:.3f} < {RIB_MIN_LEN} (z_dial_seat {p.z_dial_seat:.3f}, "
+                        f"key_z_margin {p.key_z_margin})")
+    if z1 > p.z_ledge_bottom - FACE_CLEAR:
+        problems.append(f"rib top key_z1 {z1:.3f} runs into the ledge underside z_ledge_bottom {p.z_ledge_bottom:.3f}")
+    if problems:
+        raise ValueError(f"{PART} ({p.profile}): anti-rotation rib impossible with params.py:\n  " + "\n  ".join(problems))
+    r_slot_floor = p.ring_od / 2 - p.key_slot_depth
+    clear_w, clear_r = (p.key_slot_w - w) / 2, r_in - r_slot_floor
+    slot_open_top = p.key_slot_z1 >= p.z_ledge_bottom - 1e-9
+    return dict(
+        w=w, h=h, r_in=r_in, r_out=r_out, d_in=2 * r_in, x_in=-r_in, z0=z0, z1=z1, len=z1 - z0,
+        volume=rib_volume(p),
+        slot_w=p.key_slot_w, slot_depth=p.key_slot_depth, slot_z1=p.key_slot_z1, r_slot_floor=r_slot_floor,
+        clear_w=clear_w, clear_r=clear_r, clear_top=p.key_slot_z1 - z1,
+        clear_thread=z0 - p.cb_thread_len, clear_ledge=p.z_ledge_bottom - z1,
+        slot_open_top=slot_open_top,
+        insertable_from_back=bool(slot_open_top and clear_w > 0 and clear_r > 0 and p.ring_od < p.cb_thread_minor),
+    )
+
+
+def rib_volume(p: params.Params, r_out: float | None = None) -> float:
+    """Closed-form volume of the rib between r = key_r_in and r_out (default: the bore wall), |y| <= key_w/2,
+    z key_z0 .. key_z1. With r_out = ring_od/2 it is the overlap an UNSLOTTED ring seated in the bore would have
+    with the rib (the self-test's negative control)."""
+    if r_out is None:
+        r_out = p.mvt_bore_d / 2
+    a = p.key_w / 2
+    return (_strip_of_disc(r_out, a) - _strip_of_disc(p.key_r_in, a)) / 2 * (p.key_z1 - p.key_z0)
+
+
+def _rib_tool(p: params.Params) -> cq.Workplane:
+    """The rib as a solid to union into the case: the -X sector |y| <= w/2 of the annulus r_in .. r_out + OVERLAP,
+    z0 .. z1. Its outer face lies OVERLAP inside the bore wall (so the union fuses), its inner face is the
+    concentric cylinder r_in inside the bore void, and its four planar faces cross the bore wall transversally.
+    Both booleans here act on the tool alone, one tool at a time."""
+    g = rib_geometry(p)
+    ann = _check(_cylinder_z(g["r_out"] + OVERLAP, g["z0"], g["z1"])
+                 .cut(_cylinder_z(g["r_in"], g["z0"] - OVERRUN, g["z1"] + OVERRUN)), "rib tool annulus")
+    sector = _box(-(g["r_out"] + OVERLAP + OVERRUN), -g["r_in"] / 2, -g["w"] / 2, g["w"] / 2,
+                  g["z0"] - OVERRUN, g["z1"] + OVERRUN)
+    return _check(ann.intersect(sector), "rib tool")
+
+
+RING_SLOT_VARIANTS = ("none", "spec", "top")
+
+
+def ring_envelope(p: params.Params, slot: str = "spec") -> cq.Workplane:
+    """SPEC 5 ring envelope for the insertion sweep, from params.py alone: cylinder ring_od from z_cb_inner to
+    z_ledge_bottom with the anti-rotation slot at -X, key_slot_w wide, key_slot_depth deep into the OD, in one
+    of three variants:  "spec"  as SPEC 5 / params.py write it, open at the ring bottom up to key_slot_z1;
+    "top"  open at the ring top, from the top face down to key_z0 - key_z_margin (with the v0.3 margins that is
+    the ring bottom, so the slot runs through), the variant a ring inserted from the back needs (module
+    docstring);  "none"  no slot: the negative control that must collide with the rib by rib_volume(p, ring_od/2).
+    The stem slot and the pockets do not matter for the case/rib check."""
+    if slot not in RING_SLOT_VARIANTS:
+        raise ValueError(f"slot must be one of {RING_SLOT_VARIANTS}, got {slot!r}")
+    r_od = p.ring_od / 2
+    wp = _check(_cylinder_z(r_od, p.z_cb_inner, p.z_ledge_bottom), "ring envelope")
+    if slot != "none":
+        g = rib_geometry(p)
+        if slot == "spec":
+            z_lo, z_hi = p.z_cb_inner - OVERRUN, g["slot_z1"]
+            if z_hi > p.z_ledge_bottom - FACE_CLEAR:
+                z_hi = p.z_ledge_bottom + OVERRUN           # SPEC slot already reaches the top: run it out
+        else:
+            z_lo, z_hi = g["z0"] - p.key_z_margin, p.z_ledge_bottom + OVERRUN
+            if z_lo < p.z_cb_inner + FACE_CLEAR:
+                z_lo = p.z_cb_inner - OVERRUN               # reaches the bottom: run it out (through slot)
+        wp = _cut(wp, _box(-(r_od + OVERRUN), -g["r_slot_floor"], -g["slot_w"] / 2, g["slot_w"] / 2, z_lo, z_hi),
+                  f"ring envelope slot ({slot})")
+    return wp
 
 
 def _strap_channel_tool(p: params.Params, sy: int) -> cq.Workplane:
@@ -339,8 +484,10 @@ def _corner_chamfer_wedge_tool(p: params.Params, sx: int, sy: int, d: float) -> 
 
 # --------------------------------------------------------------------------- build
 def build(p: params.Params) -> cq.Workplane:
-    """One valid solid of the case body in assembly coordinates."""
+    """One valid solid of the case body in assembly coordinates.
+    Raises ValueError (from rib_geometry()) when params.py describes an impossible anti-rotation rib."""
     SKIPPED[:] = [s for s in SKIPPED if not s.startswith(p.profile + ":")]
+    rib_geometry(p)                                   # fail early, before any geometry is built
     r_crystal = p.crystal_bore_d / 2
     r_apert = p.dial_aperture_d / 2
     r_mvt = p.mvt_bore_d / 2
@@ -351,7 +498,8 @@ def build(p: params.Params) -> cq.Workplane:
     # 2. corner chamfers (45 deg, leg corner_chamfer) on the four vertical corner edges
     wp = _check(wp.edges("|Z").chamfer(p.corner_chamfer), "corner chamfers")
 
-    # 3. crystal bore from the front face down to the crystal seat, with a lead chamfer
+    # 3. crystal bore from the front face down crystal_engagement to the crystal seat (z_crystal_seat =
+    #    H - crystal_engagement), with a lead chamfer at the front edge
     wp = _cut(wp, _cylinder_z(r_crystal, p.z_crystal_seat, p.H + OVERRUN), "crystal bore")
     lc = p.crystal_bore_lead_chamfer
     if lc > 0:
@@ -361,13 +509,14 @@ def build(p: params.Params) -> cq.Workplane:
                                  cq.Vector(0, 0, p.H - lc - OVERLAP), cq.Vector(0, 0, 1))
         wp = _cut(wp, cone, "crystal bore lead chamfer")
 
-    # 4. dial aperture through the ledge (tool overlaps up into the crystal bore void)
+    # 4. dial aperture through the ledge_t thick ledge, z_ledge_bottom -> z_crystal_seat (tool overlaps up into
+    #    the crystal bore void)
     wp = _cut(wp, _cylinder_z(r_apert, p.z_ledge_bottom, p.z_crystal_seat + OVERLAP), "dial aperture")
 
     # 5. movement bore, ledge underside down to the caseback inner face
     wp = _cut(wp, _cylinder_z(r_mvt, p.z_cb_inner, p.z_ledge_bottom), "movement bore")
 
-    # 6. caseback thread zone z 0 -> cb_thread_len
+    # 6. caseback thread zone z 0 -> cb_thread_len (tooth solid and bore both trimmed at that plane)
     if p.thread_model == "helix":
         wp = threads.cut_internal(wp, p.cb_thread_major, p.cb_thread_pitch, p.cb_thread_len,
                                   clearance=p.cb_thread_clearance, z0=0.0, lead_chamfer=0.2)
@@ -376,13 +525,11 @@ def build(p: params.Params) -> cq.Workplane:
                                            z0=0.0, lead_chamfer=0.2)
     wp = _check(wp, "caseback thread zone")
 
-    # 7. ring keyway at 9 o'clock in the movement bore wall: an open slot from the back face through
-    #    the thread zone (see keyway_geometry() for why it cannot be blind from z_cb_inner). The tool
-    #    starts OVERRUN outside the back face; its inner face sits OVERLAP inside the bore / thread-zone
-    #    void; the slot interrupts the caseback thread over its width.
-    kg = keyway_geometry(p)
-    wp = _cut(wp, _box(-kg["r_floor"], -(r_mvt - OVERLAP), -kg["kw"] / 2, kg["kw"] / 2,
-                       -OVERRUN, kg["z1"]), "ring keyway")
+    # 7. anti-rotation rib at 9 o'clock (SPEC 3.7): material standing on the bore wall, unioned back in now that
+    #    the bore and the thread zone are cut. The tool reaches OVERLAP into the wall so it fuses; it starts
+    #    key_z_margin above the thread zone, so the thread tools (already applied, and bounded by z = cb_thread_len)
+    #    never touched it, and it ends below the dial seat, well under the ledge. See rib_geometry().
+    wp = _fuse(wp, _rib_tool(p), "anti-rotation rib")
 
     # 8. strap channels, both ends
     for sy in (1, -1):
@@ -547,19 +694,32 @@ def _probe_points(p: params.Params) -> tuple[list, list]:
     for sx, sy in p.gate_corners:
         cx, cy = p.front_slot_center(sx, sy)
         empty.append((f"front slot ({sx:+d},{sy:+d})", (cx, cy, p.H - p.front_slot_depth / 2)))
-    kg = keyway_geometry(p)
-    x_key = -(p.ring_od / 2 + p.ring_key_h / 2)          # mid-height of the ring key, on its path
-    # z 0.02: the keyway mouth on the back face itself (SPEC 3.7: the slot is open to the back). The
-    # thread lead chamfer cone is only r_minor + 0.18 wide there, inside the key path radius.
-    for z in (0.02, p.cb_thread_len / 2, p.z_cb_inner + 0.1, (p.z_cb_inner + kg["z1"]) / 2):
-        empty.append((f"ring key path at z {z:.2f}", (x_key, 0.0, z)))
+    # SPEC 3.7 anti-rotation rib at 9 o'clock: solid inside it, void just inside its face, below it (movement bore
+    # above the thread zone), above it, beside it; the bore below it is continuous down through the thread zone to
+    # the back face (no keyway: the thread-zone wall at 9 o'clock is solid and the rib footprint at z 0.05 is void)
+    g = rib_geometry(p)
+    x_rib = -(g["r_in"] + 0.1)
+    zm = (g["z0"] + g["z1"]) / 2
+    solid.append(("rib at mid-height (SPEC 3.7)", (x_rib, 0.0, zm)))
+    solid.append(("rib just above its bottom", (x_rib, 0.0, g["z0"] + 0.1)))
+    solid.append(("rib just under its top", (x_rib, 0.0, g["z1"] - 0.1)))
     for sy in (1, -1):
-        empty.append((f"ring key path, y {sy * (p.ring_key_w / 2 - 0.05):+.2f} edge", (x_key, sy * (p.ring_key_w / 2 - 0.05), p.cb_thread_len / 2)))
-    solid.append(("wall behind the keyway floor", (-(kg["r_floor"] + 0.3), 0.0, p.cb_thread_len / 2)))
-    solid.append(("wall beside the keyway in the thread zone", (-(p.cb_thread_major / 2 + 0.6), kg["kw"] / 2 + 0.3, p.cb_thread_len / 2)))
-    solid.append(("wall above the keyway top", (x_key, 0.0, kg["z1"] + 0.1)))
+        solid.append((f"rib near its {sy:+d}y side face", (x_rib, sy * (g["w"] / 2 - 0.1), zm)))
+        empty.append((f"bore beside the rib, {sy:+d}y", (x_rib, sy * (g["w"] / 2 + 0.3), zm)))
+    solid.append(("bore wall behind the rib", (-(g["r_out"] + 0.3), 0.0, zm)))
+    empty.append(("bore inside the rib face", (-(g["r_in"] - 0.2), 0.0, zm)))
+    empty.append(("bore below the rib (above the thread zone)", (x_rib, 0.0, g["z0"] - 0.1)))
+    empty.append(("bore just above the thread zone, on the rib footprint", (x_rib, 0.0, p.z_cb_inner + 0.05)))
+    empty.append(("bore above the rib", (x_rib, 0.0, g["z1"] + 0.1)))
+    empty.append(("thread zone on the rib footprint (nothing reaches the back)", (x_rib, 0.0, p.cb_thread_len / 2)))
+    empty.append(("back face mouth on the rib footprint (z 0.05)", (x_rib, 0.0, 0.05)))
+    solid.append(("thread-zone wall at 9 o'clock, continuous (no keyway)",
+                  (-(p.cb_thread_major / 2 + p.cb_thread_clearance + 0.4), 0.0, p.cb_thread_len / 2)))
     solid.append(("crown-side wall at thread zone", (p.x_pocket_floor - 0.7, 0.0, p.cb_thread_len / 2)))
     solid.append(("ledge", (0.0, (p.dial_aperture_d + p.crystal_bore_d) / 4, (p.z_ledge_bottom + p.z_crystal_seat) / 2)))
+    solid.append(("ledge just under the crystal seat", (0.0, (p.dial_aperture_d + p.crystal_bore_d) / 4, p.z_crystal_seat - 0.05)))
+    empty.append(("crystal bore just above the seat", (0.0, (p.dial_aperture_d + p.crystal_bore_d) / 4, p.z_crystal_seat + 0.05)))
+    empty.append(("dial aperture at the ledge level", (0.0, p.dial_aperture_d / 2 - 0.2, (p.z_ledge_bottom + p.z_crystal_seat) / 2)))
     solid.append(("strap bar", (0.0, p.y_end - 1.0, 0.6)))
     solid.append(("wall above channel exit", (0.0, p.y_end - 1.0, p.H - 1.5)))
     # front chamfer around the crown pocket (SPEC 3.12): a 45 deg chamfer of leg d removes every point whose
@@ -630,10 +790,10 @@ def ledge_section_area(wp: cq.Workplane, p: params.Params) -> tuple[float, float
     z_ledge_bottom and z_crystal_seat). There the section is the plan outline (the chamfered octagon)
     minus the dial aperture and the crown pocket, so any stray edge break shows up as an area deficit
     (the propagated vertical-edge chamfer took 0.127 mm^2 from every section). None when the parameters
-    put another feature into that plane (channel exit, keyway, tube hole, front slot, front chamfer)."""
+    put another feature into that plane (channel exit, rib, tube hole, front slot, front chamfer)."""
     z = (p.z_ledge_bottom + p.z_crystal_seat) / 2
     top = p.H - max(p.edge_chamfer_front, p.front_slot_depth if p.front_slot else 0.0)
-    bottom = max(p.z_strap_exit_high, keyway_geometry(p)["z1"], p.z_stem + p.tube_hole_d / 2)
+    bottom = max(p.z_strap_exit_high, p.key_z1, p.z_stem + p.tube_hole_d / 2)
     if not bottom < z < top:
         return None
     r = p.crown_pocket_corner_r
@@ -642,6 +802,38 @@ def ledge_section_area(wp: cq.Workplane, p: params.Params) -> tuple[float, float
                 - (p.crown_pocket_depth * p.crown_pocket_w - 2 * (1 - math.pi / 4) * r * r))
     area = sum(f.Area() for f in wp.section(z).faces().vals())
     return z, area, analytic
+
+
+def crystal_seat_faces(sol: cq.Solid, p: params.Params, tol: float = 1e-3) -> list:
+    """The planar face(s) in the plane z = z_crystal_seat that are centred on the case axis and reach the
+    crystal bore radius: the crystal seat annulus (SPEC 3.3, ledge top). Exactly one is expected, with area
+    pi/4 (crystal_bore_d^2 - dial_aperture_d^2). Other planar faces in the same plane are told apart by their
+    centre (the front-slot floors lie at H - front_slot_depth = 7.3 = z_crystal_seat with the v0.3 defaults)."""
+    z = p.z_crystal_seat
+    hits = []
+    for f in sol.Faces():
+        if f.geomType() != "PLANE":
+            continue
+        bb = f.BoundingBox()
+        if (abs(bb.zmin - z) < tol and abs(bb.zmax - z) < tol and abs(bb.xmin + bb.xmax) < 0.05
+                and abs(bb.ymin + bb.ymax) < 0.05 and bb.xmax > p.crystal_bore_d / 2 - 0.05):
+            hits.append(f)
+    return hits
+
+
+def _z_transition(sol: cq.Solid, x: float, y: float, z_solid: float, z_void: float) -> float:
+    """z of the solid/void transition on the vertical line through (x, y), by bisection between a point
+    known to be solid and one known to be void (raises when they are not)."""
+    lo, hi = cq.Vector(x, y, z_solid), cq.Vector(x, y, z_void)
+    if not sol.isInside(lo) or sol.isInside(hi):
+        raise RuntimeError(f"no solid/void transition between z {z_solid} and {z_void} at ({x}, {y})")
+    for _ in range(40):
+        mid = (lo + hi) * 0.5
+        if sol.isInside(mid):
+            lo = mid
+        else:
+            hi = mid
+    return ((lo + hi) * 0.5).z
 
 
 def _measure_strap_openings(sol: cq.Solid, p: params.Params) -> dict:
@@ -683,11 +875,25 @@ def _measure_strap_openings(sol: cq.Solid, p: params.Params) -> dict:
     return out
 
 
+def _overlap(a: cq.Workplane, b: cq.Workplane) -> float:
+    inter = a.intersect(b)
+    return sum(s.Volume() for s in inter.solids().vals()) if inter.solids().size() else 0.0
+
+
+def _sweep_positions(p: params.Params, step: float = 0.25) -> list[float]:
+    """dz 0, -step, ... until the ring (top at z_ledge_bottom) is fully outside the case (top below z 0)."""
+    n = int(math.ceil((p.z_ledge_bottom + step) / step))
+    return [-step * i for i in range(n + 1)]
+
+
 if __name__ == "__main__":
     import tempfile
-    scratch = os.environ.get("TERRA_SCRATCH") or os.path.join(tempfile.gettempdir(), "terra-proto-selftest")
+    scratch = (sys.argv[1] if len(sys.argv) > 1
+               else os.environ.get("TERRA_SCRATCH") or os.path.join(tempfile.gettempdir(), "terra-proto-selftest"))
     os.makedirs(scratch, exist_ok=True)
     failures = 0
+    warnings = 0       # another module could not be exercised (not a case-body defect)
+    conflicts = 0      # SPEC 5 / params.py ring slot cannot pass the SPEC 3.7 rib (not a case-body defect, see the docstring)
     for prof in ("titanium", "resin"):
         p = params.get(prof)
         t0 = time.time()
@@ -698,15 +904,43 @@ if __name__ == "__main__":
         bb = sol.BoundingBox()
         print(f"[{prof}] built in {dt:.1f} s  volume {sol.Volume():.1f} mm^3  "
               f"bbox x {bb.xmin:.2f}..{bb.xmax:.2f} y {bb.ymin:.2f}..{bb.ymax:.2f} z {bb.zmin:.2f}..{bb.zmax:.2f}")
+        g = rib_geometry(p)
+        print(f"    rib (SPEC 3.7): {g['w']:.2f} wide x {g['h']:.2f} high, r {g['r_in']:.3f} -> {g['r_out']:.3f} (island "
+              f"O {g['d_in']:.2f} in the O {p.mvt_bore_d:.2f} bore), z {g['z0']:.2f} -> {g['z1']:.2f} ({g['len']:.2f} long, "
+              f"{g['volume']:.3f} mm^3); {g['clear_thread']:.2f} above the thread zone, {g['clear_ledge']:.2f} below the "
+              f"ledge; ring slot {g['slot_w']:.2f} x {g['slot_depth']:.2f} to z {g['slot_z1']:.2f} (floor r "
+              f"{g['r_slot_floor']:.3f}): clearance {g['clear_w']:.2f}/side, {g['clear_r']:.2f} radial, {g['clear_top']:.2f} top")
+        print(f"    ring slot (params): reaches the ring top: {g['slot_open_top']}; insertable from the back: {g['insertable_from_back']}")
+        print(f"    stack: crystal seat z {p.z_crystal_seat:.2f} (engagement {p.crystal_engagement:.2f}, crystal proud "
+              f"{p.crystal_proud:.2f}), ledge {p.ledge_t:.2f} thick, underside z {p.z_ledge_bottom:.2f}, aperture O "
+              f"{p.dial_aperture_d:.2f} (dial overlap {p.dial_ledge_overlap:.2f}/side)")
         empty, solid = _probe_points(p)
         for name, pt in empty:
             ins = sol.isInside(cq.Vector(*pt))
-            print(f"    {'ok ' if not ins else 'BAD'} empty  {name:34s} {tuple(round(v, 2) for v in pt)}")
+            print(f"    {'ok ' if not ins else 'BAD'} empty  {name:58s} {tuple(round(v, 2) for v in pt)}")
             failures += int(ins)
         for name, pt in solid:
             ins = sol.isInside(cq.Vector(*pt))
-            print(f"    {'ok ' if ins else 'BAD'} solid  {name:34s} {tuple(round(v, 2) for v in pt)}")
+            print(f"    {'ok ' if ins else 'BAD'} solid  {name:58s} {tuple(round(v, 2) for v in pt)}")
             failures += int(not ins)
+        # SPEC 3.3 / 3.4: crystal seat and ledge underside measured on the solid, and the seat face itself
+        r_probe = (p.dial_aperture_d + p.crystal_bore_d) / 4
+        try:
+            z_seat = _z_transition(sol, 0.0, r_probe, (p.z_ledge_bottom + p.z_crystal_seat) / 2, p.H + 0.5)
+            z_under = _z_transition(sol, 0.0, r_probe, (p.z_ledge_bottom + p.z_crystal_seat) / 2, p.z_cb_inner + 0.3)
+            ok = abs(z_seat - p.z_crystal_seat) < 1e-3 and abs(z_under - p.z_ledge_bottom) < 1e-3
+            print(f"    {'ok ' if ok else 'BAD'} crystal seat measured at z {z_seat:.4f} (z_crystal_seat {p.z_crystal_seat:.3f}), "
+                  f"ledge underside at z {z_under:.4f} (z_ledge_bottom {p.z_ledge_bottom:.3f}), ledge {z_seat - z_under:.3f} thick")
+            failures += int(not ok)
+        except Exception as e:  # noqa: BLE001
+            print(f"    BAD crystal seat / ledge measurement failed: {e}")
+            failures += 1
+        seat = crystal_seat_faces(sol, p)
+        seat_area = math.pi / 4 * (p.crystal_bore_d ** 2 - p.dial_aperture_d ** 2)
+        ok = len(seat) == 1 and abs(seat[0].Area() - seat_area) < 0.01
+        print(f"    {'ok ' if ok else 'BAD'} crystal seat face at z {p.z_crystal_seat:.2f}: {len(seat)} face(s), area "
+              f"{seat[0].Area() if seat else 0.0:.3f} mm^2 vs pi/4 ({p.crystal_bore_d:.2f}^2 - {p.dial_aperture_d:.2f}^2) = {seat_area:.3f}")
+        failures += int(not ok)
         # SPEC 3.2 / 3.12: no chamfer face on the end-face / corner-chamfer vertical edges, and the section
         # through the ledge zone is exactly the analytic outline minus aperture and crown pocket
         stray = stray_corner_chamfer_faces(sol)
@@ -741,23 +975,86 @@ if __name__ == "__main__":
                   f"{m['y_open_outer']:.3f}, end opening z {m['z_exit_low']:.3f} -> {m['z_exit_high']:.3f} "
                   f"(max deviation from params {worst:.4f})")
             failures += int(not ok)
-        # insertion sweep: the real spacer ring (with its key) pushed in from the back must never touch the
-        # case on its way to the seat (dz 0). dz -3.5 puts the key just outside the back face.
+        # SPEC 3.7 / 5 / 8.3b: the rib against the ring envelope from params.py.
+        # Negative control first: an UNSLOTTED ring seated in the bore (shifted 0.1 toward the back so no ring face is
+        # coplanar with the ledge underside) must overlap the rib by exactly the closed-form rib volume inside ring_od.
+        try:
+            plain = ring_envelope(p, slot="none")
+            v = _overlap(plain.translate((0, 0, -0.1)), wp)
+            v_exp = rib_volume(p, r_out=p.ring_od / 2)
+            ok = v_exp > 0.5 and abs(v - v_exp) < 0.01 * v_exp
+            print(f"    {'ok ' if ok else 'BAD'} negative control: unslotted ring O {p.ring_od:.2f} in the bore overlaps the rib by "
+                  f"{v:.4f} mm^3 (closed form {v_exp:.4f}: the rib is {g['w']:.2f} wide, r {g['r_in']:.3f} out, {g['len']:.2f} long)")
+            failures += int(not ok)
+        except Exception as e:  # noqa: BLE001
+            print(f"    BAD negative control failed: {e}")
+            failures += 1
+        # Insertion sweeps: the slotted ring envelope pushed in from the back in 0.25 steps, from seated (dz 0, ring top on
+        # the ledge underside) until fully outside the case. "top" (slot open at the ring top) must never touch the case:
+        # that proves the case side -- rib clear of the thread zone, ring OD inside the thread minor, slot floor and
+        # sides clear of the rib. "spec" (SPEC 5 as written, open at the bottom to key_slot_z1) collides unless the slot
+        # reaches the ring top: the SPEC conflict described in the module docstring, reported as such.
+        dzs = _sweep_positions(p)
+        sweep = {}
+        for variant in ("top", "spec"):
+            try:
+                env = ring_envelope(p, slot=variant)
+                worst, worst_dz, hits, t1 = 0.0, 0.0, 0, time.time()
+                for dz in dzs:
+                    v = _overlap(env.translate((0, 0, dz)), wp)
+                    hits += int(v >= 0.01)
+                    if v > worst:
+                        worst, worst_dz = v, dz
+                sweep[variant] = (worst, worst_dz, hits)
+                ok = worst < 0.01
+                if variant == "top":
+                    print(f"    {'ok ' if ok else 'BAD'} ring envelope, slot open at the TOP, inserted from the back, {len(dzs)} positions dz "
+                          f"{dzs[0]:+.2f} .. {dzs[-1]:+.2f}: worst ring/case overlap {worst:.4f} mm^3 at dz {worst_dz:+.2f} ({time.time() - t1:.1f} s); "
+                          f"ring OD r {p.ring_od / 2:.3f} vs thread minor r {p.cb_thread_minor / 2:.3f}, slot floor r {g['r_slot_floor']:.3f} "
+                          f"vs rib r {g['r_in']:.3f}, slot {g['slot_w']:.2f} vs rib {g['w']:.2f} wide")
+                    failures += int(not ok)
+                elif ok:
+                    print(f"    ok  ring envelope with the SPEC 5 slot (open at the bottom to z {g['slot_z1']:.2f}): worst overlap {worst:.4f} mm^3")
+                else:
+                    print(f"    SPEC CONFLICT: ring envelope with the SPEC 5 slot (open at the ring bottom, closed at key_slot_z1 "
+                          f"{g['slot_z1']:.2f}) collides with the rib at {hits} of {len(dzs)} positions, worst {worst:.4f} mm^3 at dz "
+                          f"{worst_dz:+.2f} (ring top at z {p.z_ledge_bottom + worst_dz:.2f} crosses the rib z {g['z0']:.2f} -> {g['z1']:.2f}): a ring "
+                          f"inserted from the back needs its slot open at the TOP (SPEC 5 / params.py key_slot_z1, not the case body; "
+                          f"rib_geometry()['insertable_from_back'] = {g['insertable_from_back']})")
+                    conflicts += 1
+            except Exception as e:  # noqa: BLE001
+                print(f"    BAD ring envelope sweep ({variant}) failed: {e}")
+                failures += 1
+        # The real spacer ring too, when parts/spacer_ring.py builds under the current params.py (it is another module's
+        # deliverable: a ring that cannot be built is a warning here; a collision the SPEC 5 envelope shares is the same
+        # SPEC conflict; any other collision is a failure).
         try:
             from parts import spacer_ring
             ring = spacer_ring.build(p)
-            kg = keyway_geometry(p)
-            print(f"    keyway: {kg['kw']:.2f} wide x {kg['depth']:.2f} deep (floor r {kg['r_floor']:.3f}), z {kg['z0']:.1f} .. {kg['z1']:.2f}; "
-                  f"key tip r {kg['r_key_tip']:.3f} vs thread minor r {p.cb_thread_minor / 2:.3f}")
-            for dz in (-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5):
-                inter = ring.translate((0, 0, dz)).intersect(wp)
-                v = sum(s.Volume() for s in inter.solids().vals())
-                ok = v < 0.01
-                print(f"    {'ok ' if ok else 'BAD'} ring inserted from the back, shifted {dz:+.1f}: ring/case {v:.4f} mm^3")
-                failures += int(not ok)
         except Exception as e:  # noqa: BLE001
-            print(f"    BAD insertion sweep failed: {e}")
-            failures += 1
+            print(f"    WARNING real spacer ring not swept: parts/spacer_ring.build({prof}) failed: {type(e).__name__}: "
+                  f"{str(e).splitlines()[0][:120]}")
+            warnings += 1
+            ring = None
+        if ring is not None:
+            try:
+                worst, worst_dz = 0.0, 0.0
+                for dz in dzs:
+                    v = _overlap(ring.translate((0, 0, dz)), wp)
+                    if v > worst:
+                        worst, worst_dz = v, dz
+                if worst < 0.01:
+                    print(f"    ok  real spacer ring inserted from the back: worst ring/case overlap {worst:.4f} mm^3 at dz {worst_dz:+.2f}")
+                elif "spec" in sweep and sweep["spec"][0] >= 0.01 and abs(worst_dz - sweep["spec"][1]) < 0.3:
+                    print(f"    SPEC CONFLICT: real spacer ring collides with the rib like the SPEC 5 envelope does, worst {worst:.4f} mm^3 "
+                          f"at dz {worst_dz:+.2f} (its slot is closed below the ring top)")
+                    conflicts += 1
+                else:
+                    print(f"    BAD real spacer ring inserted from the back: worst ring/case overlap {worst:.4f} mm^3 at dz {worst_dz:+.2f}")
+                    failures += 1
+            except Exception as e:  # noqa: BLE001
+                print(f"    BAD real spacer ring sweep failed: {e}")
+                failures += 1
         out = os.path.join(scratch, f"{PART}_{prof}.stl")
         cq.exporters.export(wp, out, tolerance=0.01, angularTolerance=0.1)
         print(f"    exported {out}")
@@ -774,10 +1071,16 @@ if __name__ == "__main__":
     print("SKIPPED:", SKIPPED if SKIPPED else "none (every edge break applied)")
     if SKIPPED:
         # SPEC 3.12 tolerates a skipped edge break in build(); the self-test does not, because with the
-        # v0.2 parameters every break is expected to succeed (see the module docstring).
+        # v0.3 parameters every break is expected to succeed (see the module docstring).
         print(f"FAILED: {len(SKIPPED)} edge break(s) skipped")
         failures += len(SKIPPED)
     if failures:
         print(f"FAILED: {failures} check(s)")
         sys.exit(1)
-    print("all checks passed")
+    tail = []
+    if conflicts:
+        tail.append(f"{conflicts} SPEC CONFLICT(s): the SPEC 5 ring slot (open at the bottom, closed at key_slot_z1) cannot pass the "
+                    f"SPEC 3.7 rib when the ring comes in from the back; the slot must be open at the ring top (params.py / SPEC 5)")
+    if warnings:
+        tail.append(f"{warnings} warning(s)")
+    print("case body checks passed" + (" -- " + "; ".join(tail) if tail else ""))

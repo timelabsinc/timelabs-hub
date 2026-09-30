@@ -1,10 +1,12 @@
 """
-spacer_ring -- POM movement holder / rehaut for the Terra-style GL32 case (SPEC.md section 5, v0.2).
+spacer_ring -- POM movement holder / rehaut for the Terra-style GL32 case (SPEC.md section 5, v0.3).
 
 Assembly coordinates (params.py): +X = 3 o'clock (crown), +Y = 12 o'clock, +Z = front; case back face z = 0.
 
     body    cylinder O ring_od from z = z_cb_inner to z = z_ledge_bottom (height ring_h = 4.0): it sits on the
-            caseback inner face and its top face touches the ledge underside, so the caseback clamps it
+            caseback inner face and its top face touches the ledge underside, so the caseback clamps it.  The
+            height tolerance on the drawing is +ring_axial_preload / +(ring_axial_preload + 0.03), i.e. +0.05/+0.08;
+            the model is the nominal ring_h
     pocket  the GL32 outline = circle O ring_pocket_l INTERSECT strip |x| <= ring_pocket_w/2 (flats at
             3 and 9 o'clock), open at the bottom, from the ring bottom up ring_step_h to the dial seat;
             the movement rests on the caseback, the dial rests on the step
@@ -13,30 +15,42 @@ Assembly coordinates (params.py): +X = 3 o'clock (crown), +Y = 12 o'clock, +Z = 
             = 0.45 Ti / 0.35 resin
     slot    stem slot at +X, width ring_stem_slot_w (in Y), through the wall, from the bottom up to
             z_stem + 1.2, so the movement drops in from the back with its stem fitted
-    key     anti-rotation key on the OD at -X: ring_key_w (Y) x ring_key_h (radial) x ring_key_len (axial,
-            from the bottom); it mates with the keyway the case body cuts at 9 o'clock, open to the back face
+    key     anti-rotation SLOT in the OD at -X (9 o'clock): width key_slot_w (in Y), flat floor key_slot_depth
+    slot    inside the OD (at x = -(ring_od/2 - key_slot_depth)), from the ring bottom (open, so the ring slides
+            over the rib the case body leaves on its movement-bore wall, SPEC 3.7) up to key_slot_z1.  It stays in
+            the thick lower wall (5.35 at -X in Ti): the floor is >= POCKET_WALL_MIN outside the pocket flat and
+            the slot never rises above the step, so the rehaut lip above it is untouched.  v0.2's raised key and
+            the case's open keyway are gone (ring_key_* no longer exist in params.py).
 
 Lip wall.  The ring is ALWAYS built full height z_cb_inner -> z_ledge_bottom with the rehaut lip above the
 step: there is no short-ring fallback and no warning list.  SPEC 5 requires ring_lip_wall >= LIP_WALL_MIN
 (0.3); when params.py describes a thinner lip (a dial too large for the movement bore) geometry() raises
 ValueError naming ring_od, ring_dial_recess_d, dial_d and the lip they would leave, and nothing is built.
 That is fixed in params.py (dial_d <= ring_od - ring_dial_clearance - fit_extra - 2 * LIP_WALL_MIN, or a
-larger movement bore); this module never quietly builds a different ring.
+larger movement bore); this module never quietly builds a different ring.  The same ValueError (listing every
+problem) covers an anti-rotation slot that would reach the pocket, rise into the lip or not clear the case rib.
 
 Boolean order matters for OCC: every feature is a single-tool operation, every tool face is either well
 inside solid material or overlaps >= OVERLAP into an existing void, and the only coincident faces are
-exact (the step plane and the slot top when z_stem + 1.2 lands on the dial seat, which is snapped to
-exact equality).  Every boolean is followed by _check(): exactly one solid, isValid().
+exact: the step plane, the stem slot top and the anti-rotation slot top when they land on the dial seat
+(both are snapped to exact equality when within COPLANAR_SNAP).  With the v0.3 defaults key_slot_z1 ==
+z_dial_seat == step plane, and the slot (0.75 deep) is deeper than the lip (0.45 / 0.35), so at the step the
+slot's ceiling coincides with the recess floor over its inner 0.30 (Ti) / 0.40 (resin) of depth: a
+2.2-wide window from the slot into the dial recess at 9 o'clock, exactly as SPEC 5's numbers describe
+(the dial, O 25.0, loses 0.1 x 2.2 of seat there -- noted, harmless).  Every boolean is followed by
+_check(): exactly one solid, isValid().
 
 geometry(p) returns the numbers build() uses: r_od, z0, z1, z_step, r_pl, x_flat, r_rec, lip_wall,
-z_slot_top, z_slot_cut_top, slot_w, key_w, key_h, key_len (z_top == z1 is kept for drawings.py).
+z_slot_top, z_slot_cut_top, slot_w (stem slot), key_slot_w, key_slot_depth, x_key_slot, z_key_slot_top,
+z_key_slot_cut_top, key_slot_wall, ring_h_tol (z_top == z1 is kept for drawings.py).
 outline_tool() / outline_area() are shared with parts/purchased.py for the movement envelope.
 
 Run `python3 parts/spacer_ring.py [out_dir]` from the terra-proto directory for the self-test: both
 profiles build, one valid solid each, the volume is checked against a closed-form value, the bounding box
-runs exactly z_cb_inner .. z_ledge_bottom, probe points prove every feature exists, STLs are written to
-out_dir (default: TERRA_SCRATCH or a directory under the system temp folder) and checked watertight, and
-a dial too large for a 0.3 lip must raise ValueError in both profiles.
+runs exactly z_cb_inner .. z_ledge_bottom and the full OD in X and Y, probe points prove every feature exists
+(including the SPEC 8.3b rib path through the slot), STLs are written to out_dir (default: TERRA_SCRATCH or a
+directory under the system temp folder) and checked watertight, a dial too large for a 0.3 lip and an
+impossible anti-rotation slot must raise ValueError.
 """
 from __future__ import annotations
 
@@ -58,10 +72,11 @@ PART = "spacer_ring"
 MATERIAL = {"titanium": "POM-C (acetal), machined", "resin": "ABS-like resin"}
 
 LIP_WALL_MIN = 0.30     # SPEC 5: thinnest rehaut lip allowed; a thinner lip is a params.py error, not a fallback
-POCKET_WALL_MIN = 0.50  # thinnest wall between the movement pocket and the OD
+POCKET_WALL_MIN = 0.50  # thinnest wall between the movement pocket and the OD / the anti-rotation slot floor
 OVERRUN = 1.0           # how far a cutting tool runs past a face it enters through
-OVERLAP = 0.3           # how far a tool reaches into an existing void / a fused tool reaches into solid
+OVERLAP = 0.3           # how far a tool reaches into an existing void
 COPLANAR_SNAP = 0.05    # |dz| below which a tool face is snapped onto an existing face (never near-coplanar)
+H_TOL_EXTRA = 0.03      # drawing: ring height +ring_axial_preload / +(ring_axial_preload + this)  (SPEC 5: +0.05/+0.08)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -122,6 +137,10 @@ def geometry(p: Params) -> dict:
     r_rec = p.ring_dial_recess_d / 2
     lip_wall = r_od - r_rec
     z_slot_top = p.z_stem + 1.2
+    # anti-rotation slot (SPEC 5): flat floor at |x| = x_key_slot, |y| <= key_slot_w/2, open at the bottom, up to key_slot_z1
+    x_key_slot = r_od - p.key_slot_depth
+    z_key_slot_top = p.key_slot_z1
+    key_slot_wall = x_key_slot - min(x_flat, r_pl)     # solid left between the slot floor and the pocket at 9 o'clock
 
     if lip_wall < LIP_WALL_MIN - 1e-9:
         raise ValueError(
@@ -152,53 +171,77 @@ def geometry(p: Params) -> dict:
         problems.append(f"stem slot top z_stem + 1.2 = {z_slot_top:.3f} is not above the ring bottom {z0}")
     if z_slot_top < p.z_stem + 0.45 + 0.2:
         problems.append("stem slot does not clear a 0.9 stem")
-    if p.ring_key_len > p.ring_h + 1e-6 or p.ring_key_len <= 0:
-        problems.append(f"ring_key_len {p.ring_key_len} is not within the ring height {p.ring_h:.3f}")
-    if p.ring_key_h <= 0 or p.ring_key_w <= 0 or p.ring_key_w / 2 >= r_od:
-        problems.append("ring key has no size")
+    # anti-rotation slot
+    if p.key_slot_w <= 0 or p.key_slot_w / 2 >= r_od:
+        problems.append(f"key_slot_w {p.key_slot_w:.2f} is not a slot in the OD (ring_od {p.ring_od:.2f})")
+    if p.key_slot_depth <= 0:
+        problems.append(f"key_slot_depth {p.key_slot_depth:.2f} <= 0: no anti-rotation slot")
+    if key_slot_wall < POCKET_WALL_MIN:
+        problems.append(f"anti-rotation slot floor at |x| = ring_od/2 - key_slot_depth = {r_od:.3f} - {p.key_slot_depth:.2f} = "
+                        f"{x_key_slot:.3f} leaves only {key_slot_wall:.3f} to the movement pocket (flat at |x| = "
+                        f"{x_flat:.3f}, radius {r_pl:.3f}) < {POCKET_WALL_MIN} (SPEC 5: the slot stays in the lower wall)")
+    if z_key_slot_top <= z0 + 0.5:
+        problems.append(f"anti-rotation slot top key_slot_z1 {z_key_slot_top:.3f} is not above the ring bottom {z0}")
+    if z_key_slot_top > z_step + COPLANAR_SNAP:
+        problems.append(f"anti-rotation slot top key_slot_z1 {z_key_slot_top:.3f} rises above the step {z_step:.3f} into the "
+                        f"rehaut lip (SPEC 5: the lip above the slot is untouched; slot depth {p.key_slot_depth:.2f} vs lip "
+                        f"{lip_wall:.2f})")
+    if p.key_slot_w < p.key_w or p.key_slot_depth < p.key_h or z_key_slot_top < p.key_z1 - 1e-9:
+        problems.append(f"anti-rotation slot {p.key_slot_w:.2f} wide x {p.key_slot_depth:.2f} deep up to z {z_key_slot_top:.3f} "
+                        f"does not clear the case rib {p.key_w:.2f} x {p.key_h:.2f} up to z {p.key_z1:.3f} (SPEC 3.7): the ring "
+                        f"cannot slide over it")
     if problems:
         raise ValueError(f"{PART} ({p.profile}): geometry impossible with params.py:\n  " + "\n  ".join(problems))
 
     if z_slot_top > z1 - COPLANAR_SNAP:
-        z_slot_cut_top = z1 + OVERRUN            # slot runs out through the top face
+        z_slot_cut_top = z1 + OVERRUN            # stem slot runs out through the top face
     elif abs(z_slot_top - z_step) < COPLANAR_SNAP:
         z_slot_cut_top = z_step                  # exactly on the step plane, never 0.01 off it
     else:
         z_slot_cut_top = z_slot_top
+    if abs(z_key_slot_top - z_step) < COPLANAR_SNAP:
+        z_key_slot_cut_top = z_step              # v0.3 default: the slot ceiling IS the step plane
+    else:
+        z_key_slot_cut_top = z_key_slot_top      # well inside the lower wall
     return dict(r_od=r_od, z0=z0, z1=z1, z_top=z1, z_step=z_step, r_pl=r_pl, x_flat=x_flat, r_rec=r_rec,
                 lip_wall=lip_wall, z_slot_top=z_slot_top, z_slot_cut_top=z_slot_cut_top, slot_w=p.ring_stem_slot_w,
-                key_w=p.ring_key_w, key_h=p.ring_key_h, key_len=p.ring_key_len)
+                key_slot_w=p.key_slot_w, key_slot_depth=p.key_slot_depth, x_key_slot=x_key_slot,
+                z_key_slot_top=z_key_slot_top, z_key_slot_cut_top=z_key_slot_cut_top, key_slot_wall=key_slot_wall,
+                ring_h_tol=(p.ring_axial_preload, p.ring_axial_preload + H_TOL_EXTRA))
 
 
 # --------------------------------------------------------------------------- part
 def build(p: Params) -> cq.Workplane:
     """ONE valid solid in assembly coordinates: the full-height ring z_cb_inner .. z_ledge_bottom.
-    Raises ValueError (from geometry()) when params.py leaves a rehaut lip < LIP_WALL_MIN."""
+    Raises ValueError (from geometry()) when params.py leaves a rehaut lip < LIP_WALL_MIN or describes an
+    impossible anti-rotation slot."""
     g = geometry(p)
     r_od, z0, z1, z_step = g["r_od"], g["z0"], g["z1"], g["z_step"]
 
     # 1. body: plain cylinder z0 .. z1 (bottom on the caseback inner face, top on the ledge underside)
     wp = _check(_cylinder_z(r_od, z0, z1), "body")
 
-    # 2. anti-rotation key on the OD at -X, fused first while the wall behind it is still solid.
-    #    Box reaches OVERLAP into the wall; bottom face exactly on the ring bottom plane.
-    key = _box(-(r_od + g["key_h"]), -(r_od - OVERLAP), -g["key_w"] / 2, g["key_w"] / 2, z0, z0 + g["key_len"])
-    wp = _check(wp.union(key), "key")
-
-    # 3. dial recess from the step plane up through the top: what is left around it is the rehaut lip.
+    # 2. dial recess from the step plane up through the top: what is left around it is the rehaut lip.
     #    The tool's floor at z_step is inside solid material at this point: a clean cut.
     wp = _check(wp.cut(_cylinder_z(g["r_rec"], z_step, z1 + OVERRUN)), "dial recess")
 
-    # 4. movement pocket, open at the bottom, up to the step. The tool overruns the bottom face and reaches
+    # 3. movement pocket, open at the bottom, up to the step. The tool overruns the bottom face and reaches
     #    OVERLAP above the step into the recess, so no face is near another face.
     wp = _check(wp.cut(outline_tool(g["r_pl"], g["x_flat"], z0 - OVERRUN, z_step + OVERLAP)), "movement pocket")
 
-    # 5. stem slot at +X through the wall, from the bottom to z_stem + 1.2. Inner end sits OVERLAP inside the
+    # 4. stem slot at +X through the wall, from the bottom to z_stem + 1.2. Inner end sits OVERLAP inside the
     #    pocket void, outer end OVERRUN outside the OD; the top face is either exactly on the step plane,
     #    well inside the lip, or out through the top (see geometry()).
     slot = _box(g["x_flat"] - OVERLAP, r_od + OVERRUN, -g["slot_w"] / 2, g["slot_w"] / 2,
                 z0 - OVERRUN, g["z_slot_cut_top"])
     wp = _check(wp.cut(slot), "stem slot")
+
+    # 5. anti-rotation slot in the OD at -X (SPEC 5): box from OVERRUN outside the OD in to the flat floor at
+    #    x = -x_key_slot (>= POCKET_WALL_MIN outside the pocket flat), |y| <= key_slot_w/2, from OVERRUN below the
+    #    bottom face (open) up to z_key_slot_cut_top: exactly the step plane (v0.3 default) or inside the lower wall.
+    kslot = _box(-(r_od + OVERRUN), -g["x_key_slot"], -g["key_slot_w"] / 2, g["key_slot_w"] / 2,
+                 z0 - OVERRUN, g["z_key_slot_cut_top"])
+    wp = _check(wp.cut(kslot), "anti-rotation slot")
     return wp
 
 
@@ -206,14 +249,16 @@ def bom(p: Params) -> list[dict]:
     """Raw stock for the machinist (titanium build only; the resin build is printed from the STL)."""
     if p.profile != "titanium":
         return []
-    geometry(p)                                  # same ValueError as build() for an impossible ring
+    g = geometry(p)                              # same ValueError as build() for an impossible ring
+    lo, hi = g["ring_h_tol"]
     return [{
         "item": "spacer ring raw stock",
         "spec": (f"POM-C (acetal copolymer) round bar O 30 x 20 mm, black or natural; finish O {p.ring_od:.2f} x "
-                 f"{p.ring_h:.2f} tall, movement pocket {p.ring_pocket_w:.2f} x {p.ring_pocket_l:.2f} from the bottom "
-                 f"{p.ring_step_h:.2f} deep, dial recess O {p.ring_dial_recess_d:.2f} from the top (lip "
-                 f"{p.ring_lip_wall:.2f}), stem slot {p.ring_stem_slot_w:.1f} wide, key {p.ring_key_w:.1f} x "
-                 f"{p.ring_key_h:.1f} x {p.ring_key_len:.1f}; general tolerance +-0.05"),
+                 f"{p.ring_h:.2f} (+{lo:.2f}/+{hi:.2f}) tall, movement pocket {p.ring_pocket_w:.2f} x {p.ring_pocket_l:.2f} "
+                 f"from the bottom {p.ring_step_h:.2f} deep, dial recess O {p.ring_dial_recess_d:.2f} from the top (lip "
+                 f"{p.ring_lip_wall:.2f}), stem slot {p.ring_stem_slot_w:.1f} wide at 3 o'clock, anti-rotation slot "
+                 f"{p.key_slot_w:.2f} wide x {p.key_slot_depth:.2f} deep in the OD at 9 o'clock, open at the bottom, "
+                 f"{g['z_key_slot_top'] - g['z0']:.2f} tall; general tolerance +-0.05"),
         "qty": 1,
         "source": "engineering-plastics stockist (POM-C / Delrin rod)",
     }]
@@ -239,10 +284,12 @@ def expected_volume(p: Params, n: int = 20001) -> float:
     if z_slot_top > z_step:                                                                  # upper band: lip only
         x_rec = np.sqrt(np.clip(g["r_rec"] ** 2 - y ** 2, 0, None))
         v -= float(_trapz(np.clip(x_out - x_rec, 0, None), y)) * (z_slot_top - z_step)
-    # key: box outside the OD arc
-    kw = g["key_w"] / 2
+    # anti-rotation slot: OD arc minus the flat floor over |y| <= key_slot_w/2, bottom .. z_key_slot_cut_top (<= step,
+    # so it never meets the recess or the pocket: disjoint from every other removal)
+    kw = g["key_slot_w"] / 2
     yk = np.linspace(-kw, kw, n)
-    v += float(_trapz((r_od + g["key_h"]) - np.sqrt(r_od ** 2 - yk ** 2), yk)) * g["key_len"]
+    xk_out = np.sqrt(np.clip(r_od ** 2 - yk ** 2, 0, None))
+    v -= float(_trapz(np.clip(xk_out - g["x_key_slot"], 0, None), yk)) * (g["z_key_slot_cut_top"] - z0)
     return v
 
 
@@ -254,7 +301,8 @@ def probe_points(p: Params) -> tuple[list, list]:
     y_lip = (g["r_rec"] + r_od) / 2                       # inside the rehaut lip
     z_lip = (z_step + z1) / 2
     x_slot = (g["x_flat"] + r_od) / 2
-    x_key = -(r_od + g["key_h"] / 2)
+    x_ks = -(r_od - 0.1)                                  # 0.1 inside the OD at 9 o'clock: in the slot / in the lip
+    z_ks = g["z_key_slot_top"]
     empty = [
         ("pocket centre", (0.0, 0.0, z0 + 0.5)),
         ("pocket at the +Y end", (0.0, g["r_pl"] - 0.2, z0 + 0.5)),
@@ -263,8 +311,13 @@ def probe_points(p: Params) -> tuple[list, list]:
         ("stem passes the slot", (x_slot, 0.0, p.z_stem)),
         ("above the step (dial recess)", (0.0, y_wall, z_step + 0.2)),
         ("dial recess at its edge", (0.0, g["r_rec"] - 0.3, z_lip)),
-        ("above the key", (x_key, 0.0, z0 + g["key_len"] + 0.2)),
-        ("beside the key", (x_key, g["key_w"] / 2 + 0.3, z0 + g["key_len"] / 2)),
+        ("anti-rotation slot, under its top", (x_ks, 0.0, z_ks - 0.3)),
+        ("anti-rotation slot, just under its top", (x_ks, 0.0, z_ks - 0.05)),
+        ("anti-rotation slot, open at the bottom", (x_ks, 0.0, z0 + 0.1)),
+        ("anti-rotation slot, at its floor", (-(g["x_key_slot"] + 0.1), 0.0, z0 + 0.5)),
+        ("anti-rotation slot, at its side", (x_ks, g["key_slot_w"] / 2 - 0.05, z0 + 0.5)),
+        ("case rib path through the slot (SPEC 8.3b)", (-(p.key_r_in + 0.1), 0.0, (p.key_z0 + p.key_z1) / 2)),
+        ("case rib top inner corner clears the slot", (-(p.key_r_in + 0.05), p.key_w / 2 - 0.05, p.key_z1 - 0.05)),
     ]
     solid = [
         ("wall at 12 o'clock", (0.0, y_wall, z0 + 0.5)),
@@ -272,7 +325,11 @@ def probe_points(p: Params) -> tuple[list, list]:
         ("wall beyond the flat at 9 o'clock", (-(g["x_flat"] + r_od) / 2, 0.0, z0 + 0.5)),
         ("step, just under the seat", (0.0, y_wall, z_step - 0.15)),
         ("wall beside the stem slot", (x_slot, g["slot_w"] / 2 + 0.3, z0 + 0.5)),
-        ("key", (x_key, 0.0, z0 + g["key_len"] / 2)),
+        ("lip above the anti-rotation slot", (x_ks, 0.0, z_ks + 0.3)),
+        ("lip just above the anti-rotation slot", (x_ks, 0.0, z_ks + 0.05)),
+        ("OD beside the anti-rotation slot", (x_ks, g["key_slot_w"] / 2 + 0.4, 2.0)),
+        ("wall beside the anti-rotation slot", (-(g["x_key_slot"] + r_od) / 2, g["key_slot_w"] / 2 + 0.4, 2.0)),
+        ("wall between the slot floor and the pocket", (-(g["x_key_slot"] - 0.3), 0.0, z0 + 0.5)),
         ("rehaut lip at 12 o'clock", (0.0, y_lip, z_lip)),
         ("rehaut lip at 9 o'clock", (-y_lip, 0.0, z_lip)),
         ("rehaut lip just under the top", (0.0, y_lip, z1 - 0.1)),
@@ -290,9 +347,16 @@ def _selftest(out_dir: str) -> None:
         p = params.get(prof)
         g = geometry(p)
         print(f"[{prof}] ring_od {p.ring_od:.2f} recess {p.ring_dial_recess_d:.2f} lip {g['lip_wall']:.3f}; pocket "
-              f"{p.ring_pocket_w:.2f} x {p.ring_pocket_l:.2f}; z {g['z0']:.2f} .. {g['z1']:.2f} (ring_h {p.ring_h:.2f}), "
-              f"step z {g['z_step']:.2f}, slot top z {g['z_slot_top']:.2f}")
+              f"{p.ring_pocket_w:.2f} x {p.ring_pocket_l:.2f}; z {g['z0']:.2f} .. {g['z1']:.2f} (ring_h {p.ring_h:.2f} "
+              f"+{g['ring_h_tol'][0]:.2f}/+{g['ring_h_tol'][1]:.2f}), step z {g['z_step']:.2f}, stem slot top z "
+              f"{g['z_slot_top']:.2f}; anti-rotation slot {g['key_slot_w']:.2f} wide x {g['key_slot_depth']:.2f} deep, "
+              f"floor |x| {g['x_key_slot']:.3f} ({g['key_slot_wall']:.2f} to the pocket), top z {g['z_key_slot_top']:.2f}")
         assert g["lip_wall"] >= LIP_WALL_MIN - 1e-9 and abs(g["lip_wall"] - p.ring_lip_wall) < 1e-9
+        assert abs(p.ring_h - 4.0) < 1e-9 and abs(p.z_cb_inner + p.ring_step_h - p.z_dial_seat) < 1e-9
+        # SPEC 5 / task check: the slot floor stays >= 0.5 outside the pocket flat, and the slot clears the case rib
+        assert g["x_key_slot"] > g["x_flat"] + 0.5, "anti-rotation slot reaches the pocket wall"
+        assert p.key_slot_w > p.key_w and p.key_slot_depth > p.key_h and g["z_key_slot_top"] >= p.key_z1
+        assert g["z_key_slot_cut_top"] <= g["z_step"] + 1e-9, "anti-rotation slot rises into the lip"
         wp = build(p)
         s = wp.val()
         assert wp.solids().size() == 1 and s.isValid(), "not one valid solid"
@@ -312,15 +376,22 @@ def _selftest(out_dir: str) -> None:
             else math.sqrt(g["r_od"] ** 2 - (g["slot_w"] / 2) ** 2)
         assert abs(bb.xmax - x_max) < 0.01, f"xmax {bb.xmax:.3f} != {x_max:.3f} (stem slot missing?)"
         assert abs(bb.ymax - g["r_od"]) < 0.01 and abs(bb.ymin + g["r_od"]) < 0.01
-        assert abs(bb.xmin + (g["r_od"] + g["key_h"])) < 0.01, "key missing on the OD at -X"
+        # nothing stands proud of the OD any more (v0.2 key gone); the lip above the slot still reaches the full OD at -X
+        assert abs(bb.xmin + g["r_od"]) < 0.01, f"xmin {bb.xmin:.3f} != -{g['r_od']:.3f} (a key on the OD, or the lip cut?)"
+        # the slot really removes its volume: the ring minus the slot's box must equal the ring (nothing left in it)
+        kbox = _box(-(g["r_od"] + 0.5), -g["x_key_slot"], -g["key_slot_w"] / 2, g["key_slot_w"] / 2, g["z0"] - 0.5,
+                    g["z_key_slot_cut_top"])
+        left = wp.intersect(kbox)
+        v_left = sum(so.Volume() for so in left.solids().vals()) if left.solids().size() else 0.0
+        assert v_left < 1e-6, f"{v_left:.4f} mm^3 of ring left inside the anti-rotation slot"
         empty, solid = probe_points(p)
         for name, pt in empty:
             ins = s.isInside(cq.Vector(*pt))
-            print(f"    {'ok ' if not ins else 'BAD'} empty  {name:36s} {tuple(round(v, 2) for v in pt)}")
+            print(f"    {'ok ' if not ins else 'BAD'} empty  {name:44s} {tuple(round(v, 3) for v in pt)}")
             failures += int(ins)
         for name, pt in solid:
             ins = s.isInside(cq.Vector(*pt))
-            print(f"    {'ok ' if ins else 'BAD'} solid  {name:36s} {tuple(round(v, 2) for v in pt)}")
+            print(f"    {'ok ' if ins else 'BAD'} solid  {name:44s} {tuple(round(v, 3) for v in pt)}")
             failures += int(not ins)
         path = os.path.join(out_dir, f"{PART}_{prof}.stl")
         cq.exporters.export(wp, path, tolerance=0.005, angularTolerance=0.05)
@@ -352,6 +423,21 @@ def _selftest(out_dir: str) -> None:
         geometry(q)
         assert abs(q.ring_lip_wall - LIP_WALL_MIN) < 1e-6
         print(f"    ok  {prof} dial_d {q.dial_d:.2f} -> lip {q.ring_lip_wall:.3f} (the limit) is accepted")
+    # negative test: an anti-rotation slot that reaches the pocket, or is smaller than the case rib, must raise too
+    print("[negative] impossible anti-rotation slots:")
+    for prof, kw, needle in (("titanium", dict(key_slot_clear_h=4.6), "movement pocket"),
+                             ("resin", dict(key_slot_clear_h=5.0), "movement pocket"),
+                             ("titanium", dict(key_slot_clear_w=-0.3), "cannot slide over"),
+                             ("titanium", dict(key_slot_clear_h=-0.2), "cannot slide over")):
+        q = params.get(prof, **kw)
+        try:
+            build(q)
+        except ValueError as e:
+            msg = str(e)
+            assert needle in msg and f"{q.key_slot_depth:.2f}" in msg, f"ValueError does not explain the slot: {msg}"
+            print(f"    ok  {prof} {kw} -> ValueError: {[ln for ln in msg.splitlines() if needle in ln][0].strip()[:110]}...")
+        else:
+            raise AssertionError(f"{prof} {kw} built a ring instead of raising")
 
     if failures:
         print(f"FAILED: {failures} probe(s)")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Verify the Terra-style GL32 case prototype against SPEC.md section 8 (v0.2).
+Verify the Terra-style GL32 case prototype against SPEC.md section 8 (v0.3).
 
     python3 verify.py [--profile titanium|resin|all] [--out out] [--scratch DIR]
 
@@ -11,37 +11,50 @@ For every requested profile (p = params.get(profile)) this script
      with a well-formed bom(); only the caseback seal that cb_seal selects is built and taken into the
      assembly (parts.purchased.seal_part_name(p) when the module has it, the same cb_seal mapping here
      otherwise; SPEC 4 / 6); then checks that every solid sits where SPEC sections 3-7 place it in assembly
-     coordinates (bounding box against params.py);
+     coordinates (bounding box against params.py; the spacer ring must not stand proud of its OD anywhere --
+     the v0.2 raised key is gone);
   2. runs the parametric assertions of SPEC section 8.2, the section 3.6 rule (thread minor >= movement
-     bore - 0.05) and the section 3 / 5 sanity walls, straight from params.py;
+     bore - 0.05), the section 3 / 5 sanity walls, the v0.3 rib / slot clearances (SPEC 3.7 / 5: slot wider,
+     deeper and taller than the rib, rib above the caseback boss and below the ledge, slot below the ring step
+     and clear of the movement pocket), the crystal stack (crystal seat = H - crystal_engagement, ledge underside
+     = seat - ledge_t, I-ring hidden below the front face, dial face below the ledge) and the flat gasket's derived
+     sizes (gasket_id / gasket_od from gasket_radial_clear; gasket_fill within 0.5 .. 0.9), straight from params.py;
   3. computes the pairwise assembly interference volumes of SPEC section 8.3 (plus a few extra pairs) with
      OCC booleans and fails any pair >= 0.01 mm^3, with the two documented exceptions:
        (a) thread_model "plain": the case/caseback pair is scored OUTSIDE the thread-zone envelope
            (z 0 .. cb_thread_len, r <= major/2) and the overlap INSIDE it must equal the cosmetic tooth
-           annulus pi/4 (D^2 - D1^2) L minus the lead chamfer, minus what the open keyway (SPEC 3.7) takes
-           out of that annulus, within 1 %;
+           annulus pi/4 (D^2 - D1^2) L minus the lead chamfer within 1 % -- no slot term: the rib sits above
+           the thread zone and the thread is continuous (SPEC 3.7);
        (b) a tube hole printed undersize (tube_hole_d < tube_od): the case/tube pair is judged after reaming
            the hole to tube_od, and the as-printed overlap must equal the ream allowance within 1 %.
      The selected seal: its overlap with the case inside its recess / groove (z <= 0) is reported, not scored --
      the case has no material below its back face, so that SPEC 8.3 exclusion is zero by construction for any seal
      size or position.  Scored instead is the uncompressed protrusion past z = 0 (the designed squeeze): it must
-     meet the back face over the whole seating band except where SPEC puts a hole in that face -- the open keyway
-     mouth (3.7), the thread mouth with its lead chamfer (3.6) and, on the helix profile, the groove run-out --
-     within 2 % of seal_seat_model() (the protrusion built from params.py minus those features, the thread cut with
-     the parts/threads.py tools themselves); the seal's inner radius must clear the lead chamfer by 0.1; and the seal must lie in its
-     caseback seat.  The I-ring crush is measured against its designed value.  No SPEC 8.3 row is relaxed beyond that;
+     meet the back face over the whole seating band except where SPEC puts a hole in that face -- the thread mouth
+     with its lead chamfer (3.6) and, on the helix profile, the groove run-out; nothing else, the back face and the
+     thread are continuous in v0.3 -- within 2 % of seal_seat_model() (the protrusion built from params.py minus
+     those features, the thread cut with the parts/threads.py tools themselves); the seal's inner radius must clear
+     the lead chamfer by 0.1; and the seal must lie in its caseback seat.  The I-ring crush is measured against its
+     designed value.  No SPEC 8.3 row is relaxed beyond that;
   3b. SPEC 8.3b: the spacer ring is translated toward the back in 0.25 mm steps until it is fully outside the
-     case and must never intersect the case; axial float: ring top = z_ledge_bottom and caseback inner face
-     = ring bottom within 1e-3, the ledge underside really is at z_ledge_bottom over the ring lip, the movement
+     case and must never intersect the case (the ring slot is open at the bottom, the rib sits above the caseback
+     boss, the thread minor O exceeds ring_od); the rib exists -- the case is solid at (-key_r_in - 0.1, 0, rib
+     mid z) and the ring is void there (its slot) -- and its size is measured: a probe prism over the rib and the
+     wall behind it, against the same prism at 6 o'clock (wall only), must hold the closed-form rib volume from
+     params.py within 2 %, an unslotted ring envelope must collide with the rib by exactly that volume (negative
+     control), and the ring's slot must be void over its whole SPEC 5 extent; axial float: ring top =
+     z_ledge_bottom and caseback inner face = ring bottom within 1e-3 (the drawing's +ring_axial_preload height
+     tolerance is not modelled), the ledge underside really is at z_ledge_bottom over the ring lip, the movement
      and the dial sit where the stack-up says; and the asserts ring_lip_wall >= 0.3, dial_ledge_overlap >= 0.25,
      flange_to_strap_margin >= 0.3, strap_bar_end_h >= 2.5;
   4. on the helix (resin) profile runs the thread screw-in test: the caseback rotated theta about Z and
      translated theta/360 * pitch along the screw-in path for theta in {0, 120, 240}, the bare boss advanced
      against the threaded zone, and a negative control (180 deg, no advance) that must interfere;
-  5. probes points: every strap channel, front slot, the crown pocket, the tube hole, the keyway (open to the
-     back face and through the thread zone), the gate details, the bores and both lead chamfers must be void;
-     every wall that must be solid must be solid; the spacer ring, the caseback (with the selected seal's
-     recess / groove) and the dial get their own probes;
+  5. probes points: every strap channel, front slot, the crown pocket, the tube hole, the movement bore inside,
+     above, below and beside the rib, the gate details, the bores, the crystal seat plane and both lead chamfers
+     must be void; every wall that must be solid must be solid -- the rib itself, the thread-zone wall and the
+     back face at 9 o'clock (no keyway mouth), the seating band under the seal; the spacer ring, the caseback
+     (with the selected seal's recess / groove) and the dial get their own probes;
   6. exports every solid to STL in the scratch directory (same tessellation as build.py), checks it is
      watertight with trimesh and that the mesh volume is within 1 % of the B-rep volume;
   7. estimates masses from the volumes and density_* (density_dial for the dial blank);
@@ -110,7 +123,10 @@ STL_TOLERANCE = 0.01                # same tessellation as build.py
 STL_ANGULAR_TOLERANCE = 0.1
 STL_VOLUME_TOL = 0.01               # 1 %, SPEC 8.1
 CB_LEAD_CHAMFER = 0.2               # the lead chamfer case_body.py passes to threads (SPEC 3.6)
-KEYWAY_FLOOR_PUSH = 0.3             # SPEC 3.7: helix floor pushed out to groove root + 0.3 when within 0.3 of it
+RIB_VOL_TOL = 0.02                  # 2 %: rib volume measured on the case vs the closed form from params.py (SPEC 3.7 / 8.3b)
+RIB_CLEAR_MIN = 0.1                 # mm, least rib / slot clearance params.py may leave (SPEC 3.7 / 5; params give 0.1 per side, 0.25, 0.2)
+RIB_ENGAGE_MIN = 0.3                # mm, least radial rib height (key_h) that still locates the ring
+GASKET_FILL_RANGE = (0.5, 0.9)      # gasket_fill (SPEC 4: incompressible rubber must never hold the rim land off the case)
 PLACEMENT_TOL = 0.02                # mm, bounding box of every solid against its SPEC position
 BOOLEAN_TOL = 1e-4                  # mm^3, a split intersection must add up to the whole
 
@@ -203,17 +219,26 @@ def _blame_pair(a: str, b: str) -> str:
 
 
 # --------------------------------------------------------------------------- SPEC-derived geometry (params only)
-def keyway(p: Params) -> dict:
-    """SPEC 3.7 ring keyway at 9 o'clock, from params.py alone: width kw, floor radius, top z, key tip radius."""
-    r_mvt = p.mvt_bore_d / 2
-    kw = p.ring_key_w + 0.1
-    r_floor = r_mvt + p.ring_key_h + 0.1
-    if p.thread_model == "helix":
-        r_groove = p.cb_thread_major / 2 + p.cb_thread_clearance
-        if abs(r_floor - r_groove) < KEYWAY_FLOOR_PUSH:
-            r_floor = r_groove + KEYWAY_FLOOR_PUSH
-    return dict(kw=kw, r_floor=r_floor, z0=0.0, z1=p.z_cb_inner + p.ring_key_len + 0.2,
-                r_key_tip=p.ring_od / 2 + p.ring_key_h)
+def rib(p: Params) -> dict:
+    """SPEC 3.7 anti-rotation rib on the case's movement-bore wall at 9 o'clock (-X) and its mate, the SPEC 5 slot in the
+    spacer ring's OD, from params.py alone.  Rib: |y| <= w/2 (key_w), from radius r_in (key_r_in) out to the bore wall
+    r_out (mvt_bore_d/2), z0 (key_z0) .. z1 (key_z1); volume in closed form (the strip of the annulus).  Slot: slot_w
+    (key_slot_w) wide, flat floor at radius r_slot_floor = ring_od/2 - key_slot_depth, from the ring bottom (open) up to
+    slot_z1 (key_slot_z1).  Clearances: clear_w per side, clear_r (rib tip to slot floor), clear_top (slot top above the
+    rib top), clear_thread (rib bottom above the thread zone = above the caseback boss), clear_ledge (rib top below the
+    ledge underside), slot_wall (slot floor to the movement-pocket flat), slot_to_step (ring step above the slot top)."""
+    w = p.key_w / 2
+    r_out = p.mvt_bore_d / 2
+    r_slot_floor = p.ring_od / 2 - p.key_slot_depth
+    ok = 0 < w < p.key_r_in < r_out and p.key_z1 > p.key_z0
+    vol = _strip_area(p.key_r_in, r_out, w) * (p.key_z1 - p.key_z0) if ok else 0.0
+    return dict(w=p.key_w, h=p.key_h, r_in=p.key_r_in, r_out=r_out, z0=p.key_z0, z1=p.key_z1,
+                z_mid=(p.key_z0 + p.key_z1) / 2, length=p.key_z1 - p.key_z0, volume=vol,
+                slot_w=p.key_slot_w, slot_depth=p.key_slot_depth, slot_z0=p.z_cb_inner, slot_z1=p.key_slot_z1,
+                r_slot_floor=r_slot_floor, clear_w=(p.key_slot_w - p.key_w) / 2, clear_r=p.key_r_in - r_slot_floor,
+                clear_top=p.key_slot_z1 - p.key_z1, clear_thread=p.key_z0 - p.cb_thread_len,
+                clear_ledge=p.z_ledge_bottom - p.key_z1, slot_wall=r_slot_floor - p.ring_pocket_w / 2,
+                slot_to_step=p.z_dial_seat - p.key_slot_z1)
 
 
 def seal_seat(p: Params) -> tuple[float, float, float, str]:
@@ -244,31 +269,21 @@ def seal_protrusion(p: Params) -> tuple[float, float, float, float]:
     raise ValueError(f"cb_seal must be one of {sorted(SEAL_BY_CB_SEAL)}, got {p.cb_seal!r}")
 
 
-def _slot_annulus_area(ri: float, ro: float, x_in: float, x_out: float, w: float) -> float:
-    """Plan area of the annulus ri <= r <= ro inside the slot x_in <= -x <= x_out, |y| <= w: the keyway mouth (SPEC 3.7,
-    planar floor at x = -x_out, on the -X side) as a seating band on the back face sees it.  Quadrature in y."""
-    y = np.linspace(-w, w, 20001)
-    outer = np.minimum(x_out, np.sqrt(np.maximum(0.0, ro * ro - y * y)))
-    inner = np.maximum(x_in, np.sqrt(np.maximum(0.0, ri * ri - y * y)))
-    trapz = getattr(np, "trapezoid", None) or np.trapz
-    return float(trapz(np.maximum(0.0, outer - inner), y))
-
-
 def seal_seat_model(p: Params, lead_chamfer: float) -> dict:
     """SPEC 4 / 6 / 8.3: what the uncompressed seal's protrusion past z = 0 meets on the case back face.  The protruding
     part is built from params.py alone -- flat gasket: the annulus gasket_id/2..gasket_od/2, z 0..gasket_t -
     gasket_recess_depth; O-ring: the torus of SPEC 6 (mean O oring_groove_mean_d, CS oring_cs, centred at
     -oring_groove_depth/2) clipped to z >= 0 -- so the expected value does not follow a misplaced placeholder.  It would
-    overlap the case completely, except where the back face is not there: the keyway mouth, open to the back face (SPEC
-    3.7), the thread mouth with its 45 deg lead chamfer at the minor O (3.6) and, on the helix profile, the thread groove
-    where it runs out at the back face.  Those are cut from the protruding part one tool at a time -- the slot and the
-    chamfer cone from params.py, the thread zone with the parts/threads.py tools case_body.py uses, started one pitch
-    (helix) / 1 mm (plain) below the back face: a thread shifted by whole pitches is the same thread, and no tool face
-    then lies on the part's z = 0 face.  What remains is the expected case/seal overlap.  Returns proud (the protruding
-    part's volume, to be compared with seal_protrusion()'s closed form), the keyway / chamfer / thread bites, expected,
-    and the analytic keyway-mouth area of the radial band (a cross-check of the boolean keyway step)."""
-    r_mvt, r_minor, L, P = p.mvt_bore_d / 2, p.cb_thread_minor / 2, p.cb_thread_len, p.cb_thread_pitch
-    kg = keyway(p)
+    overlap the case completely, except where the back face is not there: the thread mouth with its 45 deg lead chamfer
+    at the minor O (SPEC 3.6) and, on the helix profile, the thread groove where it runs out at the back face.  Nothing
+    else interrupts the back face: the v0.3 anti-rotation rib (SPEC 3.7) stands on the bore wall above the thread zone,
+    so the seating face is continuous all round (the v0.2 keyway mouth is gone).  Those are cut from the protruding part
+    one tool at a time -- the chamfer cone from params.py, the thread zone with the parts/threads.py tools case_body.py
+    uses, started one pitch (helix) / 1 mm (plain) below the back face: a thread shifted by whole pitches is the same
+    thread, and no tool face then lies on the part's z = 0 face.  What remains is the expected case/seal overlap.  Returns
+    proud (the protruding part's volume, to be compared with seal_protrusion()'s closed form), the chamfer / thread bites
+    and expected."""
+    r_minor, L, P = p.cb_thread_minor / 2, p.cb_thread_len, p.cb_thread_pitch
     protrusion, _, r_in, r_out = seal_protrusion(p)
     if protrusion <= 0 or r_out <= r_in:
         raise ValueError(f"params.py: the {p.cb_seal} seal does not protrude past z = 0 ({protrusion:.3f}), nothing seats")
@@ -280,58 +295,48 @@ def seal_seat_model(p: Params, lead_chamfer: float) -> dict:
         proud = cq.Workplane("XY").newObject([torus]).intersect(_box(-p.W, p.W, -p.L, p.L, 0.0, p.cb_flange_t + 1.0))
     proud = _one_valid(proud, f"{p.cb_seal} protrusion past z = 0, from params.py")
     v0 = _vol(proud)
-    # keyway mouth: the slot from the floor to 0.3 inside the bore void (as the module's tool), open to the back face
-    x_in = r_mvt - 0.3
-    slot = _box(-kg["r_floor"], -x_in, -kg["kw"] / 2, kg["kw"] / 2, -1.0, kg["z1"])
-    m = _one_valid(proud.cut(slot), "seat model minus the keyway mouth")
-    v1 = _vol(m)
     # thread-mouth lead chamfer: r_minor + lead_chamfer at z = 0 down to r_minor at z = lead_chamfer, 0.3 past both ends
     cone = cq.Solid.makeCone(r_minor + lead_chamfer + 0.3, r_minor - 0.3, lead_chamfer + 0.6, cq.Vector(0, 0, -0.3),
                              cq.Vector(0, 0, 1))
-    m = _one_valid(m.cut(cq.Workplane("XY").newObject([cone])), "seat model minus the lead chamfer")
-    v2 = _vol(m)
+    m = _one_valid(proud.cut(cq.Workplane("XY").newObject([cone])), "seat model minus the lead chamfer")
+    v1 = _vol(m)
     # the thread zone: bore at the minor O; helix: the grooves out to major/2 + clearance, which run out at the back face
     if p.thread_model == "helix":
         m = threads.cut_internal(m, p.cb_thread_major, P, L + P, clearance=p.cb_thread_clearance, z0=-P, lead_chamfer=0.0)
     else:
         m = threads.cut_internal_cosmetic(m, p.cb_thread_major, P, L + 1.0, z0=-1.0, lead_chamfer=0.0)
     m = _one_valid(m, "seat model minus the thread zone")
-    v3 = _vol(m)
-    key_area = _slot_annulus_area(r_in, r_out, x_in, kg["r_floor"], kg["kw"] / 2)      # same slot, analytic
-    return dict(proud=v0, keyway=v0 - v1, chamfer=v1 - v2, thread=v2 - v3, expected=v3, keyway_area=key_area,
-                kw=kg["kw"], r_floor=kg["r_floor"])
+    v2 = _vol(m)
+    return dict(proud=v0, chamfer=v0 - v1, thread=v1 - v2, expected=v2)
+
+
+def _arc_integral(R: float, w: float) -> float:
+    """Integral of sqrt(R^2 - y^2) over -w..w (w <= R): the area under the circle r = R inside the strip |y| <= w,
+    one side of the axis."""
+    w = min(w, R)
+    return w * math.sqrt(R * R - w * w) + R * R * math.asin(w / R)
 
 
 def _strip_area(a: float, b: float, w: float) -> float:
     """Area between the circles r = a and r = b (b > a) inside the strip |y| <= w, one side of the axis (w < a)."""
     if b <= a:
         return 0.0
-
-    def half(R: float) -> float:            # integral of sqrt(R^2 - y^2) over -w..w
-        return w * math.sqrt(R * R - w * w) + R * R * math.asin(w / R)
-
-    return half(b) - half(a)
+    return _arc_integral(b, w) - _arc_integral(a, w)
 
 
 def cosmetic_tooth_volume(p: Params, lead_chamfer: float) -> dict:
     """SPEC 8.3 (a): the material between the cosmetic bore (minor O, SPEC 3.6) and the cosmetic boss (major O,
     SPEC 4) over the thread zone -- what the machinist turns into thread: the annulus pi/4 (D^2 - D1^2) L minus
-    the lead chamfer cone, minus the slice the open keyway (SPEC 3.7) takes out of the annulus over its width.
-    Closed form for the annulus, quadrature in z for the chamfer and the keyway terms."""
+    the lead chamfer cone.  No slot term: the v0.3 anti-rotation rib (SPEC 3.7) starts key_z_margin above the
+    thread zone, so the thread is continuous.  Closed form for the annulus, quadrature in z for the chamfer."""
     r_major, r_minor, L = p.cb_thread_major / 2, p.cb_thread_minor / 2, p.cb_thread_len
-    kg = keyway(p)
-    w = kg["kw"] / 2
-    r_k = min(r_major, kg["r_floor"])
     z = np.linspace(0.0, L, 40001)
     r_in = np.minimum(r_major, r_minor + np.maximum(0.0, lead_chamfer - z))      # bore radius at height z
     ring_area = math.pi * (r_major ** 2 - r_in ** 2)
-    key_area = np.array([_strip_area(float(a), r_k, w) for a in r_in]) if w < r_minor else np.zeros_like(z)
     trapz = getattr(np, "trapezoid", None) or np.trapz
     annulus = math.pi * (r_major ** 2 - r_minor ** 2) * L
     chamfer = annulus - float(trapz(ring_area, z))
-    key = float(trapz(key_area, z))
-    return dict(annulus=annulus, chamfer=chamfer, keyway=key, spec_formula=annulus - chamfer,
-                expected=annulus - chamfer - key, kw=kg["kw"], r_floor=kg["r_floor"])
+    return dict(annulus=annulus, chamfer=chamfer, expected=annulus - chamfer)
 
 
 # --------------------------------------------------------------------------- the verifier
@@ -517,12 +522,18 @@ class Verifier:
         r_or = (p.oring_groove_mean_d + p.oring_cs) / 2
         z_or = -p.oring_groove_depth / 2
         z_g0 = -p.gasket_recess_depth
+        # SPEC 5: nothing stands proud of the ring OD (the anti-rotation feature is a slot IN the OD); at +X the stem
+        # slot removes the OD at y = 0 up to z_stem + 1.2, above which the lip reaches the full OD again unless the slot
+        # runs out through the top
+        r_ring = p.ring_od / 2
+        x_ring_max = r_ring if p.z_stem + 1.2 < p.z_ledge_bottom - 0.05 else math.sqrt(r_ring ** 2 - (p.ring_stem_slot_w / 2) ** 2)
         expected = {
             "case_body": ("SPEC 3.1", dict(x=(-p.W / 2, p.W / 2), y=(-p.L / 2, p.L / 2), z=(0.0, p.H)), "parts/case_body.py"),
             "caseback": ("SPEC 4", dict(x=(-p.cb_flange_d / 2, p.cb_flange_d / 2), z=(-p.cb_flange_t, p.cb_thread_len)),
                          "parts/caseback.py"),
-            "spacer_ring": ("SPEC 5: z_cb_inner .. z_ledge_bottom (ring_h)", dict(y=(-p.ring_od / 2, p.ring_od / 2),
-                            z=(p.z_cb_inner, p.z_ledge_bottom)), "parts/spacer_ring.py"),
+            "spacer_ring": ("SPEC 5: z_cb_inner .. z_ledge_bottom (ring_h), nothing proud of the OD (slot, not key)",
+                            dict(x=(-r_ring, x_ring_max), y=(-r_ring, r_ring), z=(p.z_cb_inner, p.z_ledge_bottom)),
+                            "parts/spacer_ring.py"),
             "dial_blank": ("SPEC 6", dict(x=(-p.dial_d / 2, p.dial_d / 2), z=(p.z_dial_seat, p.z_dial_face)), "parts/dial_blank.py"),
             "crystal": ("SPEC 6", dict(x=(-p.crystal_d / 2, p.crystal_d / 2), z=(p.z_crystal_seat, p.z_crystal_top)), "parts/purchased.py"),
             "iring": ("SPEC 6", dict(x=(-r_ir, r_ir), z=(p.z_crystal_seat, p.z_crystal_seat + p.iring_h)), "parts/purchased.py"),
@@ -565,7 +576,8 @@ class Verifier:
         wall_crystal = p.x_pocket_floor - p.crystal_bore_d / 2
         wall_thread = p.x_pocket_floor - r_thread_out
         ring_wall = min(p.ring_od - p.ring_pocket_l, p.ring_od - p.ring_pocket_w) / 2
-        kg = keyway(p)
+        rg = rib(p)
+        c = RIB_CLEAR_MIN
         rows = [
             ("hands_clearance >= hands_clearance_min", p.hands_clearance, p.hands_clearance_min, ""),
             ("tube_to_thread_margin >= 0.1", p.tube_to_thread_margin, 0.1, "driven by UNVERIFIED stem_below_dial_seat"),
@@ -580,23 +592,78 @@ class Verifier:
              f"x_pocket_floor {p.x_pocket_floor:.2f} - thread outer radius {r_thread_out:.3f}"),
             ("ring pocket wall >= 2.5", ring_wall, 2.5, "(ring_od - ring_pocket_l)/2, thinnest at 12/6"),
             ("tube engagement >= 1.5", p.tube_engagement, 1.5, ""),
-            ("ring key tip clears the keyway floor (SPEC 3.7)", kg["r_floor"] - kg["r_key_tip"], 0.1,
-             f"keyway floor r {kg['r_floor']:.3f} - key tip r {kg['r_key_tip']:.3f}; keyway {kg['kw']:.2f} wide for a {p.ring_key_w:.2f} key"),
             ("ring_dial_clearance >= 2 x ring_pocket_clearance (SPEC 5: the dial never binds)", p.ring_dial_clearance,
              2 * p.ring_pocket_clearance, "dial radial clearance vs movement-pocket clearance"),
+            # -- crystal stack (SPEC 3.3 / 3.4 / 7): everything read from crystal_engagement / ledge_t
+            ("crystal_engagement >= iring_h (SPEC 3.3: the I-ring sits below the front face, no open gap around the crystal)",
+             p.crystal_engagement, p.iring_h,
+             f"crystal seat z_crystal_seat = H - crystal_engagement = {p.z_crystal_seat:.2f}; I-ring top {p.z_crystal_seat + p.iring_h:.2f} "
+             f"vs front face {p.H:.2f}; designed margin 0.1"),
+            ("dial face below the ledge underside: z_ledge_bottom - z_dial_face >= 0.5 (the dial hides dial_ledge_overlap under the ledge)",
+             p.z_ledge_bottom - p.z_dial_face, 0.5,
+             f"ledge underside z_ledge_bottom = z_crystal_seat - ledge_t = {p.z_ledge_bottom:.2f} (ledge_t {p.ledge_t:.2f}); dial face {p.z_dial_face:.2f}"),
+            # -- anti-rotation rib / slot (SPEC 3.7 / 5): the ring must slide over the rib from the back and the rib must
+            #    stay clear of the caseback boss (thread zone), the ledge and the ring's dial recess / movement pocket
+            (f"rib / slot: slot width clears the rib, (key_slot_w - key_w)/2 >= {c / 2:g} per side (SPEC 3.7 / 5)", rg["clear_w"], c / 2,
+             f"slot {rg['slot_w']:.2f} wide for a {rg['w']:.2f} rib (key_slot_clear_w {p.key_slot_clear_w:g})"),
+            (f"rib / slot: rib tip clears the slot floor, key_r_in - (ring_od/2 - key_slot_depth) >= {c:g}", rg["clear_r"], c,
+             f"rib inner r {rg['r_in']:.3f} vs slot floor r {rg['r_slot_floor']:.3f} (slot {rg['slot_depth']:.2f} deep for a {rg['h']:.2f} rib)"),
+            (f"rib / slot: slot top above the rib top, key_slot_z1 - key_z1 >= {c:g}", rg["clear_top"], c,
+             f"slot up to z {rg['slot_z1']:.3f}, rib up to z {rg['z1']:.3f}"),
+            (f"rib above the caseback boss / thread zone: key_z0 - cb_thread_len >= {c:g} (SPEC 3.7: thread and gasket face uninterrupted)",
+             rg["clear_thread"], c, f"rib from z {rg['z0']:.3f}; caseback inner face / thread zone end z {p.z_cb_inner:.3f}"),
+            (f"rib below the ledge underside: z_ledge_bottom - key_z1 >= {c:g}", rg["clear_ledge"], c,
+             f"rib top z {rg['z1']:.3f}, ledge underside z {p.z_ledge_bottom:.3f}"),
+            (f"rib radial height key_h >= {RIB_ENGAGE_MIN:g} (locates the ring)", rg["h"], RIB_ENGAGE_MIN,
+             f"rib r {rg['r_in']:.3f} .. {rg['r_out']:.3f} on the bore wall"),
+            ("rib axial length key_z1 - key_z0 >= 0.5", rg["length"], 0.5,
+             f"z {rg['z0']:.3f} .. {rg['z1']:.3f}; key_z_margin {p.key_z_margin:g} above the boss and below the dial seat"),
+            ("ring slot stays below the ring step: z_dial_seat - key_slot_z1 >= 0 (SPEC 5: the rehaut lip above it is untouched)",
+             rg["slot_to_step"], 0.0, f"slot top z {rg['slot_z1']:.3f}, step (dial seat) z {p.z_dial_seat:.3f}"),
+            ("ring slot floor to the movement-pocket flat >= 0.5 (SPEC 5: the slot stays in the thick lower wall)", rg["slot_wall"], 0.5,
+             f"slot floor r {rg['r_slot_floor']:.3f} vs pocket flat at |x| {p.ring_pocket_w / 2:.3f}"),
         ]
         blame = {
             "tube_to_thread_margin >= 0.1": "params.py (stem_below_dial_seat, UNVERIFIED)",
             "hands_clearance >= hands_clearance_min": "params.py (hands_top_above_dial_face / crystal_engagement)",
         }
         for name, val, lim, note in rows:
-            self.add(g, name, val >= lim - 1e-9, val, f">= {lim:.3f}", note, blame=blame.get(name, "params.py"))
+            if name.startswith("rib") or name.startswith("ring slot"):
+                bl = "params.py (key_w / key_h / key_slot_clear_w / key_slot_clear_h / key_z_margin vs mvt_bore_d / ring_od_clearance)"
+            elif name.startswith("crystal_engagement") or name.startswith("dial face"):
+                bl = "params.py (crystal_engagement / ledge_t / iring_h vs the movement stack)"
+            else:
+                bl = blame.get(name, "params.py")
+            self.add(g, name, val >= lim - 1e-9, val, f">= {lim:.3f}", note, blame=bl)
+        # -- caseback seal sizes (SPEC 4): the flat gasket is derived from the boss and the recess (gasket_radial_clear)
+        if p.cb_seal == "flat_gasket":
+            lo, hi = GASKET_FILL_RANGE
+            squeeze = (p.gasket_t - p.gasket_recess_depth) / p.gasket_t if p.gasket_t > 0 else float("nan")
+            self.add(g, f"gasket_fill within {lo:g} .. {hi:g} (SPEC 4: the incompressible gasket never holds the rim land off the case)",
+                     lo - 1e-9 <= p.gasket_fill <= hi + 1e-9, f"{p.gasket_fill:.3f}", f"{lo:g} .. {hi:g}",
+                     f"gasket {p.gasket_id:.2f} x {p.gasket_od:.2f} x {p.gasket_t:g} in the recess {p.cb_thread_major:g} .. "
+                     f"{p.gasket_recess_od:g} x {p.gasket_recess_depth:g}; squeeze {100 * squeeze:.0f} % when the land seats",
+                     blame="params.py (gasket_t / gasket_radial_clear / gasket_recess_depth / gasket_recess_od)")
+            self.add(g, "gasket_id = cb_thread_major + 2 x gasket_radial_clear, gasket_od = gasket_recess_od - 2 x gasket_radial_clear, "
+                        "gasket_radial_clear >= 0.1 (SPEC 4)", p.gasket_radial_clear >= 0.1 - 1e-9,
+                     f"ID {p.gasket_id:.2f} / OD {p.gasket_od:.2f}, radial clearance {p.gasket_radial_clear:g} to the boss and the recess wall",
+                     ">= 0.100", f"rim land (cb_flange_d - gasket_recess_od)/2 = {(p.cb_flange_d - p.gasket_recess_od) / 2:.2f}",
+                     blame="params.py (gasket_radial_clear)")
+        else:
+            fill = (math.pi / 4 * p.oring_cs ** 2) / (p.oring_groove_w * p.oring_groove_depth)
+            self.add(g, "O-ring groove fill (SPEC 4 'oring' option)", None, f"{fill:.3f}", "",
+                     f"CS {p.oring_cs:g} in a {p.oring_groove_w:g} x {p.oring_groove_depth:g} groove")
         # stack-up sanity (informational)
-        self.add(g, "stack-up: crystal top / total height", None,
-                 f"crystal {p.crystal_proud:+.2f} proud, total {p.total_height:.2f}", "", "")
+        self.add(g, "stack-up: crystal seat / ledge / crystal top / total height", None,
+                 f"crystal seat {p.z_crystal_seat:.2f} (H {p.H:.2f} - crystal_engagement {p.crystal_engagement:.2f}), ledge underside "
+                 f"{p.z_ledge_bottom:.2f} (ledge_t {p.ledge_t:.2f}), crystal {p.crystal_proud:+.2f} proud, total {p.total_height:.2f}", "", "")
         self.add(g, "stack-up: dial face below the crystal seat / ring lip", None,
                  f"dial face {p.z_dial_face:.2f} -> crystal seat {p.z_crystal_seat:.2f} ({p.hands_clearance:.2f}); "
                  f"rehaut lip {p.ring_lip_wall:.2f} thick, {p.z_ledge_bottom - p.z_dial_face:.2f} tall above the dial face", "", "")
+        self.add(g, "stack-up: anti-rotation rib / ring slot (SPEC 3.7 / 5)", None,
+                 f"rib {rg['w']:.2f} wide x {rg['h']:.2f} high, z {rg['z0']:.2f} .. {rg['z1']:.2f} ({rg['volume']:.3f} mm^3); ring slot "
+                 f"{rg['slot_w']:.2f} wide x {rg['slot_depth']:.2f} deep, open at the bottom up to z {rg['slot_z1']:.2f}; ring height "
+                 f"{p.ring_h:.2f} +{p.ring_axial_preload:g}/+{p.ring_axial_preload + 0.03:g} on the drawing (nominal modelled)", "", "")
 
     # ------------------------------------------------------------------ 3. interference
     def run_interference(self) -> None:
@@ -657,15 +724,13 @@ class Verifier:
                  blame="parts/caseback.py (flange / boss outside the thread zone) or parts/case_body.py")
         exp = tv["expected"]
         dev = abs(inside - exp) / exp if exp > 0 else float("inf")
-        dev_spec = abs(inside - tv["spec_formula"]) / tv["spec_formula"] if tv["spec_formula"] > 0 else float("inf")
         self.add(g, f"{name} inside the envelope equals the cosmetic tooth annulus pi/4(D^2-D1^2)L minus the lead chamfer "
-                    f"and the keyway interruption (SPEC 8.3 (a))", dev < ANNULUS_TOL,
+                    f"(SPEC 8.3 (a))", dev < ANNULUS_TOL,
                  f"{inside:.3f} mm^3 vs expected {exp:.3f} ({100 * dev:.2f} %)", f"within {100 * ANNULUS_TOL:.0f} %",
-                 f"annulus {tv['annulus']:.3f} - lead chamfer {tv['chamfer']:.3f} - keyway {tv['keyway']:.3f} (SPEC 3.7: the "
-                 f"keyway, {tv['kw']:.2f} wide and open to the back face, interrupts the thread zone); the SPEC 8.3 (a) formula "
-                 f"without the keyway term gives {tv['spec_formula']:.3f} ({100 * dev_spec:.2f} %); the machinist cuts "
+                 f"annulus {tv['annulus']:.3f} - lead chamfer {tv['chamfer']:.3f}; no slot term: the anti-rotation rib starts "
+                 f"{p.key_z0 - p.cb_thread_len:.2f} above the thread zone, so the thread is continuous (SPEC 3.7); the machinist cuts "
                  f"M{p.cb_thread_major:g} x {p.cb_thread_pitch:g} in this material",
-                 blame="parts/case_body.py (cosmetic bore, lead chamfer, keyway) or parts/caseback.py (cosmetic boss)")
+                 blame="parts/case_body.py (cosmetic bore, lead chamfer, a rib reaching into the thread zone) or parts/caseback.py (cosmetic boss)")
 
     def _pair_case_tube_reamed(self, name: str, lim: str) -> None:
         """SPEC 8.3 (b): the tube hole is printed undersize (tube_hole_d) and reamed to tube_od.  The pair is judged on the
@@ -716,9 +781,10 @@ class Verifier:
         """The selected seal (SPEC 4 / 6 / 8.3) against the case and the caseback.  Inside its recess / groove (z <= 0) the
         overlap with the case is 0 by construction -- the case has no material below its back face -- so that SPEC 8.3
         exclusion is reported, not scored.  Scored: the uncompressed protrusion past z = 0 meets the back face over the
-        whole seating band except the keyway mouth, the thread mouth (lead chamfer) and the helix groove run-out
-        (seal_seat_model, within SEAL_SEAT_TOL); the seal's inner radius clears the lead chamfer by SEAL_ID_MARGIN; and
-        the seal lies in its caseback seat without touching its walls (flat gasket; the O-ring's own seat is informational)."""
+        whole seating band except the thread mouth (lead chamfer) and the helix groove run-out (seal_seat_model, within
+        SEAL_SEAT_TOL; in v0.3 nothing else interrupts the back face, SPEC 3.7); the seal's inner radius clears the lead
+        chamfer by SEAL_ID_MARGIN; and the seal lies in its caseback seat without touching its walls (flat gasket; the
+        O-ring's own seat is informational)."""
         p = self.p
         g = "interference"
         seal = self.seal
@@ -768,28 +834,23 @@ class Verifier:
                     exp = md["expected"]
                     dev = abs(v_out - exp) / exp if exp > 0 else float("inf")
                     clip_ok = v_out_exp > 0 and abs(md["proud"] - v_out_exp) / v_out_exp < 0.01     # model vs closed form
-                    key_exp = md["keyway_area"] * protrusion if is_gasket else None      # exact for the flat annulus only
-                    key_ok = key_exp is None or abs(md["keyway"] - key_exp) < 1e-3
-                    key_pct = 100 * md["keyway"] / md["proud"] if md["proud"] > 0 else 0.0
                     band = r_out - r_in
-                    note = (f"protruding part (from params.py) {md['proud']:.3f} mm^3 (closed form {v_out_exp:.3f}) - keyway mouth {md['keyway']:.3f} "
-                            f"({key_pct:.1f} % of the seat: the {md['kw']:.2f} wide slot, floor r {md['r_floor']:.3f}, open to the back "
-                            f"face, SPEC 3.7" + (f"; analytic {key_exp:.3f}" if key_exp is not None else "") + f") - lead chamfer "
-                            f"{md['chamfer']:.3f} (mouth r {r_mouth:.3f} vs seal inner r {r_in:.3f}) - thread zone {md['thread']:.3f}")
+                    note = (f"protruding part (from params.py) {md['proud']:.3f} mm^3 (closed form {v_out_exp:.3f}) - lead chamfer "
+                            f"{md['chamfer']:.3f} (mouth r {r_mouth:.3f} vs seal inner r {r_in:.3f}) - thread zone {md['thread']:.3f}; the "
+                            f"back face is otherwise continuous (SPEC 3.7: the rib sits on the bore wall above the thread zone, no keyway mouth)")
                     if md["thread"] > INTERFERENCE_LIMIT:
                         note += (f" (the M{p.cb_thread_major:g} x {p.cb_thread_pitch:g} groove, root r {r_thread_out:.3f}, runs out at the "
                                  f"back face and interrupts the inner {max(0.0, r_thread_out - r_in):.2f} of the {band:.2f} wide band; the "
                                  f"seat rows judge that fit)")
                     if not clip_ok:
                         note += " -- MODEL INCONSISTENT with the closed form, the row cannot be trusted"
-                    if not key_ok:
-                        note += f" -- KEYWAY STEP INCONSISTENT: boolean {md['keyway']:.4f} vs analytic {key_exp:.4f}"
                     self.add(g, f"case/{seal}: the protruding part (z 0..{protrusion:.2f}, uncompressed) meets the case back face over the "
-                                f"whole seating band but the keyway mouth, the thread mouth (lead chamfer) and the thread groove run-out "
-                                f"(SPEC 4 / 6 / 8.3)",
-                             clip_ok and key_ok and dev < SEAL_SEAT_TOL, f"{v_out:.4f} mm^3 vs expected {exp:.4f} ({100 * dev:.2f} %)",
+                                f"whole seating band but the thread mouth (lead chamfer) and the thread groove run-out (SPEC 4 / 6 / 8.3; "
+                                f"no keyway in v0.3)",
+                             clip_ok and dev < SEAL_SEAT_TOL, f"{v_out:.4f} mm^3 vs expected {exp:.4f} ({100 * dev:.2f} %)",
                              f"within {100 * SEAL_SEAT_TOL:.0f} %", note,
-                             blame="parts/purchased.py (seal placement) or parts/case_body.py (back face: keyway mouth, thread zone, lead chamfer)")
+                             blame="parts/purchased.py (seal placement) or parts/case_body.py (back face: thread zone, lead chamfer, "
+                                   "anything cut into the seating band)")
         # -- the seal's inner radius vs the thread mouth (params only)
         cl = r_in - r_mouth
         inner = "gasket_id" if is_gasket else "(oring_groove_mean_d - oring_cs)"
@@ -798,7 +859,7 @@ class Verifier:
                  f"seal inner r {r_in:.3f} vs chamfer mouth r {r_mouth:.3f} (minor r {p.cb_thread_minor / 2:.3f} + {CB_LEAD_CHAMFER:g}); the "
                  f"seating band r {r_in:.2f}..{r_out:.2f} is continuous outside the thread's outer radius {r_thread_out:.3f}: "
                  f"{max(0.0, r_out - max(r_in, r_thread_out)):.2f} of its {r_out - r_in:.2f} width",
-                 blame="params.py (gasket_id / oring_groove_mean_d, oring_cs vs cb_thread_major, cb_thread_pitch)")
+                 blame="params.py (gasket_radial_clear / oring_groove_mean_d, oring_cs vs cb_thread_major, cb_thread_pitch)")
         # -- against the caseback (the seal lies in its recess / groove)
         if self.has("caseback"):
             try:
@@ -807,9 +868,8 @@ class Verifier:
                 self.error(g, f"{seal}/caseback", e)
                 return
             if is_gasket:
-                blame = ("params.py (gasket_id / gasket_od / gasket_t vs cb_thread_major / gasket_recess_od / gasket_recess_depth"
-                         + (": the resin() profile keeps the titanium gasket against its wider boss" if p.profile == "resin" else "")
-                         + ") or parts/caseback.py (recess) / parts/purchased.py (gasket)")
+                blame = ("params.py (gasket_radial_clear / gasket_t vs cb_thread_major / gasket_recess_od / gasket_recess_depth; "
+                         "gasket_id / gasket_od are derived) or parts/caseback.py (recess) / parts/purchased.py (gasket)")
                 self.add(g, f"{seal}/caseback: the gasket lies in the {seat} without touching its walls (SPEC 4 / 8.3)",
                          v_cb < INTERFERENCE_LIMIT, f"{v_cb:.4f} mm^3", lim, seat_note, blame=blame)
             else:
@@ -1176,7 +1236,7 @@ class Verifier:
         lines.append("")
         lines.append(f"Result: **{'PASS' if not fails else 'FAIL'}** -- {n_scored - len(fails)} / {n_scored} scored checks passed"
                      f", {len(fails)} failed; {len(self.checks) - n_scored} informational rows. "
-                     f"Run {_dt.datetime.now().strftime('%Y-%m-%d %H:%M')} in {elapsed:.0f} s. SPEC.md section 8 (v0.2).")
+                     f"Run {_dt.datetime.now().strftime('%Y-%m-%d %H:%M')} in {elapsed:.0f} s. SPEC.md section 8 (v0.3).")
         lines.append("")
         lines.append(f"Profile: thread_model `{p.thread_model}`, M{p.cb_thread_major} x {p.cb_thread_pitch} "
                      f"(minor {p.cb_thread_minor:.3f}), tube hole {p.tube_hole_d}, hole_comp {p.hole_comp}, fit_extra {p.fit_extra}; "
