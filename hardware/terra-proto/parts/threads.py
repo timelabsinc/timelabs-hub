@@ -91,7 +91,9 @@ def cut_internal_cosmetic(wp: cq.Workplane, major: float, pitch: float, length: 
     r = minor_dia(major, pitch) / 2
     wp = wp.cut(cq.Workplane("XY").circle(r).extrude(length).translate((0, 0, z0)))
     if lead_chamfer > 0:
-        cone = cq.Solid.makeCone(r + lead_chamfer, r - lead_chamfer, 2 * lead_chamfer,
-                                 cq.Vector(0, 0, z0 - lead_chamfer), cq.Vector(0, 0, 1))
+        # 45 deg lead chamfer: radius r + lead_chamfer at the mouth (z0), r at z0 + lead_chamfer. The cone runs
+        # OVERLAP past both ends so its end faces lie in free space / inside the bore, never on an existing face.
+        cone = cq.Solid.makeCone(r + lead_chamfer + OVERLAP, r - OVERLAP, lead_chamfer + 2 * OVERLAP,
+                                 cq.Vector(0, 0, z0 - OVERLAP), cq.Vector(0, 0, 1))
         wp = wp.cut(cq.Workplane("XY").newObject([cone]))
     return wp
