@@ -36,15 +36,15 @@ class Params:
     # ------------------------------------------- crystal: flat sapphire + I-ring
     crystal_d: float = 27.0            # generic flat sapphire, stock size (0.1 mm steps exist)
     crystal_t: float = 2.0
-    crystal_engagement: float = 1.3    # how deep the crystal sits below the front face
+    crystal_engagement: float = 1.0    # how deep the crystal sits below the front face (= I-ring height + 0.1, no open gap)
     crystal_bore_extra: float = 0.7    # bore = crystal_d + 0.7 (Hytrel I-ring supplier rule)
     iring_wall: float = 0.45           # Hytrel I-ring for 1.5-2.0 mm glass
     iring_h: float = 0.9
     crystal_bore_lead_chamfer: float = 0.2
 
     # ------------------------------------------------------------ ledge / dial
-    dial_aperture_d: float = 24.4      # what you see through the crystal; dial overlaps the ledge by 0.3/side
-    ledge_t: float = 1.5               # solid ledge between crystal seat and dial cavity
+    dial_aperture_d: float = 24.2      # what you see through the crystal; dial overlaps the ledge by 0.4/side
+    ledge_t: float = 1.8               # solid ledge between crystal seat and dial cavity (keeps the ledge underside at 5.5)
     dial_d: float = 25.0               # must leave a >= 0.3 lip in the spacer ring: dial_d + 0.4 <= ring_od - 0.6
     dial_t: float = 0.4
     dial_center_hole_d: float = 1.6
@@ -69,9 +69,15 @@ class Params:
     ring_dial_clearance: float = 0.40  # dial recess = dial_d + this (diametral); >= 2x pocket clearance so the dial never binds
     ring_pocket_clearance: float = 0.15  # per side around the movement outline
     ring_stem_slot_w: float = 2.4      # slot in the ring wall for the stem, open toward the back
-    ring_key_w: float = 2.0            # anti-rotation key on the ring OD (at 9 o'clock)
-    ring_key_h: float = 0.6            # radial height of the key / depth of keyway in the case
-    ring_key_len: float = 2.0          # axial length of the key from the ring bottom
+    # anti-rotation: a RIB on the case's movement-bore wall at 9 o'clock (-X) engages a SLOT in the ring's OD
+    # that is open at the ring bottom. Nothing reaches the back face, so the caseback thread and the gasket
+    # seating face stay uninterrupted (v0.2's open keyway was a leak path).
+    key_w: float = 2.0                 # rib width (Y)
+    key_h: float = 0.6                 # rib radial height, inward from the movement bore
+    key_slot_clear_w: float = 0.2      # ring slot width = key_w + this
+    key_slot_clear_h: float = 0.15     # ring slot radial depth = key_h + this
+    key_z_margin: float = 0.2          # rib starts this far above the caseback inner face, ends this far below the dial seat
+    ring_axial_preload: float = 0.05   # drawing tolerance: ring height +preload/+preload+0.03 so the caseback clamps it
 
     # ------------------------------------------------------- caseback (316L)
     cb_thread_major: float = 27.0      # M27 x 0.5 (titanium) / M27 x 1.0 (resin)
@@ -92,8 +98,7 @@ class Params:
     gasket_recess_depth: float = 0.35  # annular recess in the flange's inner face (z=0 side), from the boss outward
     gasket_recess_od: float = 29.0     # leaves a 0.2 seating land at the flange rim
     gasket_t: float = 0.45             # flat gasket, ~22 % squeeze when the land seats
-    gasket_id: float = 27.2
-    gasket_od: float = 28.8
+    gasket_radial_clear: float = 0.2   # gasket ID = boss + 2x this, OD = recess OD - 2x this (fill ~77 % Ti)
     oring_cs: float = 0.4              # "oring" option: face-seal O-ring on the flange underside
     oring_groove_w: float = 0.6
     oring_groove_depth: float = 0.28
@@ -214,6 +219,44 @@ class Params:
     @property
     def ring_step_h(self) -> float:           # ring bottom -> dial seat step
         return self.z_dial_seat - self.z_cb_inner
+
+    @property
+    def gasket_id(self) -> float:
+        return self.cb_thread_major + 2 * self.gasket_radial_clear
+
+    @property
+    def gasket_od(self) -> float:
+        return self.gasket_recess_od - 2 * self.gasket_radial_clear
+
+    @property
+    def gasket_fill(self) -> float:           # gasket volume / recess volume (rubber is incompressible)
+        gv = math.pi / 4 * (self.gasket_od ** 2 - self.gasket_id ** 2) * self.gasket_t
+        rv = math.pi / 4 * (self.gasket_recess_od ** 2 - self.cb_thread_major ** 2) * self.gasket_recess_depth
+        return gv / rv
+
+    @property
+    def key_z0(self) -> float:                # rib bottom
+        return self.z_cb_inner + self.key_z_margin
+
+    @property
+    def key_z1(self) -> float:                # rib top
+        return self.z_dial_seat - self.key_z_margin
+
+    @property
+    def key_r_in(self) -> float:              # rib inner radius (rib spans key_r_in .. mvt_bore_d/2)
+        return self.mvt_bore_d / 2 - self.key_h
+
+    @property
+    def key_slot_w(self) -> float:
+        return self.key_w + self.key_slot_clear_w
+
+    @property
+    def key_slot_depth(self) -> float:        # radial, into the ring OD
+        return self.key_h + self.key_slot_clear_h
+
+    @property
+    def key_slot_z1(self) -> float:           # slot runs from the ring bottom up to here
+        return self.key_z1 + self.key_z_margin
 
     @property
     def ring_pocket_w(self) -> float:
@@ -362,7 +405,9 @@ class Params:
             "cb_thread_minor", "cb_flange_d", "tube_len", "tube_engagement", "strap_open_w_back",
             "strap_open_h_end", "z_strap_exit_low", "z_strap_exit_high", "strap_front_wall",
             "strap_bar_end_h", "y_strap_open_inner", "y_strap_open_outer", "ring_dial_recess_d",
-            "ring_lip_wall", "dial_ledge_overlap", "flange_to_strap_margin", "cb_seal",
+            "ring_lip_wall", "dial_ledge_overlap", "flange_to_strap_margin", "cb_seal", "gasket_id",
+            "gasket_od", "gasket_fill", "key_z0", "key_z1", "key_r_in", "key_slot_w", "key_slot_depth",
+            "key_slot_z1", "z_crystal_top",
         ]
         d = self.as_dict()
         return "\n".join(f"{k:>24s} = {d[k]:.3f}" if isinstance(d[k], float) else f"{k:>24s} = {d[k]}" for k in keys)
