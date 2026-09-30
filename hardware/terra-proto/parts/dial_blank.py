@@ -134,7 +134,7 @@ def bom(p: Params) -> list[dict]:
         "item": "WARNING: dial feet UNVERIFIED",
         "spec": FEET_WARNING,
         "qty": 0,
-        "source": "SPEC.md section 11 / params.dial_feet",
+        "source": "SPEC.md section 12 / params.dial_feet",
     })
     return rows
 

@@ -1,39 +1,42 @@
 """
-spacer_ring -- POM movement holder / rehaut for the Terra-style GL32 case (SPEC.md section 5).
+spacer_ring -- POM movement holder / rehaut for the Terra-style GL32 case (SPEC.md section 5, v0.2).
 
 Assembly coordinates (params.py): +X = 3 o'clock (crown), +Y = 12 o'clock, +Z = front; case back face z = 0.
 
-    body    cylinder O ring_od from z = z_cb_inner to z = z_ledge_bottom (height ring_h): it sits on the
-            caseback inner face and touches the ledge underside, so the caseback clamps it
+    body    cylinder O ring_od from z = z_cb_inner to z = z_ledge_bottom (height ring_h = 4.0): it sits on the
+            caseback inner face and its top face touches the ledge underside, so the caseback clamps it
     pocket  the GL32 outline = circle O ring_pocket_l INTERSECT strip |x| <= ring_pocket_w/2 (flats at
             3 and 9 o'clock), open at the bottom, from the ring bottom up ring_step_h to the dial seat;
             the movement rests on the caseback, the dial rests on the step
-    recess  O ring_dial_recess_d from the step up to the top: the lip left around the dial is the rehaut
+    recess  O ring_dial_recess_d (dial_d + 0.4: 25.4 Ti / 25.5 resin) from the step up through the top: the
+            wall left around the dial is the visible rehaut lip, ring_lip_wall = (ring_od - ring_dial_recess_d)/2
+            = 0.45 Ti / 0.35 resin
     slot    stem slot at +X, width ring_stem_slot_w (in Y), through the wall, from the bottom up to
             z_stem + 1.2, so the movement drops in from the back with its stem fitted
     key     anti-rotation key on the OD at -X: ring_key_w (Y) x ring_key_h (radial) x ring_key_len (axial,
-            from the bottom); it mates with the keyway the case body cuts at 9 o'clock
+            from the bottom); it mates with the keyway the case body cuts at 9 o'clock, open to the back face
 
-Lip wall.  The lip between the dial recess and the OD is (ring_od - ring_dial_recess_d) / 2.  With the v0.1
-values in params.py that is 0.05 mm in the titanium profile (26.3 vs 26.2) and -0.05 mm in the resin
-profile (26.2 vs 26.3): a Ø26.0 dial simply does not fit inside a ring that itself must fit a Ø26.5 bore.
-That is a params.py problem (dial_d / mvt_bore_d / ring_od_clearance), not one this module can solve, so
-when the lip would be thinner than LIP_WALL_MIN the ring is built WITHOUT the upper section: it then runs
-from z_cb_inner to the dial seat only (height ring_step_h), the dial rests on its top face and is located by
-the movement bore, and nothing clamps the ring against the ledge.  A warning is printed and recorded in
-WARNINGS; verify.py / build.py should surface it.  Fix in params.py, e.g. dial_d <= ring_od - 2 * 0.5 - 0.2,
-and the full-height ring with the rehaut lip is built again (the self-test exercises that path with an
-override).
+Lip wall.  The ring is ALWAYS built full height z_cb_inner -> z_ledge_bottom with the rehaut lip above the
+step: there is no short-ring fallback and no warning list.  SPEC 5 requires ring_lip_wall >= LIP_WALL_MIN
+(0.3); when params.py describes a thinner lip (a dial too large for the movement bore) geometry() raises
+ValueError naming ring_od, ring_dial_recess_d, dial_d and the lip they would leave, and nothing is built.
+That is fixed in params.py (dial_d <= ring_od - ring_dial_clearance - fit_extra - 2 * LIP_WALL_MIN, or a
+larger movement bore); this module never quietly builds a different ring.
 
 Boolean order matters for OCC: every feature is a single-tool operation, every tool face is either well
 inside solid material or overlaps >= OVERLAP into an existing void, and the only coincident faces are
 exact (the step plane and the slot top when z_stem + 1.2 lands on the dial seat, which is snapped to
-exact equality).
+exact equality).  Every boolean is followed by _check(): exactly one solid, isValid().
+
+geometry(p) returns the numbers build() uses: r_od, z0, z1, z_step, r_pl, x_flat, r_rec, lip_wall,
+z_slot_top, z_slot_cut_top, slot_w, key_w, key_h, key_len (z_top == z1 is kept for drawings.py).
+outline_tool() / outline_area() are shared with parts/purchased.py for the movement envelope.
 
 Run `python3 parts/spacer_ring.py [out_dir]` from the terra-proto directory for the self-test: both
-profiles build (plus both profiles with a dial small enough for a real lip), one valid solid each, the
-volume is checked against a closed-form value, probe points prove every feature exists, STLs are written
-to out_dir (default: TERRA_SCRATCH or a directory under the system temp folder) and checked watertight.
+profiles build, one valid solid each, the volume is checked against a closed-form value, the bounding box
+runs exactly z_cb_inner .. z_ledge_bottom, probe points prove every feature exists, STLs are written to
+out_dir (default: TERRA_SCRATCH or a directory under the system temp folder) and checked watertight, and
+a dial too large for a 0.3 lip must raise ValueError in both profiles.
 """
 from __future__ import annotations
 
@@ -54,14 +57,11 @@ from params import Params                         # noqa: E402
 PART = "spacer_ring"
 MATERIAL = {"titanium": "POM-C (acetal), machined", "resin": "ABS-like resin"}
 
-LIP_WALL_MIN = 0.30     # thinnest radial lip worth machining in POM / printing in resin
+LIP_WALL_MIN = 0.30     # SPEC 5: thinnest rehaut lip allowed; a thinner lip is a params.py error, not a fallback
 POCKET_WALL_MIN = 0.50  # thinnest wall between the movement pocket and the OD
 OVERRUN = 1.0           # how far a cutting tool runs past a face it enters through
 OVERLAP = 0.3           # how far a tool reaches into an existing void / a fused tool reaches into solid
 COPLANAR_SNAP = 0.05    # |dz| below which a tool face is snapped onto an existing face (never near-coplanar)
-
-# Warnings raised by the last build(), as "<profile>: <text>". build() clears its own profile's entries.
-WARNINGS: list[str] = []
 
 
 # --------------------------------------------------------------------------- helpers
@@ -73,13 +73,6 @@ def _check(wp: cq.Workplane, step: str) -> cq.Workplane:
     if not wp.val().isValid():
         raise RuntimeError(f"{PART}/{step}: solid is not valid")
     return wp
-
-
-def _warn(p: Params, text: str) -> None:
-    msg = f"{p.profile}: {text}"
-    if msg not in WARNINGS:
-        WARNINGS.append(msg)
-    print(f"WARNING [{PART}/{p.profile}] {text}", file=sys.stderr)
 
 
 def _box(x0, x1, y0, y1, z0, z1) -> cq.Workplane:
@@ -110,31 +103,49 @@ def outline_area(r: float, half_w: float) -> float:
     return math.pi * r * r - 2 * segment
 
 
+def max_dial_d(p: Params) -> float:
+    """Largest dial_d that still leaves a LIP_WALL_MIN rehaut lip in this profile."""
+    return p.ring_od - p.ring_dial_clearance - p.fit_extra - 2 * LIP_WALL_MIN
+
+
 # --------------------------------------------------------------------------- geometry
 def geometry(p: Params) -> dict:
-    """All the numbers build() uses, in assembly coordinates. Raises ValueError with the offending
-    values when params.py describes a ring that cannot exist; the too-thin lip is a warning + fallback."""
+    """All the numbers build() uses, in assembly coordinates. Raises ValueError, naming the offending
+    values, when params.py describes a ring that cannot exist -- first of all a rehaut lip thinner than
+    LIP_WALL_MIN. There is no fallback: the ring is always z_cb_inner .. z_ledge_bottom with its lip."""
     r_od = p.ring_od / 2
     z0 = p.z_cb_inner
     z1 = p.z_ledge_bottom
     z_step = z0 + p.ring_step_h
     r_pl = p.ring_pocket_l / 2
     x_flat = p.ring_pocket_w / 2
-    r_rec_req = p.ring_dial_recess_d / 2
-    lip_wall = r_od - r_rec_req
+    r_rec = p.ring_dial_recess_d / 2
+    lip_wall = r_od - r_rec
     z_slot_top = p.z_stem + 1.2
+
+    if lip_wall < LIP_WALL_MIN - 1e-9:
+        raise ValueError(
+            f"{PART} ({p.profile}): rehaut lip (ring_od {p.ring_od:.2f} - ring_dial_recess_d "
+            f"{p.ring_dial_recess_d:.2f}) / 2 = {lip_wall:.3f} mm < {LIP_WALL_MIN:.2f} (SPEC 5): dial_d {p.dial_d:.2f} "
+            f"+ ring_dial_clearance {p.ring_dial_clearance:.2f} + fit_extra {p.fit_extra:.2f} does not fit inside a "
+            f"ring that itself fits the O {p.mvt_bore_d:.2f} movement bore with {p.ring_od_clearance:.2f} clearance; "
+            f"fix params.py: dial_d <= {max_dial_d(p):.2f} or a larger mvt_bore_d")
 
     problems = []
     if p.ring_h < 0.5:
         problems.append(f"ring height ring_h {p.ring_h:.3f} < 0.5 (z_cb_inner {z0} .. z_ledge_bottom {z1})")
     if p.ring_step_h < 0.5:
         problems.append(f"ring_step_h {p.ring_step_h:.3f} < 0.5: the dial seat is not above the caseback")
-    if p.ring_step_h > p.ring_h - 1e-6:
-        problems.append(f"ring_step_h {p.ring_step_h:.3f} >= ring_h {p.ring_h:.3f}: dial seat above the ledge")
+    if p.ring_step_h > p.ring_h - 0.5:
+        problems.append(f"ring_step_h {p.ring_step_h:.3f} > ring_h {p.ring_h:.3f} - 0.5: no room for the lip above "
+                        f"the dial seat")
     if r_od - r_pl < POCKET_WALL_MIN:
         problems.append(f"pocket wall (ring_od - ring_pocket_l)/2 = {r_od - r_pl:.3f} < {POCKET_WALL_MIN}")
     if r_od - x_flat < POCKET_WALL_MIN:
         problems.append(f"pocket wall at the flats (ring_od - ring_pocket_w)/2 = {r_od - x_flat:.3f} < {POCKET_WALL_MIN}")
+    if r_pl > r_rec - OVERLAP:
+        problems.append(f"dial recess O {p.ring_dial_recess_d:.2f} is not larger than the movement pocket "
+                        f"O {p.ring_pocket_l:.2f} by 2 x {OVERLAP}")
     if p.ring_stem_slot_w <= 0 or p.ring_stem_slot_w / 2 >= r_pl:
         problems.append(f"ring_stem_slot_w {p.ring_stem_slot_w} is not a slot in the wall")
     if z_slot_top <= z0 + 0.5:
@@ -146,58 +157,40 @@ def geometry(p: Params) -> dict:
     if p.ring_key_h <= 0 or p.ring_key_w <= 0 or p.ring_key_w / 2 >= r_od:
         problems.append("ring key has no size")
     if problems:
-        raise ValueError(f"{PART}: geometry impossible with params.py:\n  " + "\n  ".join(problems))
+        raise ValueError(f"{PART} ({p.profile}): geometry impossible with params.py:\n  " + "\n  ".join(problems))
 
-    lip = lip_wall >= LIP_WALL_MIN
-    if lip:
-        if r_pl > r_rec_req - OVERLAP:
-            raise ValueError(f"{PART}: dial recess O {p.ring_dial_recess_d:.2f} is not larger than the movement "
-                             f"pocket O {p.ring_pocket_l:.2f} by 2 x {OVERLAP}")
-        z_top = z1
-        r_rec = r_rec_req
-    else:
-        z_top = z_step
-        r_rec = None
-    if z_slot_top > z_top - COPLANAR_SNAP:
-        z_slot_cut_top = z_top + OVERRUN         # slot runs out through the top face
+    if z_slot_top > z1 - COPLANAR_SNAP:
+        z_slot_cut_top = z1 + OVERRUN            # slot runs out through the top face
     elif abs(z_slot_top - z_step) < COPLANAR_SNAP:
         z_slot_cut_top = z_step                  # exactly on the step plane, never 0.01 off it
     else:
         z_slot_cut_top = z_slot_top
-    return dict(r_od=r_od, z0=z0, z1=z1, z_step=z_step, z_top=z_top, r_pl=r_pl, x_flat=x_flat,
-                r_rec=r_rec, r_rec_requested=r_rec_req, lip=lip, lip_wall=lip_wall,
-                z_slot_top=z_slot_top, z_slot_cut_top=z_slot_cut_top, slot_w=p.ring_stem_slot_w,
+    return dict(r_od=r_od, z0=z0, z1=z1, z_top=z1, z_step=z_step, r_pl=r_pl, x_flat=x_flat, r_rec=r_rec,
+                lip_wall=lip_wall, z_slot_top=z_slot_top, z_slot_cut_top=z_slot_cut_top, slot_w=p.ring_stem_slot_w,
                 key_w=p.ring_key_w, key_h=p.ring_key_h, key_len=p.ring_key_len)
 
 
 # --------------------------------------------------------------------------- part
 def build(p: Params) -> cq.Workplane:
-    """ONE valid solid in assembly coordinates (see the module docstring for the lip fallback)."""
-    WARNINGS[:] = [w for w in WARNINGS if not w.startswith(p.profile + ":")]
+    """ONE valid solid in assembly coordinates: the full-height ring z_cb_inner .. z_ledge_bottom.
+    Raises ValueError (from geometry()) when params.py leaves a rehaut lip < LIP_WALL_MIN."""
     g = geometry(p)
-    r_od, z0, z_top, z_step = g["r_od"], g["z0"], g["z_top"], g["z_step"]
-    if not g["lip"]:
-        _warn(p, f"dial-recess lip would be {g['lip_wall']:.3f} mm (ring_od {p.ring_od:.2f} vs "
-                 f"ring_dial_recess_d {p.ring_dial_recess_d:.2f}) < {LIP_WALL_MIN}: ring built without its "
-                 f"upper section, top at the dial seat z = {z_step:.2f} instead of z_ledge_bottom {g['z1']:.2f}; "
-                 f"fix params.py (dial_d <= {p.ring_od - 2 * 0.5 - 0.2:.1f} or a larger movement bore)")
+    r_od, z0, z1, z_step = g["r_od"], g["z0"], g["z1"], g["z_step"]
 
-    # 1. body: plain cylinder z0 .. z_top
-    wp = _cylinder_z(r_od, z0, z_top)
-    _check(wp, "body")
+    # 1. body: plain cylinder z0 .. z1 (bottom on the caseback inner face, top on the ledge underside)
+    wp = _check(_cylinder_z(r_od, z0, z1), "body")
 
     # 2. anti-rotation key on the OD at -X, fused first while the wall behind it is still solid.
     #    Box reaches OVERLAP into the wall; bottom face exactly on the ring bottom plane.
     key = _box(-(r_od + g["key_h"]), -(r_od - OVERLAP), -g["key_w"] / 2, g["key_w"] / 2, z0, z0 + g["key_len"])
     wp = _check(wp.union(key), "key")
 
-    # 3. dial recess from the step plane up through the top (only when a real lip remains).
+    # 3. dial recess from the step plane up through the top: what is left around it is the rehaut lip.
     #    The tool's floor at z_step is inside solid material at this point: a clean cut.
-    if g["lip"]:
-        wp = _check(wp.cut(_cylinder_z(g["r_rec"], z_step, z_top + OVERRUN)), "dial recess")
+    wp = _check(wp.cut(_cylinder_z(g["r_rec"], z_step, z1 + OVERRUN)), "dial recess")
 
     # 4. movement pocket, open at the bottom, up to the step. The tool overruns the bottom face and reaches
-    #    OVERLAP above the step into the recess (or above the top), so no face is near another face.
+    #    OVERLAP above the step into the recess, so no face is near another face.
     wp = _check(wp.cut(outline_tool(g["r_pl"], g["x_flat"], z0 - OVERRUN, z_step + OVERLAP)), "movement pocket")
 
     # 5. stem slot at +X through the wall, from the bottom to z_stem + 1.2. Inner end sits OVERLAP inside the
@@ -213,14 +206,14 @@ def bom(p: Params) -> list[dict]:
     """Raw stock for the machinist (titanium build only; the resin build is printed from the STL)."""
     if p.profile != "titanium":
         return []
-    g = geometry(p)
-    h = g["z_top"] - g["z0"]
+    geometry(p)                                  # same ValueError as build() for an impossible ring
     return [{
         "item": "spacer ring raw stock",
         "spec": (f"POM-C (acetal copolymer) round bar O 30 x 20 mm, black or natural; finish O {p.ring_od:.2f} x "
-                 f"{h:.2f} tall, movement pocket {p.ring_pocket_w:.2f} x {p.ring_pocket_l:.2f}, "
-                 f"stem slot {p.ring_stem_slot_w:.1f} wide, key {p.ring_key_w:.1f} x {p.ring_key_h:.1f} x "
-                 f"{p.ring_key_len:.1f}; general tolerance +-0.05"),
+                 f"{p.ring_h:.2f} tall, movement pocket {p.ring_pocket_w:.2f} x {p.ring_pocket_l:.2f} from the bottom "
+                 f"{p.ring_step_h:.2f} deep, dial recess O {p.ring_dial_recess_d:.2f} from the top (lip "
+                 f"{p.ring_lip_wall:.2f}), stem slot {p.ring_stem_slot_w:.1f} wide, key {p.ring_key_w:.1f} x "
+                 f"{p.ring_key_h:.1f} x {p.ring_key_len:.1f}; general tolerance +-0.05"),
         "qty": 1,
         "source": "engineering-plastics stockist (POM-C / Delrin rod)",
     }]
@@ -232,19 +225,18 @@ def expected_volume(p: Params, n: int = 20001) -> float:
     import numpy as np
     _trapz = getattr(np, "trapezoid", None) or np.trapz      # numpy 2 renamed trapz
     g = geometry(p)
-    r_od, z0, z_top, z_step = g["r_od"], g["z0"], g["z_top"], g["z_step"]
-    v = math.pi * r_od ** 2 * (z_top - z0)
-    if g["lip"]:
-        v -= math.pi * g["r_rec"] ** 2 * (z_top - z_step)
-    v -= outline_area(g["r_pl"], g["x_flat"]) * (z_step - z0)
-    # stem slot, lower band: between the pocket boundary and the OD
+    r_od, z0, z1, z_step = g["r_od"], g["z0"], g["z1"], g["z_step"]
+    v = math.pi * r_od ** 2 * (z1 - z0)
+    v -= math.pi * g["r_rec"] ** 2 * (z1 - z_step)                    # dial recess
+    v -= outline_area(g["r_pl"], g["x_flat"]) * (z_step - z0)         # movement pocket
+    # stem slot: what the tool actually removes ends at z_slot_cut_top (clipped to the top face)
     w = g["slot_w"] / 2
     y = np.linspace(-w, w, n)
     x_out = np.sqrt(np.clip(r_od ** 2 - y ** 2, 0, None))
     x_in = np.minimum(g["x_flat"], np.sqrt(np.clip(g["r_pl"] ** 2 - y ** 2, 0, None)))
-    z_slot_top = min(g["z_slot_top"], z_top)
-    v -= float(_trapz(np.clip(x_out - x_in, 0, None), y)) * (min(z_slot_top, z_step) - z0)
-    if g["lip"] and z_slot_top > z_step:      # upper band: through the lip only
+    z_slot_top = min(g["z_slot_cut_top"], z1)
+    v -= float(_trapz(np.clip(x_out - x_in, 0, None), y)) * (min(z_slot_top, z_step) - z0)   # lower band: wall
+    if z_slot_top > z_step:                                                                  # upper band: lip only
         x_rec = np.sqrt(np.clip(g["r_rec"] ** 2 - y ** 2, 0, None))
         v -= float(_trapz(np.clip(x_out - x_rec, 0, None), y)) * (z_slot_top - z_step)
     # key: box outside the OD arc
@@ -257,8 +249,10 @@ def expected_volume(p: Params, n: int = 20001) -> float:
 def probe_points(p: Params) -> tuple[list, list]:
     """(must_be_empty, must_be_solid) labelled points for the verifier / self-test."""
     g = geometry(p)
-    r_od, z0, z_top, z_step = g["r_od"], g["z0"], g["z_top"], g["z_step"]
+    r_od, z0, z1, z_step = g["r_od"], g["z0"], g["z1"], g["z_step"]
     y_wall = (g["r_pl"] + r_od) / 2                       # inside the wall at 12 o'clock
+    y_lip = (g["r_rec"] + r_od) / 2                       # inside the rehaut lip
+    z_lip = (z_step + z1) / 2
     x_slot = (g["x_flat"] + r_od) / 2
     x_key = -(r_od + g["key_h"] / 2)
     empty = [
@@ -267,7 +261,8 @@ def probe_points(p: Params) -> tuple[list, list]:
         ("outside the flat (still pocket)", (g["x_flat"] - 0.2, 3.0, z0 + 0.5)),
         ("stem slot", (x_slot, 0.0, z0 + 0.5)),
         ("stem passes the slot", (x_slot, 0.0, p.z_stem)),
-        ("above the step (recess or open top)", (0.0, y_wall, z_step + 0.2)),
+        ("above the step (dial recess)", (0.0, y_wall, z_step + 0.2)),
+        ("dial recess at its edge", (0.0, g["r_rec"] - 0.3, z_lip)),
         ("above the key", (x_key, 0.0, z0 + g["key_len"] + 0.2)),
         ("beside the key", (x_key, g["key_w"] / 2 + 0.3, z0 + g["key_len"] / 2)),
     ]
@@ -278,12 +273,12 @@ def probe_points(p: Params) -> tuple[list, list]:
         ("step, just under the seat", (0.0, y_wall, z_step - 0.15)),
         ("wall beside the stem slot", (x_slot, g["slot_w"] / 2 + 0.3, z0 + 0.5)),
         ("key", (x_key, 0.0, z0 + g["key_len"] / 2)),
+        ("rehaut lip at 12 o'clock", (0.0, y_lip, z_lip)),
+        ("rehaut lip at 9 o'clock", (-y_lip, 0.0, z_lip)),
+        ("rehaut lip just under the top", (0.0, y_lip, z1 - 0.1)),
     ]
-    if g["lip"]:
-        solid.append(("rehaut lip", (0.0, (g["r_rec"] + r_od) / 2, (z_step + z_top) / 2)))
-        empty.append(("dial recess", (0.0, g["r_rec"] - 0.3, (z_step + z_top) / 2)))
-        if g["z_slot_top"] < z_top - 0.3:
-            solid.append(("lip above the stem slot", ((g["r_rec"] + r_od) / 2, 0.0, (g["z_slot_top"] + z_top) / 2)))
+    if g["z_slot_top"] < z1 - 0.3:
+        solid.append(("lip above the stem slot", (y_lip, 0.0, (g["z_slot_top"] + z1) / 2)))
     return empty, solid
 
 
@@ -291,30 +286,29 @@ def _selftest(out_dir: str) -> None:
     import trimesh
     os.makedirs(out_dir, exist_ok=True)
     failures = 0
-    seen_warnings: list[str] = []
-    # the two real profiles, then both again with a dial small enough for a real rehaut lip (exercises the lip path)
-    cases = [("titanium", {}), ("resin", {}), ("titanium", {"dial_d": 24.6}), ("resin", {"dial_d": 24.6})]
-    for prof, over in cases:
-        p = params.get(prof, **over)
-        tag = prof + ("" if not over else "_lipcheck")
+    for prof in ("titanium", "resin"):
+        p = params.get(prof)
         g = geometry(p)
-        print(f"[{tag}] ring_od {p.ring_od:.2f} recess {p.ring_dial_recess_d:.2f} lip {g['lip_wall']:+.3f} "
-              f"-> {'lip' if g['lip'] else 'NO LIP (fallback)'}; pocket {p.ring_pocket_w:.2f} x {p.ring_pocket_l:.2f}, "
-              f"step z {g['z_step']:.2f}, top z {g['z_top']:.2f}, slot top z {g['z_slot_top']:.2f}")
+        print(f"[{prof}] ring_od {p.ring_od:.2f} recess {p.ring_dial_recess_d:.2f} lip {g['lip_wall']:.3f}; pocket "
+              f"{p.ring_pocket_w:.2f} x {p.ring_pocket_l:.2f}; z {g['z0']:.2f} .. {g['z1']:.2f} (ring_h {p.ring_h:.2f}), "
+              f"step z {g['z_step']:.2f}, slot top z {g['z_slot_top']:.2f}")
+        assert g["lip_wall"] >= LIP_WALL_MIN - 1e-9 and abs(g["lip_wall"] - p.ring_lip_wall) < 1e-9
         wp = build(p)
-        seen_warnings += [f"[{tag}] {w}" for w in WARNINGS if w.startswith(prof + ":")]
         s = wp.val()
-        assert wp.solids().size() == 1 and s.isValid()
+        assert wp.solids().size() == 1 and s.isValid(), "not one valid solid"
         vol = s.Volume()
         vexp = expected_volume(p)
         bb = s.BoundingBox()
         print(f"  volume {vol:.2f} mm^3 (expected {vexp:.2f}, {100 * (vol - vexp) / vexp:+.3f} %)  mass "
               f"{vol * p.density_ring / 1000:.2f} g  bbox x {bb.xmin:.3f}..{bb.xmax:.3f} y {bb.ymin:.3f}..{bb.ymax:.3f} "
-              f"z {bb.zmin:.3f}..{bb.zmax:.3f}")
+              f"z {bb.zmin:.4f}..{bb.zmax:.4f}")
         assert abs(vol - vexp) / vexp < 2e-3, "volume disagrees with the closed-form value"
-        assert abs(bb.zmin - g["z0"]) < 0.01 and abs(bb.zmax - g["z_top"]) < 0.01
+        # full height, exactly: bottom on the caseback inner face, top on the ledge underside
+        assert abs(bb.zmin - p.z_cb_inner) < 1e-6, f"ring bottom {bb.zmin:.6f} != z_cb_inner {p.z_cb_inner:.6f}"
+        assert abs(bb.zmax - p.z_ledge_bottom) < 1e-6, f"ring top {bb.zmax:.6f} != z_ledge_bottom {p.z_ledge_bottom:.6f}"
+        assert abs((bb.zmax - bb.zmin) - p.ring_h) < 1e-6, "ring height != ring_h"
         # the stem slot removes the OD at y = 0 unless the lip continues above it
-        x_max = g["r_od"] if g["z_slot_top"] < g["z_top"] - COPLANAR_SNAP \
+        x_max = g["r_od"] if g["z_slot_top"] < g["z1"] - COPLANAR_SNAP \
             else math.sqrt(g["r_od"] ** 2 - (g["slot_w"] / 2) ** 2)
         assert abs(bb.xmax - x_max) < 0.01, f"xmax {bb.xmax:.3f} != {x_max:.3f} (stem slot missing?)"
         assert abs(bb.ymax - g["r_od"]) < 0.01 and abs(bb.ymin + g["r_od"]) < 0.01
@@ -328,7 +322,7 @@ def _selftest(out_dir: str) -> None:
             ins = s.isInside(cq.Vector(*pt))
             print(f"    {'ok ' if ins else 'BAD'} solid  {name:36s} {tuple(round(v, 2) for v in pt)}")
             failures += int(not ins)
-        path = os.path.join(out_dir, f"{PART}_{tag}.stl")
+        path = os.path.join(out_dir, f"{PART}_{prof}.stl")
         cq.exporters.export(wp, path, tolerance=0.005, angularTolerance=0.05)
         m = trimesh.load(path)
         print(f"  STL {path}: {len(m.faces)} faces, watertight={m.is_watertight}, mesh volume {m.volume:.2f} mm^3")
@@ -336,7 +330,29 @@ def _selftest(out_dir: str) -> None:
         assert abs(m.volume - vol) / vol < 0.01, "mesh volume disagrees with the B-rep volume"
         for row in bom(p):
             print(f"  BOM: {row['item']} | {row['spec']} | x{row['qty']} | {row['source']}")
-    print("WARNINGS:", ("\n  " + "\n  ".join(seen_warnings)) if seen_warnings else "none")
+
+    # negative test: a dial too large for a LIP_WALL_MIN lip must raise ValueError naming the numbers (no fallback)
+    print("[negative] dials too large for the rehaut lip (params.get overrides only; params.py is untouched):")
+    for prof, dial_d in (("titanium", 25.4), ("titanium", 25.6), ("resin", 25.2), ("resin", 25.6), ("resin", 26.0)):
+        q = params.get(prof, dial_d=dial_d)
+        try:
+            build(q)
+        except ValueError as e:
+            msg = str(e)
+            for needle in (f"{q.ring_od:.2f}", f"{q.ring_dial_recess_d:.2f}", f"{q.ring_lip_wall:.3f}", f"{dial_d:.2f}",
+                           f"{LIP_WALL_MIN:.2f}", f"{max_dial_d(q):.2f}"):
+                assert needle in msg, f"ValueError does not name {needle}: {msg}"
+            print(f"    ok  {prof} dial_d {dial_d:.2f} -> lip {q.ring_lip_wall:+.3f}: ValueError: {msg.splitlines()[0][:110]}...")
+        else:
+            raise AssertionError(f"{prof} dial_d {dial_d} (lip {q.ring_lip_wall:.3f}) built a ring instead of raising")
+    # the limit is inclusive: the largest allowed dial still describes a ring with exactly LIP_WALL_MIN of lip
+    for prof in ("titanium", "resin"):
+        q = params.get(prof)
+        q = params.get(prof, dial_d=round(max_dial_d(q), 3))
+        geometry(q)
+        assert abs(q.ring_lip_wall - LIP_WALL_MIN) < 1e-6
+        print(f"    ok  {prof} dial_d {q.dial_d:.2f} -> lip {q.ring_lip_wall:.3f} (the limit) is accepted")
+
     if failures:
         print(f"FAILED: {failures} probe(s)")
         sys.exit(1)

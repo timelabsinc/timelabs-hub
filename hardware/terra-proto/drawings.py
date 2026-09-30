@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Blueprints for the Terra-style GL32 case prototype (SPEC.md section 9).
+Blueprints for the Terra-style GL32 case prototype (SPEC.md section 9, v0.2).
 
-    python3 drawings.py [--out out] [--date 2026-09-29] [--png DIR] [--sheets 1 3]
+    python3 drawings.py [--out out] [--date YYYY-MM-DD] [--png DIR] [--sheets 1 3]
 
 Writes out/drawings/blueprints.pdf (A4 landscape, PdfPages) and one out/drawings/sheet_NN_<name>.svg
 per sheet.  --png DIR additionally writes a 150 dpi PNG preview of every sheet into DIR (review aid).
@@ -17,8 +17,41 @@ hand primitives:
   * detail views -- the same section faces at a larger scale inside a clipping circle
 
 The dimensions, notes and tables are overlaid with matplotlib from `params.py` (titanium profile: the
-resin differences are tabulated on sheets 8 and 9).  Values that SPEC.md section 11 lists as
-UNVERIFIED carry an asterisk and a footnote.
+resin differences are tabulated on sheets 5 and 9).  Every number on a sheet is read from params.Params
+or from the part modules' geometry helpers (case_body.keyway_geometry, spacer_ring.geometry,
+caseback.seal_radii, purchased.bom ...); the only literals in this file are the process notes SPEC.md
+gives the machinist (general tolerance, corner radius allowance, thread relief width, finishes) and the fit
+tolerances / ISO thread-tolerance figures the review added, kept in the DRAWING CONSTANTS and REVIEW
+TOLERANCES blocks below.  Values that SPEC.md section 12 lists as UNVERIFIED carry an
+asterisk and a footnote.  The caseback sheet and the assembly sheet follow `params.cb_seal`: the
+flat-gasket recess (default) or the O-ring groove is dimensioned, the other seal is noted as the
+alternative, and only the selected seal placeholder (parts.purchased.assembly_parts) is sectioned in
+the assembly.
+
+v0.2 content: the spacer ring's real rehaut lip (spacer_ring.geometry), the keyway open from the back
+face through the thread (case_body.keyway_geometry), the 4.0 strap bar, the flat-gasket recess, the 0.3
+front chamfer running round the crown pocket, brass density for the dial, and the machining notes SPEC 3
+asks for (internal corners R <= 0.5 in the strap-channel ends and chamfer notches, 0.3 thread relief at
+the blind thread floor, tube hole allowed to break into that relief).  Thread callouts are
+M27 x 0.5 - 6H / 6g for the titanium build and M27.6 x 1.0 (no class: printed helix) for the resin print.
+
+Review fixes (drawings v0.2, findings 1-5, see the REVIEW TOLERANCES block):
+  1. the case back-face annulus the flat gasket and the caseback rim land bear on is machined flat, Ra 0.8,
+     and masked from blasting (mask circle drawn on sheet 2, in every mask list; sheets 1-5, 9);
+  2. the thread zone is called as ONE bore (mvt_bore_d +0.08/0) from the back face to the ledge underside:
+     its first cb_thread_len is the M27 x 0.5 - 6H minor, and ISO 965-1 (TD1 grade 6) allows that minor a
+     band the toleranced bore lies inside, so the drawn D1 = 26.459 cosmetic bore and its 0.02 radial step
+     to the movement bore are not two dimensions a machinist could tell apart; the relief groove carries a
+     numeric diameter and tolerance and is stated to be run-out room for the caseback thread, not for the
+     thread mill (sheets 2-4, 9); bore_callout() refuses a bore band outside the 6H minor limits;
+  3. the ring key is toleranced one-sided against the general-tolerance keyway so the fit never binds, and
+     the resulting clearance range is printed (sheets 2, 6, 9);
+  4. the gasket recess depth and the rim land carry their own tolerances, the squeeze range with a
+     commercial gasket's tolerance is printed, the open keyway's interruption of the seal counter-face at
+     9 o'clock and the flat face left beyond the rim land at 12/6 are stated, and no water resistance is
+     claimed (sheets 2, 5, 8);
+  5. sheet 6 names the process for a key standing proud of the OD (turn oversize, 4th-axis mill the OD
+     leaving the key; or a pressed radial pin, which would need a params.py change).
 
 Sheets
   1 case body, front view              6 spacer ring, plan + sections
@@ -30,6 +63,7 @@ Sheets
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import math
 import os
 import sys
@@ -86,22 +120,195 @@ matplotlib.rcParams["svg.fonttype"] = "none"
 
 PART_COLOURS = {
     "case_body": "#8f9297", "caseback": "#b9bcc3", "spacer_ring": "#3a3a3a", "dial_blank": "#d9d2b0",
-    "crystal": "#7fb6e8", "iring": "#5a5a5a", "oring": "#202020", "tube": "#a3a6ae", "crown": "#7b7f88",
+    "crystal": "#7fb6e8", "iring": "#5a5a5a", "gasket": "#1a1a1a", "oring": "#202020", "tube": "#a3a6ae",
+    "crown": "#7b7f88",
     "movement": "#d6b64c", "hands_envelope": "#ff8a1e", "battery": "#c9c9cd",
 }
 PART_HATCH = {
     "case_body": "////", "caseback": "\\\\\\\\", "spacer_ring": "xx", "dial_blank": "||||",
-    "crystal": "...", "iring": "++", "oring": "xx", "tube": "\\\\\\\\", "crown": "////",
+    "crystal": "...", "iring": "++", "gasket": "xx", "oring": "xx", "tube": "\\\\\\\\", "crown": "////",
     "movement": "++", "hands_envelope": "..", "battery": "--",
 }
 PART_LABEL = {
     "case_body": "case body", "caseback": "caseback", "spacer_ring": "spacer ring", "dial_blank": "dial",
-    "crystal": "crystal", "iring": "I-ring", "oring": "O-ring", "tube": "tube", "crown": "crown",
+    "crystal": "crystal", "iring": "I-ring", "gasket": "flat gasket", "oring": "O-ring", "tube": "tube", "crown": "crown",
     "movement": "movement (GL32 envelope)", "hands_envelope": "hands envelope", "battery": "battery",
 }
 
-UNVERIFIED_NOTE = ("* UNVERIFIED value (SPEC.md section 11): catalogue figure or photo estimate, "
+UNVERIFIED_NOTE = ("* UNVERIFIED value (SPEC.md section 12): catalogue figure or photo estimate, "
                    "measure on the real part before titanium is cut.")
+
+# --------------------------------------------------------------------------- DRAWING CONSTANTS
+# Process notes from SPEC.md (sections 3, 4, 9) that a machinist needs but that are not part geometry, so
+# they have no home in params.py.  Nothing here is a dimension of a part: every dimension on every sheet
+# comes from params.Params or a part module.
+GENERAL_TOL = {"titanium": 0.05, "resin": 0.15}   # SPEC 9: general tolerance per build profile
+INTERNAL_CORNER_R_MAX = 0.5                       # SPEC 3: cutter radius allowed in the strap-channel ends and the chamfer notches
+THREAD_RELIEF_W = 0.3                             # SPEC 3: relief groove width at the floor of the blind caseback thread
+LEAD_CHAMFER = caseback.LEAD_CHAMFER_CASE         # 0.2 x 45 deg lead chamfer case_body.build() puts on the thread mouth (SPEC 3.6)
+CB_OUTER_CHAMFER = caseback.OUTER_EDGE_CHAMFER    # chamfer on the caseback's outer-face edge (SPEC 4)
+STEM_D = purchased.STEM_D                         # tap 10 stem diameter of the movement placeholder
+EDGE_BREAK = 0.1                                  # "break all edges" default
+RA_BLAST, RA_FIT = 1.6, 0.8                       # SPEC 9: sandblasted finish / press-fit bores and threads
+
+# --------------------------------------------------------------------------- REVIEW TOLERANCES
+# Review findings 1-5 on the v0.2 sheets: fits and process figures a machinist needs that params.py does
+# not carry (params.py holds nominal geometry only). Nothing here changes a part solid.
+BORE_TOL = "+0.08/0"             # the ONE thread-zone + movement bore Ø mvt_bore_d: 26.50-26.58 lies inside the 6H minor band
+                                 # 26.459-26.599 (+0.10/0 would reach 26.600, 1 um past the class); bore_callout() checks it
+ISO_TD1_GRADE6 = {0.5: 0.140, 0.75: 0.190, 1.0: 0.236, 1.25: 0.265, 1.5: 0.300}   # ISO 965-1 TD1 (internal minor Ø), grade 6, mm
+THREAD_RELIEF_OVER_MAJOR = 0.2   # relief groove Ø = thread major + this (Ø27.2): run-out room for the caseback thread, not the cutter
+THREAD_RELIEF_TOL = "+0.1/0"     # on the relief groove Ø
+KEY_W_TOL = "-0.05/-0.10"        # ring key width, one-sided (POM): a 2.05 key in a 2.05 keyway at the general +-0.05 would bind
+RECESS_DEPTH_TOL = 0.02          # +- on the gasket recess depth: at the general +-0.05 the 0.45 gasket's squeeze could reach zero
+LAND_W_TOL = "+0.05/0"           # caseback rim seating land width
+GASKET_T_TOL = 0.05              # +- thickness assumed for a commercial flat gasket; the squeeze range is printed with it
+BACK_MASK_EXTRA = 0.2            # the blast mask on the case back face runs this far beyond the caseback flange radius
+PIN_ALT_D = 1.5                  # pressed radial pin that could replace the ring key (would need a params.py change)
+
+
+def _tol_pair(s: str) -> tuple[float, float]:
+    """'+0.10/0' -> (0.0, 0.10); '-0.05/-0.10' -> (-0.10, -0.05)  (low, high)."""
+    a, b = (float(t) for t in s.split("/"))
+    return min(a, b), max(a, b)
+
+
+def minor_band(p: params.Params) -> tuple[float, float] | None:
+    """(min, max) minor diameter the ISO 6H class allows the titanium thread: D1 .. D1 + TD1 grade 6.
+    None for the resin helix, which has no class."""
+    if p.thread_model != "plain":
+        return None
+    td1 = ISO_TD1_GRADE6.get(p.cb_thread_pitch)
+    if td1 is None:
+        raise ValueError(f"no ISO 965-1 TD1 grade-6 value tabulated for pitch {p.cb_thread_pitch}: extend ISO_TD1_GRADE6")
+    return p.cb_thread_minor, p.cb_thread_minor + td1
+
+
+def bore_callout(p: params.Params) -> str:
+    """'Ø26.5 +0.08/0' (BORE_TOL): the single bore from the back face to the ledge underside (thread minor + movement bore).
+    Refuses to produce a callout whose band leaves the 6H minor limits: that would ask the machinist for an
+    out-of-class thread (change mvt_bore_d or BORE_TOL, not the sheet)."""
+    band = minor_band(p)
+    if band is not None:
+        lo, hi = _tol_pair(BORE_TOL)
+        if p.mvt_bore_d + lo < band[0] - 1e-9 or p.mvt_bore_d + hi > band[1] + 1e-9:
+            raise ValueError(f"bore Ø{p.mvt_bore_d + lo:.3f}-{p.mvt_bore_d + hi:.3f} is not inside the "
+                             f"{thread_callout(p, '6H')} minor band {band[0]:.3f}-{band[1]:.3f}")
+    return f"Ø{p.mvt_bore_d:.1f} {BORE_TOL}"
+
+
+def minor_text(p: params.Params) -> str:
+    """'minor per M27 x 0.5 - 6H: 26.459-26.599' (titanium) / 'printed helix, no class' (resin)."""
+    band = minor_band(p)
+    return f"minor per {thread_callout(p, '6H')}: {band[0]:.3f}-{band[1]:.3f}" if band else "printed helix, no class"
+
+
+def relief_d(p: params.Params) -> float:
+    return p.cb_thread_major + THREAD_RELIEF_OVER_MAJOR
+
+
+def relief_text(p: params.Params) -> str:
+    """'Ø27.2 +0.1/0 x 0.3 wide relief, z 1.2 to 1.5'."""
+    return (f"Ø{relief_d(p):.1f} {THREAD_RELIEF_TOL} x {THREAD_RELIEF_W:.1f} wide relief, z "
+            f"{p.cb_thread_len - THREAD_RELIEF_W:.1f} to {p.cb_thread_len:.1f}")
+
+
+def back_mask_r(p: params.Params) -> float:
+    """Radius of the machined, masked annulus on the case back face (gasket counter-face + rim seating land)."""
+    return p.cb_flange_d / 2 + BACK_MASK_EXTRA
+
+
+def seal_bearing_radii(p: params.Params) -> tuple[float, float]:
+    """(inner, outer) radius over which the fitted seal presses on the case back face."""
+    if p.cb_seal == "flat_gasket":
+        return p.gasket_id / 2, p.gasket_od / 2
+    r_si, r_so, _ = caseback.seal_radii(p)
+    return r_si, r_so
+
+
+def seal_word(p: params.Params) -> str:
+    return "gasket" if p.cb_seal == "flat_gasket" else "O-ring"
+
+
+def back_mask_text(p: params.Params, short: bool = False) -> str:
+    """The blast-mask sentence for the case back face."""
+    r_m = back_mask_r(p)
+    if short:
+        return f"back-face seal annulus out to Ø{2 * r_m:.1f} (sheet 2)"
+    b_in, b_out = seal_bearing_radii(p)
+    y_fil = p.y_strap_open_inner - p.strap_fillet
+    return (f"back-face annulus from the thread bore out to Ø{2 * r_m:.1f} (r {r_m:.1f}): the seal counter-face "
+            f"(r {b_in:.1f}-{b_out:.1f}) and the caseback rim-land seat (r {p.gasket_recess_od / 2:.1f}-{p.cb_flange_d / 2:.1f}), "
+            f"machined flat Ra {RA_FIT}; at 12 and 6 the mask ends at the strap-channel fillet (y {y_fil:.1f})")
+
+
+def seal_interruption(p: params.Params, kg: dict) -> dict:
+    """How the open keyway at 9 o'clock cuts the seal counter-face (removed / bearing width of the seal land
+    over the slot), and the flat back face left beyond the rim land at 12/6 before the strap-channel fillet."""
+    b_in, b_out = seal_bearing_radii(p)
+    land_w = b_out - b_in
+    return dict(land_w=land_w, removed=min(land_w, max(0.0, kg["r_floor"] - b_in)),
+                bearing=min(land_w, max(0.0, b_out - kg["r_floor"])),
+                flat_margin=(p.y_strap_open_inner - p.strap_fillet) - p.cb_flange_d / 2)
+
+
+def seal_interruption_text(p: params.Params, kg: dict) -> str:
+    si = seal_interruption(p, kg)
+    seal = seal_word(p)
+    s = (f"the open keyway ({kg['kw']:.1f} wide, floor r {kg['r_floor']:.2f}) interrupts the {seal} counter-face at 9 o'clock: "
+         f"{si['bearing']:.2f} of the {si['land_w']:.1f} {seal} width bears there")
+    s += (f"; at 12 and 6 the R{p.strap_fillet:.1f} strap-channel fillets begin {si['flat_margin']:.1f} beyond the rim land. "
+          f"No water resistance is claimed (dust / splash only)")
+    return s
+
+
+def gasket_squeeze_range(p: params.Params) -> tuple[float, float, float]:
+    """(nominal, min, max) flat-gasket squeeze in mm: recess depth +-RECESS_DEPTH_TOL, gasket +-GASKET_T_TOL."""
+    nom = p.gasket_t - p.gasket_recess_depth
+    lo = (p.gasket_t - GASKET_T_TOL) - (p.gasket_recess_depth + RECESS_DEPTH_TOL)
+    hi = (p.gasket_t + GASKET_T_TOL) - (p.gasket_recess_depth - RECESS_DEPTH_TOL)
+    return nom, lo, hi
+
+
+def key_fit(p: params.Params, kg: dict) -> tuple[float, float]:
+    """(min, max) width clearance between the ring key (KEY_W_TOL) and the case keyway (general +-)."""
+    k_lo, k_hi = _tol_pair(KEY_W_TOL)
+    gt = GENERAL_TOL["titanium"]
+    return (kg["kw"] - gt) - (p.ring_key_w + k_hi), (kg["kw"] + gt) - (p.ring_key_w + k_lo)
+
+
+def key_fit_text(p: params.Params, kg: dict) -> str:
+    lo, hi = key_fit(p, kg)
+    return f"key {p.ring_key_w:.1f} {KEY_W_TOL} in the {kg['kw']:.1f} {tol_ti()} keyway: clearance {lo:.2f} to {hi:.2f}"
+
+
+def ring_process_text(p: params.Params) -> str:
+    """Finding 5: a key standing proud of the OD cannot be turned; say how the ring is made."""
+    tip_d = p.ring_od + 2 * p.ring_key_h
+    return (f"Process: the key stands {p.ring_key_h:.1f} proud of the OD, so the OD cannot simply be turned: turn both faces "
+            f"and the OD to Ø{tip_d + 0.1:.1f} min (key tip Ø{tip_d:.1f}), bore the pocket and the dial recess, then mill the OD "
+            f"down to Ø{p.ring_od:.2f} {tol_ti()} on a 4th axis / indexer leaving the {p.ring_key_w:.1f} x {p.ring_key_h:.1f} key "
+            f"standing (the sliding-fit OD is a milled surface). Alternative: a Ø{PIN_ALT_D:.1f} POM or brass pin pressed into "
+            f"a radial hole instead of the key (needs a params.py change: ring_key_w / ring_key_h -> pin diameter).")
+
+
+def tol_text() -> str:
+    """The general-tolerance sentence, identical on every sheet."""
+    return (f"General tolerance ±{GENERAL_TOL['titanium']:.2f} (titanium build) / "
+            f"±{GENERAL_TOL['resin']:.2f} (resin fit-check print).")
+
+
+def tol_ti() -> str:
+    return f"±{GENERAL_TOL['titanium']:.2f}"
+
+
+def thread_callout(p: params.Params, cls: str | None = None) -> str:
+    """Thread designation for the profile: 'M27 x 0.5 - 6H' (case) / '- 6g' (back) for the machined titanium
+    build; the resin print's helix is 'M27.6 x 1.0' with no ISO class (hand-chased, no gauge)."""
+    s = f"M{p.cb_thread_major:g} x {p.cb_thread_pitch:.1f}"
+    if cls and p.thread_model == "plain":
+        s += f" - {cls}"
+    return s
 
 
 # =========================================================================== geometry extraction
@@ -238,7 +445,7 @@ class Sheet:
         ax = self.ax
         ax.add_patch(Rectangle((x0, y0), TB_W, TB_H, fill=True, fc="white", ec="black", lw=0.8))
         rows = [
-            ("PROJECT", "Terra-style GL32 case prototype  (v0.1 design intent)"),
+            ("PROJECT", "Terra-style GL32 case prototype  (v0.2 design intent)"),
             ("TITLE", self.title),
             ("PART / MATERIAL", f"{part}  --  {material}"),
             ("PROFILE", profile),
@@ -250,7 +457,8 @@ class Sheet:
             y = y0 + TB_H - (i + 1) * rh
             ax.plot([x0, x0 + TB_W], [y, y], color="black", lw=0.4)
             ax.text(x0 + 1.5, y + rh / 2, k, fontsize=FS_SMALL, va="center", ha="left", color="#444444")
-            ax.text(x0 + 30, y + rh / 2, v, fontsize=FS_NOTE if k != "TITLE" else 7.2, va="center", ha="left",
+            fs = self._fit(v, FS_NOTE if k != "TITLE" else 7.2, TB_W - 31.5)
+            ax.text(x0 + 30, y + rh / 2, v, fontsize=fs, va="center", ha="left",
                     fontweight="bold" if k == "TITLE" else "normal")
         y = y0
         ax.text(x0 + 1.5, y + rh / 2, "SHEET", fontsize=FS_SMALL, va="center", ha="left", color="#444444")
@@ -259,6 +467,14 @@ class Sheet:
         ax.text(x0 + 60, y + rh / 2, "units mm  |  drawn from params.py / CadQuery sections",
                 fontsize=FS_SMALL, va="center", ha="left", color="#444444")
         ax.plot([x0 + 28, x0 + 28], [y0, y0 + TB_H], color="black", lw=0.4)
+
+    @staticmethod
+    def _fit(text: str, size: float, width_mm: float) -> float:
+        """Largest font size <= `size` at which `text` (DejaVu Sans, ~0.56 em per character) stays inside
+        width_mm: long titles shrink instead of running out of the title block."""
+        while size > 4.0 and len(text) * size * 0.352778 * 0.56 > width_mm:
+            size -= 0.2
+        return size
 
     # -- text helpers
     def text(self, x, y, s, size=FS_NOTE, **kw):
@@ -324,12 +540,12 @@ class Sheet:
         if self.footnote_needed:
             self.text(MARGIN + 2, MARGIN + 2.2, UNVERIFIED_NOTE, size=FS_SMALL, va="bottom")
 
-    def general_notes(self, extra: list[str], x=None, y=None, width_chars=64):
+    def general_notes(self, extra: list[str], x=None, y=None, width_chars=64, size=FS_NOTE):
         x = MARGIN + 2 if x is None else x
         y = MARGIN + TB_H + 2 if y is None else y
-        lines = ["General tolerance +-0.05 (titanium build) / +-0.15 (resin fit-check print).",
-                 "Break all edges 0.1 unless a chamfer or radius is called out."] + extra
-        return self.notes(x, y, lines, width_chars=width_chars, title="NOTES")
+        lines = [tol_text(),
+                 f"Break all edges {EDGE_BREAK:.1f} unless a chamfer or radius is called out."] + extra
+        return self.notes(x, y, lines, width_chars=width_chars, title="NOTES", size=size)
 
     def save(self, pdf: PdfPages, out_dir: str, png_dir: str | None):
         self.footnote()
@@ -576,8 +792,10 @@ class Parts:
         self.back = caseback.build(p).val()
         self.ring = spacer_ring.build(p).val()
         self.dial = dial_blank.build(p).val()
-        self.bought = {name: fn(p).val() for name, fn in purchased.PARTS.items()}
+        self.seal = purchased.seal_part_name(p)                 # "gasket" (cb_seal flat_gasket) or "oring"
+        self.bought = {name: fn(p).val() for name, fn in purchased.assembly_parts(p).items()}
         self.ring_geo = spacer_ring.geometry(p)
+        self.keyway = case_body.keyway_geometry(p)
         print(f"  parts built in {time.time() - t0:.1f} s")
 
     def solids(self) -> dict:
@@ -607,10 +825,10 @@ def sheet_case_front(parts: Parts, n, N, date, out_dir, pdf, png):
     v.dim_h(-p.W / 2, -p.W / 2 + cc, p.L / 2, 8, f"{cc:.1f} x 45 deg (4x)", outside=True)
     v.dim_v(p.L / 2 - cc, p.L / 2, -p.W / 2, -8, fmt(cc, 1), outside=True)
     # bores
-    v.dim_dia((0, 0), p.crystal_bore_d / 2, 150, f"Ø{p.crystal_bore_d:.2f} +0.05/0  x {p.crystal_engagement:.1f} deep\n"
-              f"(crystal seat, Ra 0.8); {p.crystal_bore_lead_chamfer:.1f} x 45 deg lead chamfer", leader=12)
-    v.dim_dia((0, 0), p.dial_aperture_d / 2, 210, f"Ø{p.dial_aperture_d:.1f} through the {p.ledge_t:.1f} ledge",
-              leader=16)
+    v.dim_dia((0, 0), p.crystal_bore_d / 2, 150, f"Ø{p.crystal_bore_d:.2f} {tol_ti()}  x {p.crystal_engagement:.1f} deep\n"
+              f"(crystal seat, Ra {RA_FIT}); {p.crystal_bore_lead_chamfer:.1f} x 45 deg lead chamfer", leader=12)
+    v.dim_dia((0, 0), p.dial_aperture_d / 2, 210, f"Ø{p.dial_aperture_d:.1f} through the {p.ledge_t:.1f} ledge\n"
+              f"(dial Ø{p.dial_d:.1f} hides {p.dial_ledge_overlap:.2f}/side under it)", leader=16)
     # front slots
     sx, sy = p.gate_corners[0]
     cx, cy = p.front_slot_center(sx, sy)
@@ -626,8 +844,9 @@ def sheet_case_front(parts: Parts, n, N, date, out_dir, pdf, png):
     v.leader((p.x_pocket_floor + 0.3, -p.crown_pocket_w / 2 + 0.3),
              f"R{p.crown_pocket_corner_r:.1f} (2x), pocket full height", 14, -12)
     # edge chamfer note
-    v.leader((-p.W / 2 + cc + 5, p.L / 2), f"front outline chamfer {p.edge_chamfer_front:.1f} x 45 deg all round;\n"
-             f"the 5 crown-pocket edges are hand-broken 0.2 x 45 deg", -10, 16)
+    v.leader((-p.W / 2 + cc + 5, p.L / 2), f"front outline chamfer {p.edge_chamfer_front:.1f} x 45 deg all round,\n"
+             f"continuing around the crown pocket\n(R{p.crown_pocket_corner_r:.1f} corners leave a "
+             f"{p.crown_pocket_depth - p.crown_pocket_corner_r:.1f} straight wall)", -10, 16)
     # section markers and orientation
     v.section_line((0, -p.L / 2), (0, p.L / 2), "A", (-1, 0), ext=24)
     v.section_line((-p.W / 2, 0), (p.W / 2, 0), "B", (0, 1), ext=32)
@@ -635,11 +854,12 @@ def sheet_case_front(parts: Parts, n, N, date, out_dir, pdf, png):
     v.label(0, p.L / 2 + 8, "12 o'clock (+Y)", size=FS_SMALL)
     v.label(p.W / 2 + 2, -p.L / 2 - 3.5, "3 o'clock (+X, crown)", size=FS_SMALL, ha="left")
     sh.general_notes([
-        "Surface: sandblast Ra 1.6 after machining; crystal bore, thread, tube hole and keyway masked. "
-        "Press-fit bores Ra 0.8.",
+        f"Surface: sandblast Ra {RA_BLAST} after machining; masked: crystal bore, thread, tube hole, keyway and the "
+        f"{back_mask_text(p, short=True)}. Press-fit bores and that seal annulus Ra {RA_FIT}.",
         f"Crystal: flat sapphire Ø{p.crystal_d:.1f} x {p.crystal_t:.1f} with a Hytrel I-ring "
         f"{p.iring_wall:.2f} x {p.iring_h:.2f} (bore = crystal + {p.crystal_bore_extra:.1f}); crystal stands "
         f"{p.crystal_proud:.1f} proud of the front face.",
+        f"Front slots are full-radius stadiums (R{p.front_slot_w / 2:.2f} ends), no internal corners.",
         "Hidden lines (dashed): strap channels, movement bore, thread bore, keyway, tube hole and the "
         "back-face gate features; see sheets 2-4.",
         "Section A-A: sheet 3.  Section B-B: sheet 4.  Back view: sheet 2.",
@@ -658,10 +878,21 @@ def sheet_case_back(parts: Parts, n, N, date, out_dir, pdf, png):
     v.center_mark(0, 0, p.cb_thread_minor / 2, ext=8)
     r_minor = p.cb_thread_minor / 2
     # thread callout (lower right)
-    v.dim_dia((0, 0), r_minor, 305,
-              f"M{p.cb_thread_major:.0f} x {p.cb_thread_pitch:.1f} - 6H, {p.cb_thread_len:.1f} deep, "
-              f"{0.2:.1f} x 45 deg lead chamfer\n(shown as the Ø{p.cb_thread_minor:.2f} minor bore; thread-mill, "
-              f"then Ø{p.mvt_bore_d:.1f} bore beyond)", leader=12)
+    v.dim_dia((0, 0), r_minor, 300,
+              f"{thread_callout(p, '6H')}, {p.cb_thread_len:.1f} deep, {LEAD_CHAMFER:.1f} x 45 deg lead chamfer,\n"
+              f"{relief_text(p)} at the blind floor (see A-A);\n"
+              f"cut in ONE bore {bore_callout(p)} from z 0 to {p.z_ledge_bottom:.1f} ({minor_text(p)}:\n"
+              f"the drawn Ø{p.cb_thread_minor:.2f} D1 step lies inside that band and is not a separate bore)", leader=16)
+    # finding 1: the machined, unblasted annulus the seal and the caseback rim land bear on (phantom circle + leader)
+    rm = back_mask_r(p)
+    b_in, b_out = seal_bearing_radii(p)
+    sh.ax.add_patch(Circle(v.P(0, 0), rm * v.s, fill=False, lw=LW_THIN, ec="#1f5fa8", ls=(0, (6, 1.5, 1.2, 1.5)), zorder=1))
+    a_m = math.radians(240)
+    v.leader((rm * math.cos(a_m), rm * math.sin(a_m)),
+             f"Ø{2 * rm:.1f} blast-mask boundary (phantom line): the back face\ninside it is machined flat Ra {RA_FIT}, not "
+             f"blasted ({seal_word(p)} counter-face\nr {b_in:.1f}-{b_out:.1f}, caseback rim-land seat r "
+             f"{p.gasket_recess_od / 2:.1f}-{p.cb_flange_d / 2:.1f});\nat 12 and 6 the mask ends at the channel fillet, "
+             f"y {p.y_strap_open_inner - p.strap_fillet:.1f}", -14, -18, size=FS_SMALL)
     # strap openings: from the centre, right-hand side (model -X side)
     yo, yi = p.y_strap_open_outer, p.y_strap_open_inner
     v.dim_v(0, yi, p.W / 2, 10, fmt(yi, 1), text_side=1)
@@ -670,25 +901,32 @@ def sheet_case_back(parts: Parts, n, N, date, out_dir, pdf, png):
     v.leader((0, -(yi + yo) / 2), f"2x strap channel {p.strap_gap:.1f} gap at {p.strap_angle_deg:.0f} deg, "
              f"see A-A (sheet 3);\nchannel edges R{p.strap_fillet:.1f}, bar outer edge R{p.strap_bar_round:.1f} full width",
              28, -20)
-    # keyway at 9 o'clock (model -X -> view +u)
-    kw = p.ring_key_w + 0.1
-    kd = p.ring_key_h + 0.1
-    v.leader((m * (-(p.mvt_bore_d / 2 + kd / 2)), kw / 2 - 0.2),
-             f"ring keyway {kw:.1f} wide x {kd:.1f} deep (radial, from Ø{p.mvt_bore_d:.1f}),\n"
-             f"z {p.z_cb_inner:.1f} to {p.z_cb_inner + p.ring_key_len + 0.2:.1f} (9 o'clock)", 16, -14)
+    # channel ends (x = +-strap_slot_w/2): the cutter may leave an internal radius there (SPEC 3 machining note)
+    v.leader((m * (-p.strap_slot_w / 2), -(yi + yo) / 2),
+             f"channel ends at x = ±{p.strap_slot_w / 2:.1f}: internal corners R <= {INTERNAL_CORNER_R_MAX:.1f} "
+             f"permitted (cutter radius)", 14, -10)
+    # keyway at 9 o'clock (model -X -> view +u): an open slot from the back face through the thread zone (SPEC 3.7)
+    kg = parts.keyway
+    si = seal_interruption(p, kg)
+    v.leader((m * (-(p.mvt_bore_d / 2 + kg["depth"] / 2)), kg["kw"] / 2 - 0.2),
+             f"ring keyway {kg['kw']:.1f} ({tol_ti()}) wide x {kg['depth']:.1f} deep (radial, from Ø{p.mvt_bore_d:.1f}), OPEN from\n"
+             f"the back face (z 0) through the thread up to z {kg['z1']:.1f} (9 o'clock); it interrupts the M{p.cb_thread_major:.0f}\n"
+             f"thread over its width and the {seal_word(p)} counter-face (floor r {kg['r_floor']:.2f}: {si['bearing']:.2f} of the "
+             f"{si['land_w']:.1f} {seal_word(p)} width bears);\n{key_fit_text(p, kg)} (sheet 6)", 16, -14)
     # back grooves and chamfer notches (left = crown side in this view)
     sx, sy = p.gate_corners[0]
     gx = sx * (p.W / 2 - p.back_groove_inboard)
     gy0 = sy * (p.L / 2 - p.corner_chamfer - 0.5)
     gy1 = gy0 - sy * p.back_groove_len
-    v.dim_h(m * gx, m * p.W / 2, gy1, -8, fmt(p.back_groove_inboard, 1), outside=True)
+    v.dim_h(m * gx, m * p.W / 2, gy1, -8, fmt(p.back_groove_inboard, 1), outside=True, text_at="left")
     v.dim_v(gy1, gy0, m * p.W / 2, -8, fmt(p.back_groove_len, 1), text_side=-1, outside=False)
     v.leader((m * gx, gy1 + 1.5), f"2x back groove {p.back_groove_w:.1f} wide x {p.back_groove_depth:.1f} deep\n"
              f"x {p.back_groove_len:.1f} long, R{p.back_groove_w / 2:.1f} ends\n(starts {0.5:.1f} past the corner chamfer)",
              -16, -6)
     mx, my = p.chamfer_mid(sx, sy)
     v.leader((m * mx, my), f"2x chamfer notch {p.chamfer_notch_w:.1f} along the chamfer\nx {p.chamfer_notch_depth:.1f} "
-             f"deep x {p.chamfer_notch_h:.1f} high from the back face", -10, 12)
+             f"deep x {p.chamfer_notch_h:.1f} high from the back face;\ninternal corners R <= {INTERNAL_CORNER_R_MAX:.1f} "
+             f"permitted", -10, 12)
     v.leader((m * (p.W / 2 - 2), -9), f"back outline chamfer {p.edge_chamfer_back:.1f} x 45 deg\n(not on the two end "
              f"edges: R{p.strap_bar_round:.1f} bar round)", -14, -12)
     v.leader((m * p.x_pocket_floor, -p.crown_pocket_w / 2 + 1), "crown pocket, see sheet 1 / B-B", -10, 4)
@@ -696,13 +934,21 @@ def sheet_case_back(parts: Parts, n, N, date, out_dir, pdf, png):
     v.label(0, -p.L / 2 - 7, "viewed from the back: the crown side (3 o'clock) is on the LEFT", size=FS_SMALL)
     v.label(0, p.L / 2 + 8, "12 o'clock (+Y)", size=FS_SMALL)
     sh.general_notes([
-        "Op 1 (back face up): face; outline with the four 4.0 corner chamfers; bore the thread minor "
-        f"Ø{p.cb_thread_minor:.2f} x {p.cb_thread_len:.1f}; thread-mill M{p.cb_thread_major:.0f} x "
-        f"{p.cb_thread_pitch:.1f} - 6H; movement bore Ø{p.mvt_bore_d:.1f} from z {p.z_cb_inner:.1f} to "
-        f"{p.z_ledge_bottom:.1f}; keyway; grooves; notches; 0.3 chamfer.",
-        "Strap channels: wire EDM preferred (1.8 slot), else 4/5-axis with a <= 1.5 end mill on a 40 deg fixture.",
-        "Surface: sandblast Ra 1.6; thread and keyway masked.",
-    ], x=182, y=152, width_chars=58)
+        f"Op 1 (back face up): face; outline with the four {p.corner_chamfer:.1f} corner chamfers; ONE bore {bore_callout(p)} "
+        f"from z 0 to {p.z_ledge_bottom:.1f} (movement bore; its z 0 to {p.cb_thread_len:.1f} length is the thread minor, "
+        f"{minor_text(p)}: the drawn D1 Ø{p.cb_thread_minor:.2f} step lies inside that band, do not bore it separately); "
+        f"{relief_text(p)} (run-out room for the caseback thread, not for the cutter: a thread mill needs none); "
+        f"thread-mill {thread_callout(p, '6H')} z 0 to {p.cb_thread_len:.1f} with the {LEAD_CHAMFER:.1f} x 45 deg lead chamfer; "
+        f"keyway {kg['kw']:.1f} wide from the back face through the thread to z {kg['z1']:.1f} (mill it before "
+        f"thread-milling); grooves; notches; {p.edge_chamfer_back:.1f} chamfer.",
+        f"Seal counter-face: {back_mask_text(p)}. Here {seal_interruption_text(p, kg)}.",
+        f"Internal corners: R <= {INTERNAL_CORNER_R_MAX:.1f} permitted in the strap-channel ends and the chamfer "
+        f"notches (cutter radius). The tube hole (sheet 4) may break into the thread relief if the measured stem "
+        f"sits lower: allowed.",
+        f"Strap channels: wire EDM preferred ({p.strap_gap:.1f} slot), else 4/5-axis with a <= "
+        f"{p.strap_gap - 0.3:.1f} end mill on a {p.strap_angle_deg:.0f} deg fixture.",
+        f"Surface: sandblast Ra {RA_BLAST}; thread, keyway and the back-face seal annulus (Ø{2 * rm:.1f}, Ra {RA_FIT}) masked.",
+    ], x=176, y=196, width_chars=100, size=FS_SMALL)
     sh.save(pdf, out_dir, png)
 
 
@@ -720,19 +966,26 @@ def sheet_case_aa(parts: Parts, n, N, date, out_dir, pdf, png):
     v.dim_h(-p.L / 2, p.L / 2, 0, -16, fmt(p.L, 1))
     v.dim_v(0, p.H, -p.L / 2, -10, fmt(p.H, 1))
     v.dim_v(p.z_ledge_bottom, p.z_crystal_seat, -p.L / 2, -20, f"{p.ledge_t:.1f} ledge", outside=True, text_at="low")
-    v.dim_h(-p.crystal_bore_d / 2, p.crystal_bore_d / 2, p.H, 8, f"Ø{p.crystal_bore_d:.2f} +0.05/0")
+    v.dim_h(-p.crystal_bore_d / 2, p.crystal_bore_d / 2, p.H, 8, f"Ø{p.crystal_bore_d:.2f} {tol_ti()}")
     v.dim_h(-p.dial_aperture_d / 2, p.dial_aperture_d / 2, p.H, 16, f"Ø{p.dial_aperture_d:.1f}")
-    v.dim_h(-p.mvt_bore_d / 2, p.mvt_bore_d / 2, p.H, 24, f"Ø{p.mvt_bore_d:.1f} movement bore")
+    v.dim_h(-p.mvt_bore_d / 2, p.mvt_bore_d / 2, p.H, 24,
+            f"{bore_callout(p)} bore, z 0 to {p.z_ledge_bottom:.1f} (movement bore + thread minor)")
     v.dim_h(-p.cb_thread_minor / 2, p.cb_thread_minor / 2, 0, -8,
-            f"Ø{p.cb_thread_minor:.2f} thread minor / M{p.cb_thread_major:.0f} x {p.cb_thread_pitch:.1f} - 6H",
+            f"{thread_callout(p, '6H')} x {p.cb_thread_len:.1f} deep in the {bore_callout(p)} bore "
+            f"({minor_text(p)}; drawn at D1 Ø{p.cb_thread_minor:.2f})",
             text_side=-1)
+    # SPEC 3 machining note: relief groove at the floor of the blind thread (not modelled, the machinist's cut);
+    # dimensioned (finding 2): it is run-out room for the caseback's thread end, a thread mill needs no relief
+    v.leader((-(p.cb_thread_minor / 2 + 0.02), p.cb_thread_len - THREAD_RELIEF_W / 2),
+             f"{relief_text(p)} at the blind floor\n(run-out room for the caseback thread, not for the cutter;\n"
+             f"not modelled: the tube hole may break in, sheet 4)", -24, -16)
     u_r = p.L / 2
     v.dim_v(0, p.z_cb_inner, u_r, 10, fmt(p.z_cb_inner, 1), text_side=1, outside=True)
     v.dim_v(0, p.z_ledge_bottom, u_r, 22, fmt(p.z_ledge_bottom, 1), text_side=1)
     v.dim_v(0, p.z_crystal_seat, u_r, 34, fmt(p.z_crystal_seat, 1), text_side=1)
     v.dim_v(p.z_crystal_seat, p.H, u_r, 46, f"{p.crystal_engagement:.1f} crystal seat", text_side=1, outside=True)
     v.leader((-p.crystal_bore_d / 2, p.H - 0.1), f"{p.crystal_bore_lead_chamfer:.1f} x 45 deg lead chamfer", -14, 12)
-    v.leader((p.cb_thread_minor / 2 + 0.1, 0.1), f"thread lead chamfer 0.2 x 45 deg;\nthread zone z 0 to "
+    v.leader((p.cb_thread_minor / 2 + 0.1, 0.1), f"thread lead chamfer {LEAD_CHAMFER:.1f} x 45 deg;\nthread zone z 0 to "
              f"{p.cb_thread_len:.1f}", 18, -20)
     v.leader((p.crystal_bore_d / 2 + 0.6, p.H), f"front chamfer {p.edge_chamfer_front:.1f} x 45 deg", 14, 10)
     # detail circle marker on the main view
@@ -765,25 +1018,31 @@ def sheet_case_aa(parts: Parts, n, N, date, out_dir, pdf, png):
     p2 = (axis_pt[0] - nrm[0] * g / 2, axis_pt[1] - nrm[1] * g / 2)
     vd.dim_aligned(p2, p1, 12, f"{g:.1f} gap")
     vd.leader((ya + 3.2 / math.tan(a), 3.2), f"{p.strap_angle_deg:.0f} deg to the back face", -20, 8)
-    vd.leader((p.y_strap_open_inner, 0.0), f"R{p.strap_fillet:.1f} (4x per end)", -8, -14)
+    vd.leader((p.y_strap_open_inner, 0.0), f"R{p.strap_fillet:.1f} channel edges (4x per end)", 10, -22)
     vd.leader((p.L / 2 - 0.3, 0.3), f"R{p.strap_bar_round:.1f} bar outer edge, full width", 10, -8)
-    vd.leader((p.L / 2 - 0.8, (p.z_strap_exit_low + p.z_strap_exit_high) / 2), "strap <= 1.5 thick, 22 wide", 16, 14)
+    vd.leader((p.L / 2 - 0.8, (p.z_strap_exit_low + p.z_strap_exit_high) / 2),
+              f"strap <= {p.strap_gap - 0.3:.1f} thick, {p.strap_w:.0f} wide", 16, 14)
     sh.general_notes([
-        "Section faces from the CadQuery solid (x = 0 plane); hatching = Ti Grade 2.",
-        f"Crystal seat depth {p.crystal_engagement:.1f}, ledge {p.ledge_t:.1f}, movement bore from z "
-        f"{p.z_cb_inner:.1f} to {p.z_ledge_bottom:.1f}, thread zone z 0 to {p.cb_thread_len:.1f}.",
+        f"Section faces from the CadQuery solid (x = 0 plane); hatching = {case_body.MATERIAL['titanium']}.",
+        f"Crystal seat depth {p.crystal_engagement:.1f}, ledge {p.ledge_t:.1f}, ONE bore {bore_callout(p)} from z 0 to "
+        f"{p.z_ledge_bottom:.1f} (thread minor + movement bore, {minor_text(p)}), thread-milled {thread_callout(p, '6H')} "
+        f"z 0 to {p.cb_thread_len:.1f}, {relief_text(p)} (caseback run-out, not the cutter).",
         f"Strap channel both ends, mirror in Y: back-face opening y {p.y_strap_open_inner:.1f} to "
         f"{p.y_strap_open_outer:.1f} from the centre (sheet 2), end-face exit z {p.z_strap_exit_low:.2f} to "
         f"{p.z_strap_exit_high:.2f}, bar {p.strap_bar_back_w:.1f} wide on the back face and {p.strap_bar_end_h:.2f} "
-        f"tall on the end face.",
-        "Surface: sandblast Ra 1.6; crystal seat and thread Ra 0.8 (masked).",
-    ], x=182, y=MARGIN + TB_H + 2 + 52, width_chars=58)
+        f"tall on the end face; the Ø{p.cb_flange_d:.1f} caseback flange stays {p.flange_to_strap_margin:.2f} inside "
+        f"the back-face opening ({seal_interruption(p, parts.keyway)['flat_margin']:.1f} of flat back face beyond the "
+        f"rim land before the R{p.strap_fillet:.1f} channel fillet).",
+        f"Channel ends at x = ±{p.strap_slot_w / 2:.1f} (outside this section): internal corners R <= "
+        f"{INTERNAL_CORNER_R_MAX:.1f} permitted (cutter radius).",
+        f"Surface: sandblast Ra {RA_BLAST}; masked and Ra {RA_FIT}: crystal seat, thread, {back_mask_text(p, short=True)}.",
+    ], x=182, y=MARGIN + TB_H + 2 + 64, width_chars=92, size=FS_SMALL)
     sh.save(pdf, out_dir, png)
 
 
 def sheet_case_bb(parts: Parts, n, N, date, out_dir, pdf, png):
     p = parts.p
-    sh = Sheet(n, N, "CASE BODY  --  section B-B (XZ plane, y = 0) with the crown stack", "case_body",
+    sh = Sheet(n, N, "CASE BODY  --  section B-B (XZ plane, y = 0), crown stack", "case_body",
                f"{case_body.MATERIAL['titanium']} (resin: {case_body.MATERIAL['resin']})",
                "3:1  (detail D 8:1)", date, file_stem="case_body_section_bb")
     faces = section_faces(parts.case, "XZ", 0.0)
@@ -800,12 +1059,13 @@ def sheet_case_bb(parts: Parts, n, N, date, out_dir, pdf, png):
     v.dim_h(-p.W / 2, p.W / 2, 0, -14, fmt(p.W, 1))
     v.dim_v(0, p.H, -p.W / 2, -20, fmt(p.H, 1))
     v.dim_h(-p.crystal_bore_d / 2, p.crystal_bore_d / 2, p.H, 8, f"Ø{p.crystal_bore_d:.2f}")
-    v.dim_h(-p.mvt_bore_d / 2, p.mvt_bore_d / 2, p.H, 16, f"Ø{p.mvt_bore_d:.1f}")
-    v.dim_h(-p.cb_thread_minor / 2, p.cb_thread_minor / 2, 0, -6, f"Ø{p.cb_thread_minor:.2f} thread minor", text_side=-1)
-    kd = p.ring_key_h + 0.1
-    v.dim_h(-(p.mvt_bore_d / 2 + kd), -p.mvt_bore_d / 2, p.z_cb_inner + p.ring_key_len + 0.2, 6, f"{kd:.1f}",
-            outside=True)
-    v.dim_v(p.z_cb_inner, p.z_cb_inner + p.ring_key_len + 0.2, -p.W / 2, -10, f"{p.ring_key_len + 0.2:.1f} keyway",
+    v.dim_h(-p.mvt_bore_d / 2, p.mvt_bore_d / 2, p.H, 16, f"{bore_callout(p)} bore, z 0 to {p.z_ledge_bottom:.1f}")
+    v.dim_h(-p.cb_thread_minor / 2, p.cb_thread_minor / 2, 0, -6,
+            f"{thread_callout(p, '6H')} z 0 to {p.cb_thread_len:.1f} in the {bore_callout(p)} bore ({minor_text(p)}; sheets 2-3)",
+            text_side=-1)
+    kg = parts.keyway
+    v.dim_h(-kg["r_floor"], -p.mvt_bore_d / 2, kg["z1"], 6, f"{kg['depth']:.1f}", outside=True)
+    v.dim_v(0.0, kg["z1"], -p.W / 2, -10, f"{kg['z1']:.1f} keyway, open to the back face",
             text_side=-1, outside=False)
     v.dim_h(p.x_pocket_floor, p.W / 2, p.H, 12, f"{p.crown_pocket_depth:.1f} pocket", outside=True)
     v.dim_h(p.crystal_bore_d / 2, p.x_pocket_floor, p.H, 20,
@@ -837,11 +1097,13 @@ def sheet_case_bb(parts: Parts, n, N, date, out_dir, pdf, png):
     sh.text(ccx, ccy + R_DET + 4, "DETAIL D  (8:1)  crown pocket, tube hole and crown stack", size=7.5,
             ha="center", fontweight="bold", va="bottom")
     vd.dim_v(p.z_stem - p.tube_hole_d / 2, p.z_stem + p.tube_hole_d / 2, p.x_pocket_floor - 0.3, -20,
-             f"Ø{p.tube_hole_d:.1f} H7 tube hole, Ra 0.8", text_side=-1)
+             f"Ø{p.tube_hole_d:.1f} H7 tube hole, Ra {RA_FIT}", text_side=-1)
     vd.dim_v(0, p.z_stem, p.x_pocket_floor - 0.3, -9, f"{p.z_stem:.2f}*", text_side=-1)
     vd.leader((p.mvt_bore_d / 2 + 0.35, p.z_stem - p.tube_hole_d / 2 - 0.09),
               f"{p.tube_to_thread_margin:.2f}* margin: tube-hole bottom (z {p.z_stem - p.tube_hole_d / 2:.2f})\n"
-              f"to the thread zone (z {p.cb_thread_len:.1f})", -10, -14)
+              f"to the thread zone (z {p.cb_thread_len:.1f}) and its relief groove (Ø{relief_d(p):.1f} {THREAD_RELIEF_TOL}\n"
+              f"x {THREAD_RELIEF_W:.1f}, z {p.cb_thread_len - THREAD_RELIEF_W:.1f} to {p.cb_thread_len:.1f}); the hole MAY break "
+              f"into the relief if the\nmeasured stem sits lower (thread loses {p.tube_hole_d:.0f} mm of one turn)", -10, -14)
     vd.dim_h(p.mvt_bore_d / 2, p.x_pocket_floor, p.z_stem + p.tube_hole_d / 2 + 0.3, 8,
              f"{p.tube_engagement:.2f} tube engagement", text_side=1)
     vd.dim_h(p.x_pocket_floor, p.x_pocket_floor + p.tube_protrusion, p.z_stem + p.tube_od / 2, 8,
@@ -853,19 +1115,24 @@ def sheet_case_bb(parts: Parts, n, N, date, out_dir, pdf, png):
     vd.dim_h(p.x_pocket_floor, p.W / 2, p.H - 0.6, -8, f"{p.crown_pocket_depth:.1f}", text_side=-1, outside=True,
              text_at="left")
     vd.leader((p.cb_thread_major / 2 + 0.85, 0.75), f"{p.x_pocket_floor - p.cb_thread_major / 2:.2f} wall at the "
-              f"thread (Ø{p.cb_thread_major:.0f} major to pocket floor)", -8, -16)
+              f"thread (Ø{p.cb_thread_major:g} major to pocket floor);\n{p.x_pocket_floor - relief_d(p) / 2:.2f} at the "
+              f"Ø{relief_d(p):.1f} relief", -8, -24)
     vd.leader((p.x_bore_wall + 0.6, p.z_stem + p.tube_od / 2), f"tube Ø{p.tube_od:.1f} x {p.tube_len:.2f}, press fit "
               f"(0.02-0.04\ninterference) + retaining compound", -10, 16)
-    vd.leader((p.x_crown_start + 0.3, p.z_stem - 0.3), f"stem Ø0.9 (tap 10), crown face at x {p.x_crown_start:.1f}", 6, -16)
+    vd.leader((p.x_crown_start + 0.3, p.z_stem - 0.3), f"stem Ø{STEM_D:.1f}, {p.stem_thread}; crown face at x "
+              f"{p.x_crown_start:.1f}", 18, -22)
     sh.general_notes([
         "Section faces from the CadQuery solids (y = 0 plane): case body hatched, tube / crown / movement "
-        "envelope colour-filled (purchased parts, see sheet 8).",
+        "envelope colour-filled (purchased parts, sheet 8).",
         f"Tube hole Ø{p.tube_hole_d:.1f} H7 drilled and reamed along X at z {p.z_stem:.2f}* through the pocket floor "
-        f"into the bore; the z position follows stem_below_dial_seat = {p.stem_below_dial_seat:.2f}* under the dial seat.",
+        f"into the bore; z follows stem_below_dial_seat = {p.stem_below_dial_seat:.2f}* under the dial seat.",
+        f"Tube-hole bottom (z {p.z_stem - p.tube_hole_d / 2:.2f}) clears the thread zone by "
+        f"{p.tube_to_thread_margin:.2f}*; it may break into the thread relief ({relief_text(p)}) if the measured stem "
+        f"sits lower: allowed, the {thread_callout(p, '6H')} thread loses {p.tube_hole_d:.0f} mm of one turn.",
         f"Crown pocket {p.crown_pocket_w:.1f} wide x {p.crown_pocket_depth:.1f} deep, full height, R"
-        f"{p.crown_pocket_corner_r:.1f} corners (sheet 1).",
-        "Surface: sandblast Ra 1.6; tube hole Ra 0.8 (masked).",
-    ], x=190, y=104, width_chars=54)
+        f"{p.crown_pocket_corner_r:.1f} corners (sheet 1); keyway (left) see sheet 2.",
+        f"Surface: sandblast Ra {RA_BLAST}; tube hole Ra {RA_FIT} (masked); {back_mask_text(p, short=True)} masked, Ra {RA_FIT}.",
+    ], x=188, y=112, width_chars=58)
     sh.save(pdf, out_dir, png)
 
 
@@ -873,14 +1140,14 @@ def sheet_caseback(parts: Parts, n, N, date, out_dir, pdf, png):
     p = parts.p
     sh = Sheet(n, N, "CASEBACK  --  plan (outer face) and section C-C", "caseback",
                f"{caseback.MATERIAL['titanium']} (resin: {caseback.MATERIAL['resin']})",
-               "3:1  (detail E 10:1)", date, file_stem="caseback")
+               "3:1  (detail E 8:1)", date, file_stem="caseback")
     S = 3.0
     v = View(sh, (70, 120), S)           # plan viewed from outside (-Z), 12 o'clock up, X mirrored
     v.hlr(hlr_view(parts.back, (0, 0, -1), (-1, 0, 0)), hidden=True)
     v.center_mark(0, 0, p.cb_flange_d / 2, ext=6)
     v.title("PLAN  (3:1)  outer face, seen from behind the watch", x=70, y=190)
     v.dim_dia((0, 0), p.cb_flange_d / 2, 135, f"Ø{p.cb_flange_d:.1f} flange", leader=8)
-    v.dim_dia((0, 0), p.cb_thread_major / 2, 305, f"M{p.cb_thread_major:.0f} x {p.cb_thread_pitch:.1f} - 6g boss, "
+    v.dim_dia((0, 0), p.cb_thread_major / 2, 305, f"{thread_callout(p, '6g')} boss, "
               f"{p.cb_thread_len:.1f} long\n(hidden line: Ø{p.cb_thread_major:.1f} major)", leader=14)
     pcd_r = p.cb_tool_pcd / 2
     sh.ax.add_patch(Circle(v.P(0, 0), pcd_r * S, fill=False, lw=LW_THIN, ec="#1f5fa8", ls=(0, (6, 1.5, 1.2, 1.5)), zorder=1))
@@ -903,44 +1170,73 @@ def sheet_caseback(parts: Parts, n, N, date, out_dir, pdf, png):
              x=215, y=190, size=7)
     vs.dim_h(-p.cb_flange_d / 2, p.cb_flange_d / 2, -p.cb_flange_t, -9, f"Ø{p.cb_flange_d:.1f}", text_side=-1)
     vs.dim_h(-p.cb_thread_major / 2, p.cb_thread_major / 2, p.cb_thread_len, 8,
-             f"Ø{p.cb_thread_major:.1f}  M{p.cb_thread_major:.0f} x {p.cb_thread_pitch:.1f} - 6g")
+             f"Ø{p.cb_thread_major:.1f}  {thread_callout(p, '6g')}")
     vs.dim_v(-p.cb_flange_t, 0, -p.cb_flange_d / 2, -12, f"{p.cb_flange_t:.1f} flange", text_side=-1, outside=True, text_at="low")
     vs.dim_v(0, p.cb_thread_len, -p.cb_flange_d / 2, -20, f"{p.cb_thread_len:.1f} thread", text_side=-1, outside=True,
              text_at="low")
     vs.dim_v(-p.cb_flange_t, p.cb_thread_len, p.cb_flange_d / 2, 12, f"{p.cb_total_t:.1f}", text_side=1, outside=True)
     vs.leader((-6, 0.0), f"case back face z = 0 (flange {p.cb_flange_t:.1f} proud of the case)", 10, -22)
-    # detail E: flange edge with the O-ring groove and a tool hole, 10:1
-    SD = 10.0
-    R_DET = 26.0
-    ccx, ccy = 215.0, 106.0
-    cu, cv = 12.6, 0.3
+    # detail E, 8:1: flange edge with the seal seat (gasket recess or O-ring groove, per cb_seal) and the 12 o'clock
+    # tool hole. Centred so that the hole (PCD/2 -+ d/2) and the flange edge both lie inside the clip circle.
+    r_si, r_so, s_depth = caseback.seal_radii(p)
+    r_fl = p.cb_flange_d / 2
+    land = r_fl - r_so
+    gasket = p.cb_seal == "flat_gasket"
+    seat = "gasket recess" if gasket else "O-ring groove"
+    SD = 8.0
+    R_DET = 28.0
+    ccx, ccy = 215.0, 104.0
+    ph = p.cb_tool_pcd / 2
+    cu = 0.5 * ((ph - p.cb_tool_hole_d / 2) + r_fl) + 0.05          # midway between the hole's inner wall and the flange edge
+    cv = 0.35
     vd = View(sh, (ccx - SD * cu, ccy - SD * cv), SD, clip=(ccx, ccy, R_DET))
     vd.section(faces, hatch="\\\\\\\\")
-    sh.text(ccx, ccy + R_DET + 3.5, "DETAIL E  (10:1)  flange edge, O-ring groove, tool hole (12 o'clock)", size=7.5,
+    sh.text(ccx, ccy + R_DET + 3.5, f"DETAIL E  (8:1)  flange edge, {seat}, tool hole (12 o'clock)", size=7.5,
             ha="center", fontweight="bold", va="bottom")
-    r_gi = p.oring_groove_mean_d / 2 - p.oring_groove_w / 2
-    r_go = p.oring_groove_mean_d / 2 + p.oring_groove_w / 2
-    vd.dim_h(r_gi, r_go, 0, 9, f"{p.oring_groove_w:.1f} groove", text_side=1, outside=True, text_at="left")
-    vd.dim_v(-p.oring_groove_depth, 0, r_go + 0.05, 8, f"{p.oring_groove_depth:.2f} deep", text_side=1, outside=True)
-    vd.leader(((r_gi + r_go) / 2, -p.oring_groove_depth), f"groove mean Ø{p.oring_groove_mean_d:.1f} "
-              f"(ID {2 * r_gi:.1f} / OD {2 * r_go:.1f})", -10, -20)
-    ph = p.cb_tool_pcd / 2
+    vd.dim_h(r_si, r_so, 0, 17, f"{r_so - r_si:.2f} {seat}", text_side=1)
+    vd.dim_h(r_so, r_fl, 0, 9, f"{land:.2f} {LAND_W_TOL} land", text_side=1, outside=True)
+    depth_tol = f" ±{RECESS_DEPTH_TOL:.2f}" if gasket else ""      # finding 4: at the general +-0.05 the squeeze could reach zero
+    vd.dim_v(-s_depth, 0, r_so + 0.05, 30, f"{s_depth:.2f}{depth_tol} deep", text_side=1, outside=True)
+    if gasket:
+        sq_nom, sq_lo, sq_hi = gasket_squeeze_range(p)
+        vd.leader(((r_si + r_so) / 2, -s_depth), f"recess from the boss Ø{2 * r_si:.1f} to Ø{2 * r_so:.1f}; flat gasket "
+                  f"{p.gasket_id:.1f} x {p.gasket_od:.1f} x {p.gasket_t:.2f}\n(±{GASKET_T_TOL:.2f} assumed); "
+                  f"{purchased.gasket_squeeze_pct(p):.0f} % squeeze = {sq_nom:.2f} nominal when the {land:.1f} rim land\n"
+                  f"seats on the case; {sq_lo:.2f} to {sq_hi:.2f} at the limits: the gasket's own\n"
+                  f"tolerance dominates, measure the batch", -10, -20, size=FS_SMALL)
+    else:
+        vd.leader(((r_si + r_so) / 2, -s_depth), f"groove mean Ø{p.oring_groove_mean_d:.1f} "
+                  f"(ID {2 * r_si:.1f} / OD {2 * r_so:.1f}), O-ring CS {p.oring_cs:.2f}\n"
+                  f"({purchased.oring_squeeze_pct(p):.0f} % squeeze, {purchased.oring_fill_pct(p):.0f} % fill)", -10, -20)
     vd.dim_h(ph - p.cb_tool_hole_d / 2, ph + p.cb_tool_hole_d / 2, -p.cb_flange_t, -8, f"Ø{p.cb_tool_hole_d:.1f}",
              text_side=-1, outside=True)
-    vd.dim_v(-p.cb_flange_t, -p.cb_flange_t + p.cb_tool_hole_depth, ph - p.cb_tool_hole_d / 2 - 0.1, -10,
-             f"{p.cb_tool_hole_depth:.1f}", text_side=-1, outside=True)
-    vd.leader((p.cb_flange_d / 2 - 0.15, -p.cb_flange_t + 0.15), "0.3 x 45 deg chamfer", 6, -14)
-    vd.leader((p.cb_thread_major / 2, p.cb_thread_len * 0.6), "thread 6g, light grease at assembly", -6, 6)
-    oring_id = round(2 * r_gi + 0.1, 1)
+    vd.dim_v(-p.cb_flange_t, -p.cb_flange_t + p.cb_tool_hole_depth, ph + p.cb_tool_hole_d / 2 + 0.1, 10,
+             f"{p.cb_tool_hole_depth:.1f} deep", text_side=1)
+    vd.leader((r_fl - CB_OUTER_CHAMFER / 2, -p.cb_flange_t + CB_OUTER_CHAMFER / 2),
+              f"{CB_OUTER_CHAMFER:.1f} x 45 deg chamfer", 6, -14)
+    vd.leader((p.cb_thread_major / 2, p.cb_thread_len * 0.6), "thread 6g, light grease at assembly", -6, 12)
+    seal_rows = caseback.bom(p)                       # [fitted seal, alternative seal]
+    pr = params.get("resin")
+    resin_fit = purchased.seal_fit_problems(pr)
+    resin_line = (f"Resin profile: thread modelled as a true helix {thread_callout(pr)} (sheet 9), boss "
+                  f"Ø{pr.cb_thread_major:.1f}, so the {seat} starts at Ø{2 * caseback.seal_radii(pr)[0]:.1f} there")
+    if resin_fit:
+        resin_line += (f"; the fitted seal does not fit the print: {'; '.join(resin_fit)} (open params.py decision, "
+                       f"see out/resin/verify_report.md).")
+    else:
+        resin_line += "; the same seal fits."
     sh.general_notes([
-        f"Thread M{p.cb_thread_major:.0f} x {p.cb_thread_pitch:.1f} - 6g, {p.cb_thread_len:.1f} long, mates the case "
-        f"(M{p.cb_thread_major:.0f} x {p.cb_thread_pitch:.1f} - 6H, sheet 2). Boss Ø{p.cb_thread_major:.1f} shown at the "
+        f"Thread {thread_callout(p, '6g')}, {p.cb_thread_len:.1f} long, mates the case "
+        f"({thread_callout(p, '6H')}, sheet 2). Boss Ø{p.cb_thread_major:.1f} shown at the "
         f"major diameter (cosmetic); inner face flat at z {p.z_cb_inner:.1f}.",
-        f"Face-seal O-ring ID {oring_id:.1f} x CS {p.oring_cs:.2f} NBR 70 in the groove (mean Ø{p.oring_groove_mean_d:.1f} "
-        f"x {p.oring_groove_w:.1f} x {p.oring_groove_depth:.2f}); alternative: flat gasket ID 28.0 x OD 29.5 x 0.5.",
-        "Surface: outer face brushed or blasted; O-ring groove and thread Ra 0.8. Steel in titanium does not gall.",
-        "Resin profile: thread modelled as a true helix M27.6 x 1.0 (sheet 9).",
-    ], x=MARGIN + 2, y=60, width_chars=96)
+        f"Seal (cb_seal = {p.cb_seal}): {seal_rows[0]['spec']}.",
+        f"Alternative seal ({'O-ring option' if gasket else 'flat-gasket option'}), not machined on this part: "
+        f"{seal_rows[1]['spec']} (build with cb_seal = {'oring' if gasket else 'flat_gasket'}; the seat is cut into "
+        f"the same flange face instead of the {seat}).",
+        f"Surface: outer face brushed or blasted; {seat} and thread Ra {RA_FIT}. Steel in titanium does not gall.",
+        f"Counter-face on the case (sheet 2): {back_mask_text(p)}. There, {seal_interruption_text(p, parts.keyway)}.",
+        resin_line,
+    ], x=MARGIN + 2, y=64, width_chars=140, size=FS_SMALL)
     sh.save(pdf, out_dir, png)
 
 
@@ -956,15 +1252,18 @@ def sheet_ring(parts: Parts, n, N, date, out_dir, pdf, png):
     v.hlr(hlr_view(parts.ring, (0, 0, 1), (1, 0, 0)), hidden=True)
     v.center_mark(0, 0, r_od, ext=6)
     v.title("PLAN  (3:1)  seen from the dial side, +X (crown / stem slot) to the right", x=72, y=190)
-    v.dim_dia((0, 0), r_od, 45, f"Ø{p.ring_od:.2f} -0/-0.05\n(slides in the Ø{p.mvt_bore_d:.1f} bore)", leader=8)
+    v.dim_dia((0, 0), r_od, 45, f"Ø{p.ring_od:.2f} {tol_ti()}\n(Ø{p.mvt_bore_d:.1f} bore, "
+              f"{p.ring_od_clearance:.2f} diametral)", leader=8)
     v.dim_h(-p.ring_pocket_w / 2, p.ring_pocket_w / 2, -5.0, -36, f"{p.ring_pocket_w:.2f} across flats", text_side=-1)
     v.dim_v(-p.ring_pocket_l / 2, p.ring_pocket_l / 2, r_od, 10, f"{p.ring_pocket_l:.2f}* (Ø{p.ring_pocket_l:.2f} arc)",
             text_side=1)
-    v.dim_v(-p.ring_key_w / 2, p.ring_key_w / 2, -(r_od + p.ring_key_h), -14, f"{p.ring_key_w:.1f} key", text_side=-1,
-            outside=True)
+    v.dim_v(-p.ring_key_w / 2, p.ring_key_w / 2, -(r_od + p.ring_key_h), -14, f"{p.ring_key_w:.1f} {KEY_W_TOL} key",
+            text_side=-1, outside=True)
     v.dim_h(-(r_od + p.ring_key_h), -r_od, p.ring_key_w / 2 + 0.1, 10, f"{p.ring_key_h:.1f}", outside=True)
-    v.leader((p.ring_pocket_w / 2 * 0.98, 4.6), "movement pocket: GL32 outline = circle cut by two flats,\n"
-             "open through (see D-D / note 2)", 26, 10)
+    v.leader((2.0, -(g["r_pl"] - 0.3)), "movement pocket: GL32 outline\n(circle cut by two flats), open at\n"
+             f"the bottom, {p.ring_step_h:.2f} deep (D-D, note 2)", 40, -14)
+    v.dim_dia((0, 0), g["r_rec"], 75, f"Ø{p.ring_dial_recess_d:.2f} dial recess from the step\n"
+              f"to the top (rehaut lip {g['lip_wall']:.2f})", leader=10)
     v.leader((r_od - 0.5, -p.ring_stem_slot_w / 2), f"stem slot {p.ring_stem_slot_w:.1f} wide (see D-D)", 14, -12)
     v.section_line((-r_od - p.ring_key_h, 0), (r_od, 0), "D", (0, 1), ext=8)
     v.section_line((0, -r_od), (0, r_od), "E", (-1, 0), ext=8)
@@ -979,33 +1278,46 @@ def sheet_ring(parts: Parts, n, N, date, out_dir, pdf, png):
     vs.dim_h(-(r_od + p.ring_key_h), -r_od, z0, -8, f"{p.ring_key_h:.1f}", text_side=-1, outside=True, text_at="left")
     vs.dim_v(z0, z0 + p.ring_key_len, -(r_od + p.ring_key_h), -10, f"{p.ring_key_len:.1f} key", text_side=-1, outside=True)
     vs.dim_v(z0, z_top, r_od, 10, f"{z_top - z0:.2f}", text_side=1, outside=True)
-    vs.dim_h(-r_od, -p.ring_pocket_w / 2, z_top, 8, f"{r_od - p.ring_pocket_w / 2:.2f} wall", text_side=1, outside=True)
-    vs.leader((10.5, (z0 + z_top) / 2), f"stem slot {p.ring_stem_slot_w:.1f} wide: no wall at y = 0 on the +X side;\n"
-              f"it runs through, z_stem + 1.2 = {p.z_stem + 1.2:.2f} is the top face", -10, -18)
+    vs.dim_v(z0, g["z_step"], -(r_od + p.ring_key_h), -20, f"{p.ring_step_h:.2f} pocket", text_side=-1, outside=True)
+    vs.dim_h(-r_od, -p.ring_pocket_w / 2, z0, -14, f"{r_od - p.ring_pocket_w / 2:.2f} wall", text_side=-1)
+    vs.dim_h(-r_od, -g["r_rec"], z_top, 8, f"{g['lip_wall']:.2f} lip", text_side=1, outside=True)
+    vs.leader((10.5, (z0 + g['z_slot_top']) / 2), f"stem slot {p.ring_stem_slot_w:.1f} wide, from\nthe bottom to z "
+              f"{g['z_slot_top']:.2f} (the\nstep plane); lip intact above", 4, -10)
     vs2 = View(sh, (215, 112 - S * z0), S)
     vs2.section(fE, hatch="xx")
     vs2.centerline(0, z0 - 2, 0, z_top + 2)
-    vs2.title("SECTION E-E  (3:1)  x = 0", x=215, y=134, size=7)
+    vs2.title("SECTION E-E  (3:1)  x = 0", x=215, y=138, size=7)
     vs2.dim_h(-r_od, r_od, z0, -8, f"Ø{p.ring_od:.2f}", text_side=-1)
-    vs2.dim_h(-p.ring_pocket_l / 2, p.ring_pocket_l / 2, z_top, 8, f"Ø{p.ring_pocket_l:.2f}* pocket", text_side=1)
+    vs2.dim_h(-p.ring_pocket_l / 2, p.ring_pocket_l / 2, z0, -8, f"Ø{p.ring_pocket_l:.2f}* pocket", text_side=-1)
+    vs2.dim_h(-g["r_rec"], g["r_rec"], z_top, 6, f"Ø{p.ring_dial_recess_d:.2f} dial recess", text_side=-1)
     vs2.dim_v(z0, z_top, r_od, 10, f"{z_top - z0:.2f}", text_side=1, outside=True)
-    vs2.leader((-r_od + 0.4, z0 + 0.05), f"ring bottom on the caseback inner face (z {z0:.1f});\n"
-               f"top face z {z_top:.2f} = dial seat (as built, note 2)", 4, -14)
-    lip_note = (f"2. AS-BUILT SHORT RING: SPEC 5 asks for a {p.ring_h:.1f} tall ring with a Ø{p.ring_dial_recess_d:.1f} dial "
-                f"recess above the step, but with params.py v0.1 the lip would be {g['lip_wall']:.2f} mm "
-                f"(ring_od {p.ring_od:.2f} vs recess {p.ring_dial_recess_d:.2f}), so spacer_ring.py builds the ring without "
-                f"its upper section: height {z_top - z0:.2f} (z {z0:.1f} to {z_top:.2f}), pocket open through, dial rests on "
-                f"the top face and is located by the movement bore; nothing clamps the ring against the ledge. "
-                f"Fix in params.py (dial_d <= {p.ring_od - 2 * 0.5 - 0.2:.1f}, or a larger movement bore) before machining.")
+    vs2.dim_v(z0, g["z_step"], -r_od, -10, f"{p.ring_step_h:.2f}", text_side=-1, outside=True)
+    vs2.leader((-r_od + 0.4, z0 + 0.05), f"ring bottom on the caseback inner face (z {z0:.1f}); step (dial seat) z "
+               f"{g['z_step']:.2f};\ntop face z {z_top:.2f} on the ledge underside: the caseback clamps the ring", 4, -20)
+    lip_note = (f"2. Full-height ring z {z0:.1f} to {z_top:.2f} ({p.ring_h:.2f}): movement pocket from the bottom "
+                f"{p.ring_step_h:.2f} deep (the movement rests on the caseback, the dial on the step); above the step the "
+                f"Ø{p.ring_dial_recess_d:.2f} dial recess (dial Ø{p.dial_d:.1f} + {p.ring_dial_clearance:.1f}) runs out through "
+                f"the top, leaving the {g['lip_wall']:.2f} rehaut lip (>= {spacer_ring.LIP_WALL_MIN:.1f} required: the "
+                f"module refuses to build a thinner one). The dial's {p.ring_dial_clearance / 2:.2f}/side clearance exceeds "
+                f"the movement's {p.ring_pocket_clearance:.2f}/side, so the dial, carried by the movement, never binds.")
+    kg = parts.keyway
+    fit_lo, fit_hi = key_fit(p, kg)
+    b_lo, b_hi = _tol_pair(BORE_TOL)
+    gt = GENERAL_TOL["titanium"]
     sh.general_notes([
-        f"1. Machined from POM-C rod Ø30; general tolerance +-0.05. OD Ø{p.ring_od:.2f} is a sliding fit "
-        f"({p.ring_od_clearance:.2f} diametral) in the Ø{p.mvt_bore_d:.1f} movement bore; key "
-        f"{p.ring_key_w:.1f} x {p.ring_key_h:.1f} x {p.ring_key_len:.1f} at 9 o'clock enters the case keyway.",
+        f"1. Machined from {spacer_ring.MATERIAL['titanium'].split(',')[0]} round bar (stock in the BOM); the general "
+        f"tolerance above applies except where stated. OD Ø{p.ring_od:.2f} {tol_ti()} is a sliding fit in the "
+        f"{bore_callout(p)} movement bore ({p.ring_od_clearance:.2f} diametral nominal, "
+        f"{p.ring_od_clearance + b_lo - gt:.2f} to {p.ring_od_clearance + b_hi + gt:.2f} at the limits). "
+        f"Key {p.ring_key_w:.1f} {KEY_W_TOL} wide x {p.ring_key_h:.1f} x {p.ring_key_len:.1f} at 9 o'clock enters the case "
+        f"keyway ({kg['kw']:.1f} {tol_ti()} wide, open from the back face to z {kg['z1']:.1f}, sheet 2): the key width is "
+        f"toleranced one-sided so the fit never binds, clearance {fit_lo:.2f} to {fit_hi:.2f}.",
         lip_note,
         f"3. Pocket {p.ring_pocket_w:.2f} x {p.ring_pocket_l:.2f}* = GL32 {p.mvt_w:.1f} x {p.mvt_l:.1f}* + "
         f"{p.ring_pocket_clearance:.2f} per side; the movement length is listed as 18.2 or 18.5 in different sources "
-        f"(SPEC 11): an 18.2 movement has 0.3 play in Y, shim or tighten mvt_l after measuring.",
-    ], x=MARGIN + 2, y=72, width_chars=96)
+        f"(SPEC 12): an 18.2 movement has 0.3 play in Y, shim or tighten mvt_l after measuring.",
+        f"4. {ring_process_text(p)}",
+    ], x=MARGIN + 2, y=72, width_chars=125, size=FS_SMALL)
     sh.save(pdf, out_dir, png)
 
 
@@ -1020,7 +1332,7 @@ def sheet_dial(parts: Parts, n, N, date, out_dir, pdf, png):
     r = p.dial_d / 2
     v.center_mark(0, 0, r, ext=6)
     v.title("PLAN  (3:1)  dial face, 12 o'clock up, +X (3 o'clock) to the right", x=85, y=190)
-    v.dim_dia((0, 0), r, 140, f"Ø{p.dial_d:.1f} -0/-0.05", leader=10)
+    v.dim_dia((0, 0), r, 140, f"Ø{p.dial_d:.1f} {tol_ti()}", leader=10)
     v.dim_dia((0, 0), p.dial_center_hole_d / 2, 35, f"Ø{p.dial_center_hole_d:.1f} centre hole (hand pipes)", leader=30)
     feet = dial_blank.feet_xy(p)
     for k, ((ang, rad), (x, y)) in enumerate(zip(p.dial_feet, feet)):
@@ -1031,7 +1343,7 @@ def sheet_dial(parts: Parts, n, N, date, out_dir, pdf, png):
     v.dim_v(feet[0][1], feet[1][1], -r, -12, f"{abs(feet[1][1] - feet[0][1]):.2f}*", text_side=-1)
     v.section_line((-r, 0), (r, 0), "F", (0, 1), ext=24)
     v.leader((r * 0.7, -r * 0.7), "plain disc: no printing, indices or date window modelled;\n"
-             "feet are Ø0.8 brass wire soldered to the back at these holes", 8, -18)
+             f"feet are Ø{p.dial_foot_d:.1f} brass wire soldered to the back at these holes", 8, -18)
     # section F-F (XZ, y=0) at 3:1 and detail at 10:1
     faces = section_faces(parts.dial, "XZ", 0.0)
     vs = View(sh, (215, 150), S)
@@ -1054,7 +1366,7 @@ def sheet_dial(parts: Parts, n, N, date, out_dir, pdf, png):
     vd.dim_v(p.z_dial_seat, p.z_dial_face, p.dial_center_hole_d / 2 + 1.2, 8, f"{p.dial_t:.1f}", text_side=1, outside=True)
     sh.general_notes([
         f"Brass CZ108 half-hard sheet {p.dial_t:.1f}; blank >= {p.dial_d + 6:.0f} x {p.dial_d + 6:.0f}; Ø{p.dial_d:.1f} disc "
-        f"(-0/-0.05), centre hole Ø{p.dial_center_hole_d:.1f}, {len(p.dial_feet)} feet holes Ø{p.dial_foot_d:.1f}*.",
+        f"({tol_ti()}), centre hole Ø{p.dial_center_hole_d:.1f}, {len(p.dial_feet)} feet holes Ø{p.dial_foot_d:.1f}*.",
         "Dial feet positions and diameter are UNVERIFIED placeholders for the GL32: measure on the movement (or its "
         "drawing) before soldering feet or cutting the dial.",
         f"The visible dial area is the Ø{p.dial_aperture_d:.1f} case aperture; the dial edge is hidden under the "
@@ -1065,10 +1377,11 @@ def sheet_dial(parts: Parts, n, N, date, out_dir, pdf, png):
 
 def sheet_assembly(parts: Parts, n, N, date, out_dir, pdf, png):
     p = parts.p
-    sh = Sheet(n, N, "ASSEMBLY  --  section A-A (x = 0), stack-up and purchased parts", "assembly",
-               "Ti Grade 2 case, 316L back, POM ring, brass dial + purchased parts", "3:1", date, file_stem="assembly")
+    sh = Sheet(n, N, "ASSEMBLY  --  section A-A (x = 0), stack-up, purchased parts", "assembly",
+               f"{case_body.MATERIAL['titanium']} case, {caseback.MATERIAL['titanium']} back, POM ring, brass dial "
+               f"+ purchased parts", "3:1", date, file_stem="assembly")
     S = 3.0
-    order = ["case_body", "caseback", "spacer_ring", "movement", "dial_blank", "hands_envelope", "iring", "crystal", "oring"]
+    order = ["case_body", "caseback", "spacer_ring", "movement", "dial_blank", "hands_envelope", "iring", "crystal", parts.seal]
     solids = parts.solids()
     v = View(sh, (140, 160), S)
     for name in order:
@@ -1086,11 +1399,21 @@ def sheet_assembly(parts: Parts, n, N, date, out_dir, pdf, png):
              f"hands envelope {p.hands_top_above_dial_face:.1f}* above the dial face", 12, 14)
     v.dim_h(-p.cb_flange_d / 2, p.cb_flange_d / 2, p.z_cb_outer, -8, f"Ø{p.cb_flange_d:.1f} caseback flange", text_side=-1)
     v.dim_h(-p.crystal_d / 2, p.crystal_d / 2, p.z_crystal_top, 8, f"Ø{p.crystal_d:.1f} x {p.crystal_t:.1f} crystal")
-    v.leader((p.oring_groove_mean_d / 2, -p.oring_groove_depth / 2), f"O-ring CS {p.oring_cs:.2f} in the flange groove", 22, -6)
+    if parts.seal == "gasket":
+        sq_nom, sq_lo, sq_hi = gasket_squeeze_range(p)
+        v.leader(((p.gasket_id + p.gasket_od) / 4, -p.gasket_recess_depth / 2),
+                 f"flat gasket {p.gasket_id:.1f} x {p.gasket_od:.1f} x {p.gasket_t:.2f} in the {p.gasket_recess_depth:.2f} "
+                 f"±{RECESS_DEPTH_TOL:.2f} recess,\n{purchased.gasket_squeeze_pct(p):.0f} % squeeze nominal when the rim land "
+                 f"seats\n({sq_lo:.2f} to {sq_hi:.2f} at the tolerance limits, sheet 5)", 22, -10)
+    else:
+        v.leader((p.oring_groove_mean_d / 2, -p.oring_groove_depth / 2), f"O-ring CS {p.oring_cs:.2f} in the flange groove, "
+                 f"{purchased.oring_squeeze_pct(p):.0f} % squeeze", 22, -10)
     v.leader((p.crystal_d / 2 + p.iring_wall / 2, p.z_crystal_seat + p.iring_h / 2), f"I-ring {p.iring_wall:.2f} x "
              f"{p.iring_h:.2f}, crushed {p.crystal_d + 2 * p.iring_wall - p.crystal_bore_d:.1f} on Ø", 24, 8)
     v.leader((-4.6, p.z_mvt_back + p.mvt_h / 2), f"GL32 envelope {p.mvt_w:.1f} x {p.mvt_l:.1f}* x {p.mvt_h:.2f}", -14, -22)
-    v.leader((-p.ring_od / 2 + 0.6, (p.z_cb_inner + p.z_dial_seat) / 2), "spacer ring (as built, short)", -6, -30)
+    v.leader((-p.ring_od / 2 + 0.6, p.z_cb_inner + 0.6),
+             f"spacer ring z {p.z_cb_inner:.1f} to {p.z_ledge_bottom:.1f}, clamped ledge <-> caseback; "
+             f"rehaut lip {p.ring_lip_wall:.2f}", 4, -30)
     v.leader((0.0, p.z_dial_seat + p.mvt_pipe_h - 0.1), f"centre pipe stub {p.mvt_pipe_h:.2f}* above the dial seat", -12, 16)
     # stack-up fan (short labels) on the left; the full descriptions are in the table below
     levels = [(p.z_cb_outer, f"{p.z_cb_outer:.1f}  caseback outer face"), (0.0, "0.0  case back face"),
@@ -1118,69 +1441,95 @@ def sheet_assembly(parts: Parts, n, N, date, out_dir, pdf, png):
         [f"{p.z_cb_inner:.1f}", "thread zone ends = caseback inner face"],
         [f"{p.z_mvt_back:.1f}", f"movement back ({p.mvt_axial_clearance:.1f} clearance)"],
         [f"{p.z_stem:.2f}*", f"stem axis ({p.stem_below_dial_seat:.2f}* below the dial seat)"],
-        [f"{p.z_dial_seat:.2f}", "dial seat (movement top), ring top (as built)"],
+        [f"{p.z_dial_seat:.2f}", "dial seat (movement top), ring step"],
         [f"{p.z_dial_face:.2f}", "dial face"],
-        [f"{p.z_ledge_bottom:.1f}", "ledge underside (ring top per SPEC 5)"],
+        [f"{p.z_ledge_bottom:.1f}", "ledge underside, ring top"],
         [f"{p.z_crystal_seat:.1f}", f"crystal seat (ledge top); hands clearance {p.hands_clearance:.2f}"],
         [f"{p.H:.1f}", "front face"],
         [f"{p.z_crystal_top:.1f}", f"crystal top ({p.crystal_proud:.1f} proud)"],
     ]
     sh.footnote_needed = True
-    y = sh.table(MARGIN + 2, 118, ["z mm", "what"], stack_rows, [14, 84], size=4.9,
+    y = sh.table(MARGIN + 2, 121, ["z mm", "what"], stack_rows, [14, 84], size=4.9,
                  title="STACK-UP  (z from the case back face, titanium defaults)")
-    dens = {"case_body": p.density_case, "caseback": p.density_caseback, "spacer_ring": p.density_ring, "dial_blank": p.density_ring}
+    dens = {"case_body": p.density_case, "caseback": p.density_caseback, "spacer_ring": p.density_ring, "dial_blank": p.density_dial}
     mrows = []
     for name, mat in (("case_body", case_body.MATERIAL["titanium"]), ("caseback", caseback.MATERIAL["titanium"]),
                       ("spacer_ring", spacer_ring.MATERIAL["titanium"]), ("dial_blank", dial_blank.MATERIAL["titanium"])):
         vol = solids[name].Volume()
         mrows.append([PART_LABEL[name], mat, f"{vol:.0f}", f"{dens[name]:.2f}", f"{vol / 1000 * dens[name]:.1f}"])
-    y = sh.table(MARGIN + 2, y - 5, ["made part", "material (titanium build)", "mm3", "g/cm3", "g"], mrows,
+    y = sh.table(MARGIN + 2, y - 4, ["made part", "material (titanium build)", "mm3", "g/cm3", "g"], mrows,
                  [22, 46, 12, 10, 8], size=4.9, title="MADE PARTS  (volumes from the CadQuery solids)")
     rows = [[r["item"], r["spec"]] for r in purchased.bom(p)]
-    sh.table(120, 104, ["purchased part (qty 1 each)", "specification (purchased.bom, identical in both profiles)"], rows,
-             [32, 134], size=4.7)
+    sh.table(120, 104, ["purchased part (qty 1 each)", "specification (parts/purchased.py bom, titanium profile; the "
+                        "resin print reams its tube hole to the same tube)"], rows, [32, 134], size=4.7)
     sh.text(120, 107, "PURCHASED PARTS", size=FS_SMALL + 0.5, fontweight="bold")
     sh.notes(MARGIN + 2, y - 4, [
-        "Assembly order: press the tube; ring into the case from the back (key at 9); movement with dial and hands into "
-        "the ring, stem through the ring slot and tube; cut the stem, fit the crown; O-ring greased, caseback screwed "
-        "in with the pin wrench; I-ring then crystal pressed from the front.",
+        tol_text(),
+        "Assembly order (SPEC 11): press the tube; hands and dial on the movement; movement + dial into the ring from "
+        "its top; ring assembly into the case from the back, key into the open keyway at 9, until the lip meets the "
+        "ledge; cut stem + crown in through the tube; I-ring then crystal pressed from the front; "
+        + ("flat gasket in the recess, " if parts.seal == "gasket" else "O-ring greased in the groove, ")
+        + "caseback screwed in with the pin wrench until the rim land seats; strap through the channels.",
         f"Total height {p.total_height:.1f} = caseback outer face (z {p.z_cb_outer:.1f}) to crystal top (z "
         f"{p.z_crystal_top:.1f}); the crystal stands {p.crystal_proud:.1f} proud, hands clearance {p.hands_clearance:.2f}.",
-        "Resin fit-check print first (sheet 9); every value marked * is measured on the real movement before titanium is cut.",
-    ], width_chars=66, size=FS_SMALL, title="NOTES")
+        f"Seal: the case counter-face is the machined, unblasted back-face annulus out to Ø{2 * back_mask_r(p):.1f} "
+        f"(sheets 2, 5); {seal_interruption_text(p, parts.keyway)}.",
+        "Resin fit-check print first (sheet 9); every * value is measured on the real movement before titanium is cut.",
+    ], width_chars=145, size=FS_SMALL, title="NOTES")
     sh.save(pdf, out_dir, png)
 
 
 def sheet_profiles(parts: Parts, n, N, date, out_dir, pdf, png):
     p = parts.p
     pr = params.get("resin")
-    sh = Sheet(n, N, "RESIN vs TITANIUM  --  profile differences and print orientation", "all parts",
+    sh = Sheet(n, N, "RESIN vs TITANIUM  --  profiles and print orientation", "all parts",
                "titanium build / resin fit-check print", "n/a", date, file_stem="profiles_and_printing")
 
     def both(attr, nd=2):
         return f"{getattr(p, attr):.{nd}f}", f"{getattr(pr, attr):.{nd}f}"
 
+    def seal_cell(q: params.Params) -> str:
+        r_si, r_so, depth = caseback.seal_radii(q)
+        if q.cb_seal == "flat_gasket":
+            d_tol = f" ±{RECESS_DEPTH_TOL:.2f}" if q.profile == "titanium" else ""
+            s = (f"{q.cb_seal}: recess Ø{2 * r_si:.1f} -> Ø{2 * r_so:.1f} x {depth:.2f}{d_tol}; gasket {q.gasket_id:.1f} x "
+                 f"{q.gasket_od:.1f} x {q.gasket_t:.2f}")
+        else:
+            s = f"{q.cb_seal}: groove Ø{2 * r_si:.1f} -> Ø{2 * r_so:.1f} x {depth:.2f}; O-ring CS {q.oring_cs:.2f}"
+        problems = purchased.seal_fit_problems(q)
+        return s + (f"; DOES NOT FIT: {'; '.join(problems)} (open params.py decision)" if problems else "; fits")
+
     rows = [
-        ["purpose", "the real part: CNC Ti Grade 2 case, 316L back, POM ring, brass dial",
-         "MSLA fit-check print of the same geometry before any metal is cut"],
-        ["thread model", f"plain cosmetic bores: case bore Ø{p.cb_thread_minor:.2f} (minor), back boss Ø{p.cb_thread_major:.1f}; "
-         f"machinist cuts M{p.cb_thread_major:.0f} x {p.cb_thread_pitch:.1f} - 6H / 6g",
-         f"true helical thread M{pr.cb_thread_major:.1f} x {pr.cb_thread_pitch:.1f}, minor Ø{pr.cb_thread_minor:.2f}, "
-         f"radial clearance {pr.cb_thread_clearance:.2f}; chased by hand, no tap exists"],
-        ["general tolerance", "+-0.05", "+-0.15"],
-        ["tube hole", f"Ø{p.tube_hole_d:.1f} H7 reamed", f"printed Ø{pr.tube_hole_d:.1f}, hand-reamed to 2.0 from the pocket side"],
+        ["purpose", f"the real part: CNC {case_body.MATERIAL['titanium']} case, {caseback.MATERIAL['titanium']} back, "
+         f"POM ring, brass dial", "MSLA fit-check print of the same geometry before any metal is cut"],
+        ["thread model", f"plain cosmetic bores: case drawn at D1 Ø{p.cb_thread_minor:.2f}, called as ONE bore {bore_callout(p)} "
+         f"z 0 to {p.z_ledge_bottom:.1f} ({minor_text(p)}); back boss Ø{p.cb_thread_major:.1f}; machinist cuts "
+         f"{thread_callout(p, '6H')} (case, {relief_text(p)}) / {thread_callout(p, '6g')} (back)",
+         f"true helical thread {thread_callout(pr)}, minor Ø{pr.cb_thread_minor:.2f}, "
+         f"radial clearance {pr.cb_thread_clearance:.2f}; chased by hand, no tap exists, no ISO class"],
+        ["general tolerance", f"±{GENERAL_TOL['titanium']:.2f}", f"±{GENERAL_TOL['resin']:.2f}"],
+        ["tube hole", f"Ø{p.tube_hole_d:.1f} H7 reamed",
+         f"printed Ø{pr.tube_hole_d:.1f}, hand-reamed to {pr.tube_od:.1f} from the pocket side"],
         ["small-bore compensation (hole_comp)", f"{p.hole_comp:+.2f}", f"{pr.hole_comp:+.2f}"],
         ["sliding-fit extra (fit_extra)", f"{p.fit_extra:+.2f}", f"{pr.fit_extra:+.2f}"],
         ["crystal bore", *both("crystal_bore_d")],
         ["ring OD / dial recess", f"{p.ring_od:.2f} / {p.ring_dial_recess_d:.2f}", f"{pr.ring_od:.2f} / {pr.ring_dial_recess_d:.2f}"],
-        ["ring lip (OD - recess)/2", f"{(p.ring_od - p.ring_dial_recess_d) / 2:.2f} -> short ring built",
-         f"{(pr.ring_od - pr.ring_dial_recess_d) / 2:.2f} -> short ring built"],
+        ["ring lip (OD - recess)/2", f"{p.ring_lip_wall:.2f} (full-height ring, >= {spacer_ring.LIP_WALL_MIN:.1f})",
+         f"{pr.ring_lip_wall:.2f} (full-height ring, >= {spacer_ring.LIP_WALL_MIN:.1f})"],
+        ["keyway (open from the back face)", f"{parts.keyway['kw']:.1f} wide x {parts.keyway['depth']:.2f} deep, to z "
+         f"{parts.keyway['z1']:.1f}; {key_fit_text(p, parts.keyway)}", f"{case_body.keyway_geometry(pr)['kw']:.1f} wide x "
+         f"{case_body.keyway_geometry(pr)['depth']:.2f} deep (floor pushed off the helix root), to z "
+         f"{case_body.keyway_geometry(pr)['z1']:.1f}"],
+        ["caseback seal (cb_seal)", seal_cell(p), seal_cell(pr)],
         ["thread minor vs movement bore", f"{p.cb_thread_minor:.2f} vs {p.mvt_bore_d:.1f}", f"{pr.cb_thread_minor:.2f} vs {pr.mvt_bore_d:.1f}"],
-        ["case / back / ring material", f"{case_body.MATERIAL['titanium']} / {caseback.MATERIAL['titanium']} / "
-         f"{spacer_ring.MATERIAL['titanium']}", "tough ABS-like resin, layer 0.05 (all parts)"],
-        ["density case / back / ring g/cm3", f"{p.density_case:.2f} / {p.density_caseback:.2f} / {p.density_ring:.2f}",
-         f"{pr.density_case:.2f} / {pr.density_caseback:.2f} / {pr.density_ring:.2f}"],
-        ["surface", "sandblast Ra 1.6; bores Ra 0.8; masks on thread, tube hole, crystal seat, keyway",
+        ["case / back / ring / dial material", f"{case_body.MATERIAL['titanium']} / {caseback.MATERIAL['titanium']} / "
+         f"{spacer_ring.MATERIAL['titanium']} / {dial_blank.MATERIAL['titanium']}",
+         f"{case_body.MATERIAL['resin']}, layer 0.05 (all parts)"],
+        ["density case / back / ring / dial g/cm3",
+         f"{p.density_case:.2f} / {p.density_caseback:.2f} / {p.density_ring:.2f} / {p.density_dial:.2f}",
+         f"{pr.density_case:.2f} / {pr.density_caseback:.2f} / {pr.density_ring:.2f} / {pr.density_dial:.2f}"],
+        ["surface", f"sandblast Ra {RA_BLAST}; bores Ra {RA_FIT}; masks on thread, tube hole, crystal seat, keyway and the "
+         f"{back_mask_text(p, short=True)} (seal counter-face, Ra {RA_FIT})",
          "as printed; sand support marks on the back face / outer face only"],
     ]
     y = sh.table(MARGIN + 2, PAPER_H - MARGIN - 4, ["item", "titanium profile", "resin profile"], rows, [44, 118, 118],
@@ -1190,7 +1539,8 @@ def sheet_profiles(parts: Parts, n, N, date, out_dir, pdf, png):
          "front face and crystal seat print up with no support marks; the tilt removes the flat first layer and drains the "
          "thread bore and tube hole; supports land on the back-face annulus, not on the thread teeth"],
         ["caseback", "outer face down on supports, tilted about 10 deg",
-         "thread and O-ring groove print clean; support marks on the outer face are sanded; clear the six Ø1.5 holes with a drill"],
+         f"thread and {'gasket recess' if pr.cb_seal == 'flat_gasket' else 'O-ring groove'} print clean; support marks on "
+         f"the outer face are sanded; clear the {pr.cb_tool_holes} Ø{pr.cb_tool_hole_d:.1f} holes with a drill"],
         ["spacer ring", "axis vertical, open (movement) side up, light supports under the top face",
          "the pocket prints as a cup; the thin wall stays round; never flat on the plate (first layers compress)"],
         ["dial blank", "face up, tilted 10 deg on supports", "or skip it: a paper disc does the same job for a fit check"],
@@ -1198,14 +1548,18 @@ def sheet_profiles(parts: Parts, n, N, date, out_dir, pdf, png):
     y = sh.table(MARGIN + 2, y - 5, ["part", "orientation", "why"], orows, [28, 110, 142], size=5.4,
                  title="PRINT ORIENTATION  (MSLA, tough resin, 0.05 layers; medium supports 0.3 tips)")
     sh.notes(MARGIN + 2, y - 4, [
-        "Coupon first: print a 15 x 15 x 3 plate with Ø1.9 / 2.0 / 2.5 holes and a 1.8 x 8 slot, plus a Ø26.5 x 3 ring and a "
-        "Ø26.3 x 3 disc on the same resin and exposure; holes under nominal mean the exposure over-cures: lower it or raise "
+        f"Coupon first: print a 15 x 15 x 3 plate with Ø{pr.tube_hole_d:.1f} / {pr.tube_od:.1f} / {pr.ring_stem_slot_w:.1f} "
+        f"holes and a {pr.strap_gap:.1f} x 8 slot, plus a Ø{pr.mvt_bore_d:.1f} x 3 ring and a Ø{pr.ring_od:.2f} x 3 disc "
+        "on the same resin and exposure; holes under nominal mean the exposure over-cures: lower it or raise "
         "hole_comp / fit_extra in params.resin() and rebuild.",
         "No supports inside the movement bore, thread, crystal seat, strap channels or front slots. Two-stage IPA wash, blow "
         "the tube hole and channels out before curing; 5-10 min UV per side (tough resins go brittle when over-cured).",
-        "After printing: ream the tube hole 1.9 -> 2.0 from the crown pocket; run the printed caseback in and out with wax; "
-        "ring into the bore from the back (should slide, 0.3 diametral); movement + stem; caseback; buy the I-ring before "
-        "the crystal and confirm it seats in the bore. Anything that binds is a parameter to revisit in params.py.",
+        f"After printing: ream the tube hole {pr.tube_hole_d:.1f} -> {pr.tube_od:.1f} from the crown pocket; run the printed "
+        f"caseback ({thread_callout(pr)}) in and out with wax; ring into the bore from the back, key in the open keyway "
+        f"(should slide, {pr.ring_od_clearance + pr.fit_extra:.1f} diametral) until its lip meets the ledge; movement + dial "
+        "in the ring, stem through the tube; caseback; buy the I-ring before the crystal and confirm it seats in the bore. "
+        "Anything that binds is a parameter to revisit in params.py.",
+        tol_text() + " The resin figure is what MSLA holds after the coupon calibration above.",
     ], width_chars=150, size=5.6, title="PRINT NOTES")
     sh.save(pdf, out_dir, png)
 
@@ -1227,7 +1581,7 @@ SHEETS = [
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", default="out", help="output root (out/drawings/ is written below it)")
-    ap.add_argument("--date", default="2026-09-29", help="date printed in the title blocks")
+    ap.add_argument("--date", default=_dt.date.today().isoformat(), help="date printed in the title blocks (default: today)")
     ap.add_argument("--png", metavar="DIR", default=None,
                     help="also write 150 dpi PNG previews of every sheet into DIR (review aid, not a deliverable)")
     ap.add_argument("--sheets", nargs="+", type=int, help="only these sheet numbers (1-based)")
